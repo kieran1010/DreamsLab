@@ -47,7 +47,372 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v3.76</title>
+<title>Dreams Lab v4.0</title>
+<!--
+==================================================================================
+  DREAMS LAB  v4.0  ("First public release")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick. Single-file HTML.
+
+  v4.0 completes an alarm-system overhaul on top of the v3.84-3.86 respiratory work:
+    - Diastolic alarm removed (nuisance under GA); replaced by a MAP low alarm
+      (yellow <60, red <50). Systolic still covers the high/hypertension side.
+    - New RR alarm (yellow <8, red <4; apnoea = 0 -> red), active whenever a
+      circuit is present.
+    - New low tidal-volume alarm (yellow <250 mL, red <150 mL), gated to active
+      ventilation/breathing. NOTE: absolute mL - revisit as mL/kg if paediatric
+      profiles are re-enabled.
+    - New BIS alarm: low side (too deep) yellow <20 / red <10 always active; high
+      side (awareness risk) yellow >65 / red >80 only armed once a hypnotic is on
+      board, so an awake patient at the start of a case doesn't alarm.
+    - PIP alarm retuned: yellow >25, red >30 (was 30/40).
+    - HR, SpO2, systolic and etCO2 limits reviewed and kept unchanged.
+
+  Recent lineage:
+    v3.84 - respiratory depression recalibration (per-agent weights + synergy)
+    v3.85 - respiratory rate surfaced (effectiveRR + RR vital)
+    v3.86 - waveform pixellation/judder fix (DPR scaling, time-based sweep)
+    v4.0  - alarm-system overhaul + first public release
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.86  ("Crisp, smooth waveforms + RR onboarding")
+  ---------------------------------------------------------------------------------
+  Fixes the recurring pixellated / juddery CO2 and flow waveforms. v3.73 had only
+  addressed temporal smoothness for MECHANICAL breaths; two causes remained:
+
+    1. PIXELLATION: the canvas backing store was sized in CSS pixels with no
+       devicePixelRatio scaling, so on HiDPI / OS-scaled displays the browser
+       upscaled a low-res canvas. Now sized at cssSize*dpr (dpr capped at 3) with
+       a CSS-pixel draw transform; the render loop uses logical cssW/cssH for lane
+       heights and sweep wrap.
+    2. JUDDER: the sweep advanced a fixed SWEEP/60 px per frame (assumes 60 fps),
+       so on 120/144 Hz displays or dropped frames it desynced from the wall-clock
+       waveform shapes. Now advances by real elapsed time. The spontaneous CO2/flow
+       overlay also used `now % cycleS`, which jumped phase whenever the rate moved
+       (drug onset); replaced with a shared accumulated spontPhase advanced by
+       elapsed-time / cycle length (the v3.73 approach, now applied to spontaneous
+       breathing too). CO2 and flow overlays share one phase, so they stay aligned.
+
+  Also: added the RR vital to the "Start here" onboarding (mock monitor + card),
+  completing the v3.85 RR-box work.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.85  ("Respiratory rate made visible")
+  ---------------------------------------------------------------------------------
+  Surfaces the respiratory RATE that v3.84 already modelled but never displayed.
+
+  Previously the only RR on screen was the ventilator's set rate (a control echo),
+  and breath timing keyed off it, so spontaneous respiratory depression showed up
+  only as falling tidal volume. The rate effect was computed (14*respDrive) but
+  used solely for minute-ventilation maths and then discarded.
+
+  Changes:
+    1. effectiveRR is now persisted on state as the single source of truth for the
+       actual respiratory rate (set rate when ventilated; 14*respDrive when
+       spontaneous; 10 when bagging; 0 in apnoea).
+    2. New RR (/min) vital box on the main monitor, fed from effectiveRR. It falls
+       with opioid/hypnotic dosing, reads 0 at the apnoea gate, and shows '--' only
+       when there is no airway/circuit. (The monitor previously had no RR vital.)
+    3. The spontaneous capnogram breath pacing now reads the same effectiveRR, so
+       the waveform rate and the displayed number stay in lock-step.
+    Mechanical-ventilation breath timing is unchanged (set rate is correct there).
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.84  ("Respiratory depression recalibration")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Recalibrates drug-induced respiratory depression so that hypnotic and opioid
+  doses produce clinically appropriate apnoea. Previously the respiratory drive
+  weights were too low relative to the apnoea gate, so realistic induction doses
+  left the patient breathing.
+
+  Changes (physiology only; no scenario or UI changes):
+    1. pushDown reweighted per agent and recalibrated against simulated
+       effect-site trajectories. For the standard adult:
+         - propofol 150 mg alone        -> apnoea ~2 min
+         - propofol 200 mg alone        -> apnoea ~4 min
+         - propofol 100 mg alone        -> depressed but breathing (RR nadir ~3)
+         - propofol 100 mg + fentanyl 100 mcg -> apnoea ~1 min (via synergy)
+    2. alfentanil and morphine now contribute to respiratory drive (previously
+       defined but absent from this term). Their effect-site normalisers are
+       unchanged (still used by the autonomic block).
+    3. New hypnotic x opioid synergy term: models supra-additive respiratory
+       depression. propofol+opioid is now markedly more apnoeic than either alone.
+    4. Tidal volume part-preserved (40% floor): the dominant clinical effect of
+       respiratory depression now falls on RATE, with depth relatively maintained,
+       then both cease at the apnoea gate.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.83  ("Start here: novice orientation modal")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Adds a "START HERE" button to the brand bar that opens a four-step
+  orientation modal aimed at final-year medical students using Dreams Lab
+  independently, with little or no prior anaesthesia exposure:
+    1. Welcome  - frames the student as the anaesthetist; what this screen is.
+    2. Monitor  - an annotated static mock of the monitor (matching the real
+                  trace/numeric colours) with plain-English callouts. Assumes
+                  baseline physiology is known; teaches the anaesthesia-specific
+                  parameters (etCO2, etSEVO, BIS, TOF, PAW/FLOW, capnogram,
+                  arterial line, ventilator pressures/volumes).
+    3. Controls - the bottom drug deck, infusions, left panel, and the core
+                  loop: give something -> watch the monitor respond.
+    4. Start    - points to Scenarios and the induction walkthrough.
+  The modal is re-openable (not a one-time tour) and "Get started" hands off
+  to the scenarios picker. Also corrects the stale About-modal version
+  (was 3.52 -> 3.83). No physiology or scenario changes.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.82  ("Scenario brief text edits")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Scenario brief text edits across multiple scenarios:
+  - induction: name shortened, scenario changed to laparoscopic hernia repair,
+    objectives and hints revised (roc dose corrected to 0.6 mg/kg,
+    "tetanic stimulator" -> "nerve stimulator")
+  - hypotensionPostInd: briefing and setupBrief reworded, objective 3 updated
+  - sepsis: setupBrief trimmed, objectives and hints trimmed
+  - bronchospasm: last hint tightened
+  - anaphylaxis: setupBrief ("at t=0" -> "initially"), last hint updated
+    to mention topical agents
+  - ischaemia: briefing adds "progressive", setupBrief trimmed,
+    objective 1 reworded, last hint generalised
+  - pulmEmbolism: one hint wording tweak
+
+  No physiology changes.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v3.81  ("Post-induction hypotension scenario")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Second teaching scenario aimed at final-year medical students. Builds
+  on the v3.80 induction walkthrough by teaching how to RECOGNISE and
+  TREAT hypotension in a non-emergency setting.
+
+  Clinical picture:
+   - 78-year-old hypertensive, induced 10 minutes ago
+   - On sevo 2% + residual propofol Ce 0.8, light fentanyl
+   - Mild pre-op fasting (centralVol at 92%)
+   - Modest stimulus (nociception 4) - drapes going on, surgery not started
+   - Starting MAP ~55, HR ~85 (mildly elevated compensation)
+   - SpO2/etCO2/BIS/PIP all normal - this is NOT an occult emergency
+
+  Pedagogical hook: target MAP for an elderly hypertensive is >65 (not
+  >55 like a young patient). Teaches BP targets are individualised.
+
+  No new physics - just a specific starting state using the existing
+  elderly profile + maintenance vent settings + mild hypovolaemia.
+
+  Verified treatment paths:
+   - Metaraminol 1mg: MAP 55 -> 75 in 10s, peaks at 95+
+   - Ephedrine 6mg: MAP 54 -> 77 in 60s (alpha + beta, also raises HR)
+   - Fluid 500mL: MAP 54 -> 65 over 2 min, 82 over 10 min
+   - Combined fluid 250 + metar 0.5: MAP 54 -> 80 within 60s
+
+  Untreated: slow drift up as propofol washes out (65 at 5 min, 75 at
+  10 min, 89 at 30 min) - reflects real propofol redistribution but
+  teaches that extended hypotension is harmful and self-recovery is
+  too slow for clinical safety.
+
+  No other changes.
+==================================================================================
+-->
+
+<!--
+==================================================================================
+  DREAMS LAB  v3.80  ("Induction and maintenance walkthrough scenario")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  New scenario for final-year medical students: a step-by-step walkthrough
+  of a routine induction sequence. NOT an emergency - the goal is to take
+  the patient from "awake on the table" to "stable, anaesthetised,
+  intubated, ventilated, sevo-maintained" and learn the order of events.
+
+  Starting state:
+   - 70kg adult, awake
+   - Monitors on (ECG, SpO2, NIBP, BIS)
+   - IV in
+   - Mask sitting on the face
+   - FiO2 0.21 (room air)
+   - Ventilator in Manual mode, sevo 0, FGF 2
+   - No drugs on board
+   - FRC contains room air (525 mL O2)
+
+  11 sequenced objectives matching the steps of a routine induction:
+   pre-oxygenate -> induce (propofol 150mg + fentanyl 100mcg) ->
+   prophylactic metaraminol 1mg or ephedrine 6mg -> confirm LOC ->
+   bag-mask -> paralyse -> wait -> intubate -> confirm tube ->
+   mech vent -> sevo 1.5% maintenance
+
+  Why prophylactic vasopressor as a STEP:
+  Without one, MAP dips into the 40s post-induction because there's no
+  surgical stimulus to drive sympathetic compensation. With it, MAP
+  stays 60-75 throughout - matches both clinical reality and what a
+  good textbook induction looks like.
+
+  Verified trajectory (textbook sequence with metaraminol 1mg):
+   - t=180s pre-ox done: MAP 93, BIS 98
+   - t=240s post-induction (60s): MAP 82, BIS 19
+   - t=360s post-VCV+sevo: MAP 60, BIS 11
+   - t=1500s steady state: MAP 71, BIS 45 (textbook range)
+
+  No special physics added - the existing sim handles all of this
+  naturally:
+   - FRC O2 reserve: pre-oxygenation prolongs apnoea tolerance
+     (FRC fills with FiO2 1.0 during spontaneous breathing on mask)
+   - Propofol/fentanyl: standard PK/PD already modelled
+   - Rocuronium paralysis with TOF readout already exists
+   - Sevo washin with circuit/etSevo lag already exists
+   - Mask vs ETT airway already distinguishes seal quality
+
+  Listed first in VERIFIED_SCENARIOS array (still alphabetical sort
+  inside the picker because of localeCompare on display name).
+  No physiology changes.
+==================================================================================
+-->
+
+<!--
+==================================================================================
+  DREAMS LAB  v3.79  ("Ischaemic ECG morphology: real ST depression + T inversion")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Replaced the ISCHAEMIA flag/badge on the HR box with REAL ECG waveform
+  changes. Much more educational - trainees learn to read the ECG, not
+  to wait for a monitor warning label.
+
+  Morphology changes scale directly with state.ischaemia (0..1):
+   - ST segment (template indices 16-18): linear depression up to 0.15
+     at full ischaemia (~15% of R-wave amplitude, equivalent to ~1.5mm
+     on a 10mm R-wave)
+   - T wave (template indices 19-21): multiplicative factor going from
+     +1 -> 0 -> -1 as ischaemia goes 0 -> 0.5 -> 1.0
+       isc=0    : normal upright T
+       isc=0.5  : T wave flat / biphasic
+       isc=1.0  : T wave fully inverted (mirror image)
+
+  Smooth transition - trainees see flattening progress to inversion,
+  same as clinical practice.
+
+  Implementation:
+   - getIschaemicTemplate(base) builds modified PQRST array from the base
+     template (sinus or AF). Cached - only rebuilds when ischaemia has
+     changed by >0.02 (no per-frame allocation).
+   - Applied to sinus, SVT, and AF rhythms. CHB has its own template
+     with built-in ST depression already.
+   - Drives directly from state.ischaemia (no hysteresis) - smooth ramp
+     matches the underlying score.
+
+  Removed:
+   - #ischaemia-flag HTML element on HR box
+   - .ischaemia-flag CSS + @keyframes ischaemiaPulse
+   - updateNum() show/hide logic for the badge
+   - state.ischaemiaLabel field
+   - In-tick hysteresis update for the label
+   - CONFIG.ISCHAEMIA_LABEL_ON / ISCHAEMIA_LABEL_OFF
+   - Scenario brief reference to "monitor warning" / "flashing ISCHAEMIA"
+     (now: "ECG showing ST depression with T-wave flattening/inversion")
+
+  No physiology changes - the ischaemia integrator is unchanged.
+==================================================================================
+-->
+
+<!--
+==================================================================================
+  DREAMS LAB  v3.78  ("Ischaemia scenario haemodynamics retune")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Bug report: ischaemia scenario haemodynamics were off. Three problems:
+
+  1. Massive overshoot at t=5s to BP 230/140. Cause: pre-loaded alpha 0.65
+     + beta 0.55 PLUS simultaneous nociception ramp produced a transient
+     spike. The pre-load was a hack to make vitals "start hot" at t=0.
+  2. BIS 68-71 - awareness territory. Cause: sevo too light (0.6%).
+  3. DBP uniformly elevated (103). Cause: alpha pre-load + light sevo
+     meant pulse pressure was narrow instead of widened.
+
+  Fix: removed the pre-load hack and went to appropriate anaesthesia depth:
+  - sevo: 0.6 -> 1.2% (etSevo 1.0 = BIS ~48, proper maintenance)
+  - propofol: stays off (mid-case on gas)
+  - remi: 0.05 -> 0.08 mcg/kg/min
+  - fent: bumped to 0.0010 (light cover)
+  - nociceptionTarget: 10 -> 8 (still high, but balanced with anaesthesia)
+  - Removed pre-loaded alpha 0.65 / beta 0.55
+
+  Verified new trajectory (no overshoot, BIS appropriate):
+   - t=5s   HR 104 BP 153/94 BIS 48
+   - t=30s  HR 106 BP 144/88 ischaemia 0.64 LABEL ON
+   - t=60s  HR 107 BP 140/86 ischaemia 0.88
+   - t=120s HR 107 BP 138/85 ischaemia 0.98
+  BP drifts down over time as ischaemia drops contractility - correct.
+
+  Treatment paths verified:
+   - Esmolol 30mg + metar 1mg + fent 50mcg: HR 106->54, BP held at 92/56,
+     ischaemia 0.64 -> 0.23 over 5 min (the correct combination answer)
+   - Esmolol alone: HR drops but DBP also drops, slow heal
+   - Aggressive deepening (sevo 3% + remi 0.30 + fent 100mcg): MAP crashes
+     to 60, ischaemia keeps building because supply (DBP) drops faster than
+     demand - real teaching point
+
+  Brief updated: BP 165/85 -> BP 150/95 to match delivered haemodynamics.
+
+  No other physiology changes.
+==================================================================================
+-->
+
+<!--
+==================================================================================
+  DREAMS LAB  v3.77  ("Intraoperative pulmonary embolism scenario")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  New scenario: Intraoperative pulmonary embolism (thromboembolic).
+
+  Distinct from the existing CO2 embolism event (laparoscopic gas
+  embolism) - PE is more sub-massive, has a different signature, and
+  doesn't auto-resolve.
+
+  Physics added:
+  - state.events.pulmEmbolism (bool)
+  - state.peShunt (0..1) - V/Q dead-space shunt tracker. Builds rapidly
+    to PE_SHUNT_TARGET (0.6) while event on; decays when off.
+  - CONFIG.PE_CO_FACTOR (0.55) - RV outflow obstruction multiplier on CO
+  - CONFIG.PE_ETCO2_TARGET (22) - V/Q dead-space target (less extreme
+    than CO2 embolism's 10 - this is sub-massive PE)
+  - CONFIG.PE_SHUNT_SPO2_DROP (12) - SpO2 ceiling drop at full shunt;
+    settles ~92 at PE_SHUNT_TARGET=0.6
+
+  Diagnostic signature (teaches differentiation):
+   - HR up, BP down, SpO2 down (overlap with bronchospasm, anaphylaxis)
+   - etCO2 DOWN (unique - bronchospasm raises etCO2 from hypoventilation)
+   - PIP NORMAL (unique - bronchospasm has high PIP)
+   - SVR via baroreflex - not directly depressed (unlike anaphylaxis)
+
+  Scenario: 55-year-old BMI 32, end of 3hr laparoscopic case, just rolled
+  supine. Risk factors loaded. PE strikes at t=0; persistent event.
+
+  No other physiology changes.
+==================================================================================
+-->
+
 <!--
 ==================================================================================
   DREAMS LAB  v3.76  ("Intraoperative myocardial ischaemia scenario")
@@ -1419,6 +1784,102 @@ input[type=range] {
 #brand-scenarios-btn.active { background: #235; color: #def; border-color: #6cf; }
 
 /* v3.52: About modal */
+/* v3.83: "Start here" novice orientation modal.
+   Re-openable from the brand bar. Four stepped sections; section 2 is an
+   annotated monitor mock whose colours match the live monitor traces/numerics. */
+#sh-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.8);
+    z-index: 10001;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+#sh-overlay.open { display: flex; }
+#sh-modal {
+    background: #181818;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #ccc;
+    max-width: 800px;
+    width: 100%;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+#sh-modal-head {
+    padding: 16px 24px 12px;
+    border-bottom: 1px solid #333;
+    flex: 0 0 auto;
+}
+#sh-modal-head h2 { margin: 0; font-size: 1.15rem; color: #eee; letter-spacing: 0.3px; }
+#sh-modal-head .sh-sub { color: #888; font-size: 0.72rem; margin-top: 2px; }
+#sh-steps { display: flex; gap: 6px; margin-top: 12px; }
+#sh-steps .dot { flex: 1; height: 4px; border-radius: 2px; background: #333; cursor: pointer; transition: background 0.15s; }
+#sh-steps .dot.active { background: #3aa777; }
+#sh-body { padding: 18px 24px; overflow-y: auto; flex: 1 1 auto; }
+.sh-section { display: none; }
+.sh-section.active { display: block; }
+.sh-section h3 { color: #8cc8ff; font-size: 1rem; margin: 0 0 12px; }
+.sh-section p { margin: 0 0 12px; }
+.sh-section p.lead { color: #ddd; font-size: 0.9rem; }
+/* annotated monitor mock */
+.sh-mock {
+    background: #000; border: 1px solid #2a2a2a; border-radius: 4px;
+    padding: 10px; margin: 0 0 8px; display: flex; gap: 10px;
+}
+.sh-mock-waves { flex: 1.5; display: flex; flex-direction: column; gap: 4px; }
+.sh-wave {
+    height: 24px; border-radius: 2px; background: #080808;
+    display: flex; align-items: center; padding-left: 8px;
+    font-size: 0.58rem; font-weight: bold; letter-spacing: 1.5px;
+    border-left: 3px solid currentColor;
+}
+.sh-mock-nums { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.sh-num {
+    background: #080808; border-radius: 2px; padding: 3px 8px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 6px;
+}
+.sh-num .lbl { font-size: 0.52rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.sh-num .val { font-size: 0.88rem; font-weight: bold; }
+.sh-mock-cap { color: #666; font-size: 0.68rem; font-style: italic; margin: 0 0 16px; }
+/* callout cards */
+.sh-cards-head { color: #888; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; margin: 16px 0 6px; }
+.sh-cards { display: flex; flex-direction: column; gap: 7px; }
+.sh-card { background: #1e1e1e; border-left: 3px solid #555; border-radius: 0 4px 4px 0; padding: 7px 12px; }
+.sh-card .tag { font-weight: bold; font-size: 0.82rem; }
+.sh-card .desc { color: #bbb; font-size: 0.77rem; margin-top: 2px; line-height: 1.45; }
+/* controls section helpers */
+.sh-loop { background: #14241c; border: 1px solid #2a5; border-radius: 4px; padding: 10px 14px; margin: 6px 0 14px; color: #cde; font-size: 0.82rem; }
+.sh-loop strong { color: #6e9; }
+/* footer nav */
+#sh-foot {
+    padding: 12px 24px 16px; border-top: 1px solid #333;
+    display: flex; justify-content: space-between; align-items: center;
+    flex: 0 0 auto; gap: 10px;
+}
+#sh-foot .sh-nav-right { display: flex; gap: 8px; }
+#sh-foot button {
+    padding: 6px 16px; font-size: 0.72rem; border-radius: 3px; cursor: pointer;
+    border: 1px solid #555; background: rgba(42,42,42,0.85); color: #ccc;
+}
+#sh-foot button.primary { background: #2a8060; border-color: #3aa777; color: #eafff5; font-weight: bold; }
+#sh-foot button:disabled { opacity: 0.3; cursor: default; }
+#sh-skip { background: none; border: none; color: #777; padding-left: 0; }
+/* brand bar button - subtly highlighted so newcomers notice it */
+#brand-starthere-btn {
+    padding: 4px 10px; font-size: 0.6rem;
+    background: #2a8060; color: #eafff5; border: 1px solid #3aa777;
+    border-radius: 3px; cursor: pointer; text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: bold;
+}
+#brand-starthere-btn:hover { background: #34a078; }
+
 #about-modal-overlay {
     display: none;
     position: fixed;
@@ -1905,26 +2366,6 @@ input[type=range] {
 .alarm-med  { animation: alarmMed  1s infinite; }
 .alarm-high { animation: alarmHigh 0.5s infinite; }
 
-/* v3.76: ischaemia indicator on the HR box. Amber pulsing badge that
-   appears when state.ischaemiaLabel is true. Positioned absolute so it
-   doesn't displace the HR value. */
-.ischaemia-flag {
-    position: absolute;
-    top: 4px;
-    right: 6px;
-    background: #c66;
-    color: #fff;
-    font-size: 0.55rem;
-    font-weight: bold;
-    letter-spacing: 1px;
-    padding: 2px 5px;
-    border-radius: 2px;
-    animation: ischaemiaPulse 1.5s ease-in-out infinite;
-}
-@keyframes ischaemiaPulse {
-    0%, 100% { background: #c66; }
-    50%      { background: #f88; }
-}
 
 .hide { display: none !important; }
 
@@ -1993,6 +2434,8 @@ input[type=range] {
          than appearing optically high due to the font-size mismatch. -->
     <div style="display:flex; align-items:baseline; gap:10px;">
         <div id="brand-name">Dreams Lab</div>
+        <!-- v3.83: START HERE button - opens the novice orientation modal -->
+        <button id="brand-starthere-btn" onclick="toggleStartHere()" title="New here? A guided orientation to the monitor and controls">START HERE</button>
         <!-- v3.64: SCENARIOS button - opens scenario picker modal -->
         <button id="brand-scenarios-btn" onclick="toggleScenariosModal()" title="Scenarios">SCENARIOS</button>
         <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
@@ -2012,7 +2455,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 3.52</div>
+        <div class="version">Version 4.0</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -2053,6 +2496,116 @@ input[type=range] {
 
         <button id="about-modal-close" onclick="toggleAboutModal()">Close</button>
     </div>
+</div>
+
+<!-- v3.83: "Start here" orientation modal. Opens via the START HERE button.
+     Four stepped sections; section 2 mock colours mirror the live monitor. -->
+<div id="sh-overlay" onclick="if(event.target.id==='sh-overlay') toggleStartHere()">
+  <div id="sh-modal">
+    <div id="sh-modal-head">
+      <h2>Start here</h2>
+      <div class="sh-sub">A two-minute orientation for your first time in the simulator</div>
+      <div id="sh-steps">
+        <div class="dot" onclick="shGoto(0)"></div>
+        <div class="dot" onclick="shGoto(1)"></div>
+        <div class="dot" onclick="shGoto(2)"></div>
+        <div class="dot" onclick="shGoto(3)"></div>
+      </div>
+    </div>
+
+    <div id="sh-body">
+
+      <!-- SECTION 1: WELCOME -->
+      <div class="sh-section" id="sh-sec-0">
+        <h3>You are the anaesthetist</h3>
+        <p class="lead">For the next while, you are the anaesthetist looking after a patient through an operation.</p>
+        <p>This screen is the patient <strong>monitor</strong> &mdash; the same kind that sits beside an anaesthetised patient in theatre. Your job is to keep them asleep, breathing, and stable while the surgery happens. The controls let you give drugs and respond to what the monitor is telling you.</p>
+        <p>Nothing here is real. The physiology is deliberately simplified for teaching, so this is a safe place to try things, make mistakes, and watch what happens &mdash; none of it can hurt anyone.</p>
+        <p style="color:#999;">The next three steps cover the monitor, the controls, and how to start your first case. You can reopen this any time from <strong>Start here</strong> in the top bar.</p>
+      </div>
+
+      <!-- SECTION 2: THE MONITOR -->
+      <div class="sh-section" id="sh-sec-1">
+        <h3>The monitor</h3>
+        <p>This is what you will be watching. You already know the basics like heart rate and blood pressure &mdash; the parts worth learning are the ones specific to anaesthesia. Here is what each part means.</p>
+        <div class="sh-mock">
+          <div class="sh-mock-waves">
+            <div class="sh-wave" style="color:#00ff00">ECG</div>
+            <div class="sh-wave" style="color:#00ffff">PLETH</div>
+            <div class="sh-wave" style="color:#ff3333">ART</div>
+            <div class="sh-wave" style="color:#ffffff">PAW</div>
+            <div class="sh-wave" style="color:#ffffff">FLOW</div>
+            <div class="sh-wave" style="color:#ffff00">CO2</div>
+          </div>
+          <div class="sh-mock-nums">
+            <div class="sh-num"><span class="lbl">HR</span><span class="val" style="color:#00ff00">72</span></div>
+            <div class="sh-num"><span class="lbl">SpO2</span><span class="val" style="color:#00ffff">99</span></div>
+            <div class="sh-num"><span class="lbl">NIBP</span><span class="val" style="color:#00ffff">118/74</span></div>
+            <div class="sh-num"><span class="lbl">ABP</span><span class="val" style="color:#ff3333">120/76</span></div>
+            <div class="sh-num"><span class="lbl">etCO2</span><span class="val" style="color:#ffff00">38</span></div>
+            <div class="sh-num"><span class="lbl">RR</span><span class="val" style="color:#ffffff">12</span></div>
+            <div class="sh-num"><span class="lbl">etSEVO</span><span class="val" style="color:#ffffff">2.0</span></div>
+            <div class="sh-num"><span class="lbl">BIS</span><span class="val" style="color:#d4ff00">50</span></div>
+            <div class="sh-num"><span class="lbl">TOF</span><span class="val" style="color:#ff9933">4</span></div>
+            <div class="sh-num"><span class="lbl">PIP/Vt</span><span class="val" style="color:#ffffff">18/480</span></div>
+            <div class="sh-num"><span class="lbl">PEEP</span><span class="val" style="color:#ffffff">5</span></div>
+          </div>
+        </div>
+        <p class="sh-mock-cap">Illustrative values for a stable, anaesthetised patient.</p>
+
+        <div class="sh-cards-head">The numbers</div>
+        <div class="sh-cards">
+          <div class="sh-card" style="border-color:#00ff00"><span class="tag" style="color:#00ff00">HR &mdash; heart rate</span><div class="desc">Under anaesthesia it often runs lower than the awake 60&ndash;100, as anaesthetic agents blunt sympathetic tone.</div></div>
+          <div class="sh-card" style="border-color:#00ffff"><span class="tag" style="color:#00ffff">SpO2 &mdash; oxygen saturation</span><div class="desc">Patients get supplemental oxygen, so this usually sits at 98&ndash;100%. A sustained fall is an early warning that the patient is not getting enough oxygen.</div></div>
+          <div class="sh-card" style="border-color:#00ffff"><span class="tag" style="color:#00ffff">NIBP &mdash; cuff blood pressure</span><div class="desc">Blood pressure from an arm cuff, in mmHg. It is intermittent &mdash; here it cycles automatically every 2.5 minutes &mdash; so between readings you cannot see the blood pressure unless an arterial line is in.</div></div>
+          <div class="sh-card" style="border-color:#ff3333"><span class="tag" style="color:#ff3333">ABP &mdash; arterial blood pressure</span><div class="desc">Continuous, beat-to-beat blood pressure from a fine catheter (an "arterial line") placed in an artery, usually at the wrist. You see changes instantly rather than waiting for the next cuff cycle &mdash; used when blood pressure needs tight control.</div></div>
+          <div class="sh-card" style="border-color:#ffff00"><span class="tag" style="color:#ffff00">etCO2 &mdash; exhaled carbon dioxide</span><div class="desc">The CO2 at the very end of an exhaled breath (mmHg, normal ~35&ndash;45). It confirms the lungs are being ventilated and the breathing circuit is intact, and tracks how effectively. A sudden drop toward zero is a red flag &mdash; a disconnection, a blocked tube, or collapsing cardiac output.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">RR &mdash; respiratory rate</span><div class="desc">Breaths per minute. When the patient is breathing on their own, this is one of the first things to fall as anaesthetic &mdash; especially opioid &mdash; doses deepen: a slow rate is an early sign of respiratory depression, and 0 means apnoea (not breathing). When the ventilator is breathing for the patient, it shows the delivered rate.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">etSEVO &mdash; exhaled anaesthetic vapour</span><div class="desc">End-tidal sevoflurane (%). Sevoflurane is the anaesthetic vapour the patient breathes; the exhaled percentage closely mirrors the brain concentration keeping them asleep. Around 2% is a typical surgical depth (about 1 MAC). This is your main readout of how much volatile agent is on board.</div></div>
+          <div class="sh-card" style="border-color:#d4ff00"><span class="tag" style="color:#d4ff00">BIS &mdash; depth of anaesthesia</span><div class="desc">Bispectral index: a processed brain-wave number from 0 (no activity) to 100 (wide awake). Aim for 40&ndash;60 during surgery &mdash; deep enough to be properly unconscious, not needlessly deeper.</div></div>
+          <div class="sh-card" style="border-color:#ff9933"><span class="tag" style="color:#ff9933">TOF &mdash; train-of-four</span><div class="desc">Tests how much muscle relaxant is still working. A nerve is stimulated four times and the twitches counted &mdash; 4 means little or no block, 0 means deep block. You watch it to time relaxant doses and confirm recovery before waking the patient.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PIP / Vt &mdash; ventilator pressure & breath size</span><div class="desc">Peak inspiratory pressure (cmH2O) and tidal volume (mL): the highest pressure reached during each ventilator breath, and the size of that breath. Rising PIP for the same volume means stiffer or obstructed lungs or circuit &mdash; for example bronchospasm or a kinked tube.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PEEP &mdash; end-expiratory pressure</span><div class="desc">Positive end-expiratory pressure (cmH2O): a small pressure held in the lungs at the end of each breath to stop airways collapsing and help oxygenation. Often set around 5.</div></div>
+        </div>
+
+        <div class="sh-cards-head">The waveforms</div>
+        <div class="sh-cards">
+          <div class="sh-card" style="border-color:#00ff00"><span class="tag" style="color:#00ff00">ECG</span><div class="desc">The heart's electrical trace. Watch the rate and rhythm.</div></div>
+          <div class="sh-card" style="border-color:#00ffff"><span class="tag" style="color:#00ffff">PLETH</span><div class="desc">The pulse waveform from the SpO2 probe; each upstroke is a pulse of blood reaching the finger. A strong, regular trace means good perfusion; a damped one can mean poor perfusion or a probe problem.</div></div>
+          <div class="sh-card" style="border-color:#ff3333"><span class="tag" style="color:#ff3333">ART</span><div class="desc">The arterial pressure waveform that accompanies the arterial line &mdash; one upstroke per beat.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PAW</span><div class="desc">Airway pressure across a single breath: it rises as the ventilator delivers the breath, then falls on exhalation.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">FLOW</span><div class="desc">Gas flowing in and out of the lungs through the breath cycle (in above the line, out below).</div></div>
+          <div class="sh-card" style="border-color:#ffff00"><span class="tag" style="color:#ffff00">CO2 &mdash; capnogram</span><div class="desc">The CO2 waveform across each breath &mdash; a near-square shape that climbs as the patient exhales, plateaus, then drops to zero on the next breath in. A flat line means no CO2 is being exhaled: no effective ventilation.</div></div>
+        </div>
+      </div>
+
+      <!-- SECTION 3: THE CONTROLS -->
+      <div class="sh-section" id="sh-sec-2">
+        <h3>The controls</h3>
+        <p>Everything you do happens through two areas.</p>
+        <p><strong>The drug deck</strong> runs along the bottom of the screen, organised into tabs: hypnotics (to send the patient to sleep), opioids (pain relief), pressors (to raise blood pressure), other cardiovascular drugs, muscle relaxants (NMB), fluids, and emergency drugs. Tap a drug to give a bolus. Some drugs can also run as continuous <strong>infusions</strong> &mdash; switch to the Infusions tab and adjust the rate with a slider.</p>
+        <p><strong>The side panel</strong> opens with the <strong>PANEL</strong> button at the top-left. There you can change ventilator settings, see the detailed underlying variables, and read the event log &mdash; a running record of everything that has happened in the case.</p>
+        <div class="sh-loop">The whole simulator works on one loop: <strong>give something, then watch the monitor respond.</strong> Let the anaesthetic lighten and BIS climbs; drop the blood pressure and a pressor brings it back. Watching that cause and effect is the point.</div>
+      </div>
+
+      <!-- SECTION 4: START A CASE -->
+      <div class="sh-section" id="sh-sec-3">
+        <h3>Start your first case</h3>
+        <p>The best place to begin is a guided scenario rather than a blank patient.</p>
+        <p>Tap <strong>Scenarios</strong> in the top bar and choose the <strong>induction walkthrough</strong>. It takes you step by step through sending a patient to sleep &mdash; the sequence every anaesthetic begins with. Every scenario comes with a brief setting out its setup, objectives, and hints.</p>
+        <p>When you are ready, press <strong>Get started</strong> below to jump straight to the scenario picker.</p>
+      </div>
+
+    </div>
+
+    <div id="sh-foot">
+      <button id="sh-skip" onclick="toggleStartHere()">Skip for now</button>
+      <div class="sh-nav-right">
+        <button id="sh-back" onclick="shBack()">Back</button>
+        <button id="sh-next" class="primary" onclick="shNext()">Next</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- v3.72: scenarios modal - two views:
@@ -2167,6 +2720,7 @@ input[type=range] {
                 <button class="evt-btn" id="evt-tourni" onclick="toggleEvent('tourniquetRelease')" disabled>Tourniquet release (3 min)</button>
                 <button class="evt-btn" id="evt-vagal"  onclick="toggleEvent('vagal')">Vagal stimulus (self-limiting)</button>
                 <button class="evt-btn" id="evt-embol"  onclick="toggleEvent('co2Embolism')"       disabled>CO2 embolism</button>
+                <button class="evt-btn" id="evt-pe"     onclick="toggleEvent('pulmEmbolism')">Pulmonary embolism</button>
             </div>
         </div>
 
@@ -2430,12 +2984,12 @@ input[type=range] {
         <div class="box green"  id="box-hr">
             <span class="label">HR</span>
             <span id="num-hr" class="value">--</span>
-            <span id="ischaemia-flag" class="ischaemia-flag" style="display:none">ISCHAEMIA</span>
         </div>
         <div class="box cyan"   id="box-spo2"><span class="label">SpO2</span><span id="num-spo2" class="value">--</span></div>
         <div class="box cyan"   id="box-nibp" onclick="takeNIBP()"><span class="label">NIBP (AUTO 2.5min)</span><span id="num-nibp" class="value" style="font-size: 1.5rem;">--/--</span></div>
         <div class="box red"    id="box-abp"><span class="label">ABP (ART)</span><span id="num-bp" class="value" style="font-size:1.7rem;">--/--</span></div>
         <div class="box yellow" id="box-co2"><span class="label">etCO2</span><span id="num-co2" class="value">--</span></div>
+        <div class="box white"  id="box-rr"><span class="label">RR (/min)</span><span id="num-rr" class="value">--</span></div>
         <div class="box white"  id="box-mac"><span class="label">etSEVO (%)</span><span id="num-mac" class="value" style="font-size:1.4rem;">--</span></div>
         <div class="box purple" id="box-bis" onclick="toggleMon('bis')">
             <span class="label">BIS</span>
@@ -2892,6 +3446,18 @@ const CONFIG = {
     CO2_EMBOLISM_SPO2_DROP_RATE: 0.15, // additional SpO2 desaturation rate (%/sec)
     CO2_EMBOLISM_CO_FACTOR: 0.5,      // further CO reduction from obstruction
 
+    // v3.77: pulmonary embolism (thromboembolic, distinct from CO2 gas embolism).
+    // Differences from CO2 embolism:
+    //  - Less severe acute drop (sub-massive PE typical for teaching scenario)
+    //  - etCO2 falls to ~22 (V/Q dead-space) not 10 (complete obstruction)
+    //  - SVR NOT dropped directly - baroreflex raises alpha naturally
+    //  - Doesn't auto-resolve (would need thrombolysis/embolectomy)
+    PE_CO_FACTOR: 0.55,               // RV outflow obstruction: CO ~55% of normal
+    PE_ETCO2_TARGET: 22,              // V/Q dead-space target
+    PE_SHUNT_BUILD_TAU: 12,           // sec; shunt builds rapidly
+    PE_SHUNT_TARGET: 0.6,             // settling level (SpO2 ceiling ~92 at this)
+    PE_SHUNT_SPO2_DROP: 12,           // mmHg points off SpO2 ceiling at peShunt=1.0
+
     // v3.76: myocardial ischaemia model.
     // Demand-supply imbalance accumulator. Imbalance defined as:
     //   demandIdx = (HR * SBP) / ISCHAEMIA_RPP_REF
@@ -2905,8 +3471,6 @@ const CONFIG = {
     ISCHAEMIA_DBP_REF: 80,            // normal DBP
     ISCHAEMIA_BUILD_TAU: 30,          // sec to build to 1.0 under imbalance=1
     ISCHAEMIA_HEAL_TAU:  60,          // sec to heal toward 0 under imbalance=-1 (heals slower than it builds)
-    ISCHAEMIA_LABEL_ON:  0.30,        // event flag fires when score crosses this
-    ISCHAEMIA_LABEL_OFF: 0.15,        // event flag clears when score falls below (hysteresis)
     ISCHAEMIA_CONTR_DROP: 0.20,       // contractility drops up to 20% at full ischaemia
     ISCHAEMIA_SCENARIO_AMPLIFIER: 1.6, // scenario-active multiplier on imbalance (models coronary disease)
 
@@ -2940,13 +3504,21 @@ const CONFIG = {
         hr:    { medLow: 50, medHigh: 120, highLow: 40, highHigh: 140 },
         spo2:  { medLow: 92, medHigh: null, highLow: 88, highHigh: null },
         sys:   { medLow: 90, medHigh: 160, highLow: 80, highHigh: 180 },
-        dia:   { medLow: 50, medHigh: 90,  highLow: 40, highHigh: 100 },
+        // v4.0: diastolic alarm removed (nuisance under GA - DBP routinely sits
+        // 45-55). Replaced by a MAP low alarm; systolic still covers the high side.
+        map:   { medLow: 60, medHigh: null, highLow: 50, highHigh: null },
         etco2: { medLow: 30, medHigh: 45,  highLow: 25, highHigh: 55 },
-        // v3.74: PIP alarm - only relevant during mechanical ventilation,
-        // and gated to fire only when machine is actively delivering breaths
-        // (see evaluateAlarms). High-side-only - low PIP isn't an alarm
-        // (it's normal during apnoea/disconnect which have their own alarms).
-        pip:   { medLow: null, medHigh: 30, highLow: null, highHigh: 40 },
+        // v3.74 / v4.0: PIP alarm - only relevant during mechanical ventilation,
+        // gated to fire only when the machine has delivered a breath (see
+        // evaluateAlarms). High-side only. v4.0: yellow 25 / red 30.
+        pip:   { medLow: null, medHigh: 25, highLow: null, highHigh: 30 },
+        // v4.0: new respiratory + depth alarms.
+        rr:    { medLow: 8,    medHigh: null, highLow: 4,   highHigh: null },
+        vt:    { medLow: 250,  medHigh: null, highLow: 150, highHigh: null },
+        // BIS: low side (too deep) always active; high side (awareness risk) only
+        // armed once a hypnotic is on board (see evaluateAlarms), so an awake
+        // patient at the start of a case doesn't alarm.
+        bis:   { medLow: 20,   medHigh: 65,   highLow: 10,  highHigh: 80 },
     },
     // Audio patterns
     ALARM_MED_BEEP_FREQ: 660,        // Hz
@@ -3180,7 +3752,7 @@ const state = {
 
     // --- Vitals ---
     hr: 72, sys: 117, dia: 72, etco2: 38, bis: 98, consciousness: 98, mac: 0,  // v3.36: 117/72 = sys/dia for adult mapTarget 90 (1.3x and 0.8x)
-    spo2: 99, etSevo: 0, circuitSevo: 0, peakPressure: 0, tidalVolume: 500, minuteVent: 6,
+    spo2: 99, etSevo: 0, circuitSevo: 0, peakPressure: 0, tidalVolume: 500, minuteVent: 6, effectiveRR: 12,
     tofCount: 4,
     displayedCO2: 0,   // what the capnograph actually shows (decays to 0 during apnoea)
     metabolicRate: 1.0,  // multiplier; drives BOTH O2 consumption and CO2 production
@@ -3233,11 +3805,16 @@ const state = {
     //   demand  = HR x SBP / reference
     //   supply  = DBP / referenceDBP
     // Imbalance > 0 -> ischaemia builds; imbalance < 0 -> heals.
-    // state.events.ischaemia is the boolean flag that fires when score > threshold
-    // (drives the ECG box label). Decoupled so the label has hysteresis and
-    // doesn't flicker around the threshold.
+    // v3.79: directly drives ECG morphology (ST depression + T-wave
+    // inversion) - no separate hysteresis label needed.
     ischaemia: 0,
-    ischaemiaLabel: false,    // visual flag for ECG box, hysteresis-gated
+
+    // v3.77: pulmonary embolism V/Q-mismatch shunt (0..1).
+    // Built rapidly while events.pulmEmbolism is on. Drives SpO2 ceiling
+    // drop (similar to aspirationInjury but tuned for PE - levels off ~0.6).
+    // No persistence floor when event clears - represents pulmonary blood
+    // flow restoration (would happen with thrombolysis/embolectomy).
+    peShunt: 0,
 
     // v3.72: which scenario is currently loaded (string key into SCENARIOS).
     // null means "none". Used by the Scenarios modal to decide whether to
@@ -3286,6 +3863,7 @@ const state = {
         tourniquetRelease: false,
         vagal: false,
         co2Embolism: false,
+        pulmEmbolism: false,       // v3.77: thromboembolic PE (distinct from CO2 embolism)
         ischaemia: false,          // v3.76: myocardial ischaemia (flag, hysteresis-gated)
         // Equipment artefacts (don't affect patient physiology)
         ecgLeadsOff: false,
@@ -3511,6 +4089,54 @@ const chbTemplate = [0,0,0,0,0,0,0,0,0,0.2,0.5,0.85,0.7,0.2,-0.15,-0.25,-0.2,-0.
 // P wave (for CHB: fires on its own schedule, overlaid on the main trace)
 const chbPTemplate = [0,0,0,0,0.04,0.08,0.12,0.08,0.04,0,0,0];
 
+/* v3.79: Ischaemic ECG morphology generator.
+   Builds a modified PQRST template with ST depression and T-wave inversion
+   scaled to state.ischaemia. Used for sinus, SVT, and AF rhythms.
+
+   Template layout (28 indices):
+     [0..6]   TP baseline
+     [7..9]   P wave
+     [10..12] PR segment
+     [13..15] Q, R, S
+     [16..18] ST segment (DEPRESSED here)
+     [19..21] T wave   (INVERTED here)
+     [22..27] TP baseline
+
+   ST: linear depression. At ischaemia=1.0, depress by 0.15 (~15% R-wave
+   amplitude, equivalent to ~1.5mm on a 10mm R-wave).
+
+   T wave: multiplicative factor going +1 -> 0 -> -1 as ischaemia goes
+   0 -> 0.5 -> 1.0. So at moderate ischaemia (0.5) the T wave flattens;
+   at full ischaemia it fully inverts (mirror of the upright wave).
+
+   Cached so we only rebuild when ischaemia has changed by >0.02 (avoids
+   60 array allocations/sec; isc moves slowly so this is plenty). */
+let _cachedIschTemplate = null;
+let _cachedIschValue = -1;
+let _cachedIschBase = null;
+function getIschaemicTemplate(base) {
+    const isc = state.ischaemia || 0;
+    if (isc < 0.05) return base;
+    // Same base + similar isc -> reuse cache
+    if (_cachedIschBase === base && _cachedIschTemplate
+        && Math.abs(isc - _cachedIschValue) < 0.02) {
+        return _cachedIschTemplate;
+    }
+    const t = base.slice();
+    const stDepth = 0.15 * isc;
+    t[16] -= stDepth;
+    t[17] -= stDepth;
+    t[18] -= stDepth;
+    const tFactor = 1 - 2 * isc;
+    t[19] *= tFactor;
+    t[20] *= tFactor;
+    t[21] *= tFactor;
+    _cachedIschTemplate = t;
+    _cachedIschValue = isc;
+    _cachedIschBase = base;
+    return t;
+}
+
 /* Get the ECG deflection value for a given normalised-beat position `pr` (0..1).
    Called once per animation frame. Reads state.rhythm to select template.
    Returns a value between ~-0.5 and ~1.2. */
@@ -3530,7 +4156,7 @@ function getEcgValue(pr) {
         return getSmoothVal(vtTemplate, pr);
     }
     if (r === 'af') {
-        return getSmoothVal(afTemplate, pr);
+        return getSmoothVal(getIschaemicTemplate(afTemplate), pr);
     }
     if (r === 'chb') {
         // Main QRS: wide escape morphology
@@ -3543,8 +4169,8 @@ function getEcgValue(pr) {
         const pWave = getSmoothVal(chbPTemplate, pPhase);
         return qrs + pWave;
     }
-    // Default: sinus / SVT use the standard PQRST
-    return getSmoothVal(ecgTemplate, pr);
+    // Default: sinus / SVT use the standard PQRST (with ischaemic ST/T changes if any)
+    return getSmoothVal(getIschaemicTemplate(ecgTemplate), pr);
 }
 
 /* Does this rhythm produce effective pulsatile flow? Used to gate pleth and ART. */
@@ -3618,6 +4244,9 @@ const canvas = document.getElementById('monitorCanvas');
 const ctx = canvas.getContext('2d');
 let xF = 0, xS = 0, lastXF = 0, lastXS = 0;
 let lastY = { ecg: 0, pleth: 0, art: 0, pressure: 0, flow: 0, co2: 0 };
+// v3.86: logical canvas size (CSS px) for DPR-correct rendering; wall-clock anchor
+// for time-based sweep; accumulated spontaneous breath phase (rate-change safe).
+let cssW = 0, cssH = 0, lastFrameMs = 0, spontPhase = 0;
 let lastVIndex = 0;
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -3920,13 +4549,28 @@ setInterval(() => {
     state.tofCount = clamp(Math.round(4 * (1 - p.paralysis)), 0, 4);
 
     /* --- Respiratory drive (saturating: ceiling 1.0, floor 0) ---
-       All drug effects push down from the ceiling. Paralysis and apnoea
-       events hard-override to 0. */
+       All drug effects push DOWN from the ceiling. Paralysis and the central
+       apnoea event hard-override to 0.
+
+       v3.84: recalibrated against simulated effect-site trajectories so that,
+       for the standard adult, propofol 150 mg alone (peak propCe ~5.2) drives
+       respiration below the apnoea gate for ~2 min, and propofol 100 mg with
+       an induction opioid on board (e.g. fentanyl 100 mcg) also reaches apnoea
+       via the synergy term, while propofol 100 mg alone does not. alfentanil
+       and morphine now contribute (previously absent from this term). The
+       hypnotic x opioid product models the clinically observed supra-additive
+       respiratory depression. The dominant clinical effect is on RATE (RR =
+       14*respDrive); tidal volume is part-preserved (see Vt 40% floor below). */
     {
-        const pushDown = pE    * 0.85
-                       + rE    * 1.25
-                       + fE    * 0.6
-                       + midaE * 0.4;
+        const opioidE   = rE + fE + alfE + morphE;   // total normalised opioid effect
+        const hypnoticE = pE + midaE;                // total normalised hypnotic effect
+        const pushDown = pE     * 1.85
+                       + rE     * 1.70
+                       + fE     * 2.40
+                       + alfE   * 1.30
+                       + morphE * 1.00
+                       + midaE  * 0.50
+                       + hypnoticE * opioidE * 1.40;  // v3.84 hypnotic x opioid synergy
         let drive = saturate(
             CONFIG.RESP_DRIVE_CEILING, CONFIG.RESP_DRIVE_FLOOR, CONFIG.RESP_DRIVE_CEILING,
             0, pushDown,
@@ -4101,6 +4745,20 @@ setInterval(() => {
         }
     }
 
+    /* --- v3.77: Pulmonary embolism shunt builder ---
+       When events.pulmEmbolism is on, peShunt builds rapidly to its settling
+       target (0.6). The shunt drops the SpO2 ceiling (V/Q dead-space mismatch).
+       When the event clears, shunt decays similarly - represents pulmonary
+       blood flow restoration. */
+    if (state.events.pulmEmbolism) {
+        const blend = 1 - Math.exp(-dt / CONFIG.PE_SHUNT_BUILD_TAU);
+        state.peShunt += (CONFIG.PE_SHUNT_TARGET - state.peShunt) * blend;
+    } else if (state.peShunt > 0) {
+        const blend = 1 - Math.exp(-dt / 30);
+        state.peShunt -= state.peShunt * blend;
+        if (state.peShunt < 0.005) state.peShunt = 0;
+    }
+
     /* --- v3.76: Myocardial ischaemia integrator ---
        Tracks demand-supply imbalance and accumulates into state.ischaemia (0..1).
        Demand = (HR * SBP) / reference. Supply = DBP / reference.
@@ -4145,13 +4803,6 @@ setInterval(() => {
             state.ischaemia -= state.ischaemia * healRate * dt;
         }
         state.ischaemia = clamp(state.ischaemia, 0, 1);
-
-        // Hysteresis-gated visual flag on ECG.
-        if (!state.ischaemiaLabel && state.ischaemia >= CONFIG.ISCHAEMIA_LABEL_ON) {
-            state.ischaemiaLabel = true;
-        } else if (state.ischaemiaLabel && state.ischaemia < CONFIG.ISCHAEMIA_LABEL_OFF) {
-            state.ischaemiaLabel = false;
-        }
     }
 
     // v3.16: esmolol blocks the deviation of betaTone from rest baseline.
@@ -4540,7 +5191,10 @@ setInterval(() => {
         ? CONFIG.RHYTHM_CO_FACTOR[state.rhythm]
         : 1.0;
     // CO2 embolism: additional CO reduction from pulmonary outflow obstruction
-    const emboCoFactor = state.events.co2Embolism ? CONFIG.CO2_EMBOLISM_CO_FACTOR : 1.0;
+    // v3.77: pulmonary embolism also drops CO (RV outflow obstruction).
+    // Multiplicative with CO2 embolism factor if both are somehow active.
+    let emboCoFactor = state.events.co2Embolism ? CONFIG.CO2_EMBOLISM_CO_FACTOR : 1.0;
+    if (state.events.pulmEmbolism) emboCoFactor *= CONFIG.PE_CO_FACTOR;
     const co = (state.hr * sv * rhythmCoFactor * emboCoFactor) / 1000;
     const map = (co * (1200 * p.svrTone)) / 80;
 
@@ -4735,9 +5389,11 @@ setInterval(() => {
         const PCV_EQUILIBRATION = 0.5;
         state.tidalVolume = Math.max(0, effectivePinsp) * compliance * PCV_EQUILIBRATION * resistanceVtFactor;
     } else if (p.respDrive > CONFIG.RESP_DRIVE_GATE) {
-        // Spontaneous: Vt = 7 mL/kg * respDrive (compliance-independent)
+        // Spontaneous: Vt = 7 mL/kg * (0.40 + 0.60*respDrive), compliance-independent.
+        // v3.84: tidal volume is part-preserved (40% floor) so the dominant effect
+        // of respiratory depression falls on RATE (RR = 14*respDrive), not depth.
         // But if laryngospasm/kink, resistance chokes it
-        state.tidalVolume = 7 * wt * p.respDrive * resistanceVtFactor;
+        state.tidalVolume = 7 * wt * (0.40 + 0.60 * p.respDrive) * resistanceVtFactor;
         state.peakPressure = 0;
     } else if (state.machine.vent.mode === 'MANUAL' && p.bagPressure > 0.05) {
         // Manual bag: bagPressure (0..1) maps to up to ~30 cmH2O at full squeeze
@@ -4758,17 +5414,22 @@ setInterval(() => {
     state.tidalVolume = Math.max(0, state.tidalVolume);
 
     // Minute ventilation
-    let effectiveRR;
+    // v3.85: effectiveRR persisted on state as the single source of truth for the
+    // actual (measured) respiratory rate. It drives the monitor RR vital and the
+    // spontaneous capnogram timing, so the displayed number and the waveform always
+    // agree. Mechanical modes = set ventilator rate; spontaneous = 14*respDrive (so
+    // opioid/hypnotic respiratory depression slows the RATE, the dominant clinical
+    // effect, with tidal volume part-preserved); bagging = 10; apnoea = 0.
     if (state.machine.vent.mode === 'VCV' || state.machine.vent.mode === 'PCV') {
-        effectiveRR = state.machine.vent.rr;
+        state.effectiveRR = state.machine.vent.rr;
     } else if (p.respDrive > CONFIG.RESP_DRIVE_GATE) {
-        effectiveRR = 14 * p.respDrive;
+        state.effectiveRR = 14 * p.respDrive;
     } else if (p.bagPressure > 0.1) {
-        effectiveRR = 10;
+        state.effectiveRR = 10;
     } else {
-        effectiveRR = 0;
+        state.effectiveRR = 0;
     }
-    state.minuteVent = (state.tidalVolume * effectiveRR) / 1000;
+    state.minuteVent = (state.tidalVolume * state.effectiveRR) / 1000;
 
     /* --- Metabolic rate ---
        One hidden multiplier driving both O2 consumption and CO2 production.
@@ -5014,7 +5675,11 @@ setInterval(() => {
     // (1.0), ceiling drops by ~15 mmHg saturation. Residual floor of 0.35
     // after suctioning means even "treated" patient has SpO2 ceiling ~94.
     const aspirShuntDrop = state.aspirationInjury * 15;
-    const spo2Ceiling = 99 - oedemaFrac * CONFIG.OEDEMA_SPO2_MAX_DROP - aspirShuntDrop;
+    // v3.77: PE V/Q shunt drops SpO2 ceiling (perfused alveoli with no flow
+    // = dead-space ventilation). At peShunt=0.6 (settling) the drop is ~7.2
+    // mmHg points, landing ceiling at ~92.
+    const peShuntDrop = state.peShunt * CONFIG.PE_SHUNT_SPO2_DROP;
+    const spo2Ceiling = 99 - oedemaFrac * CONFIG.OEDEMA_SPO2_MAX_DROP - aspirShuntDrop - peShuntDrop;
 
     if (p.alveolarFiO2 >= CONFIG.SPO2_DESAT_THRESHOLD_FIO2) {
         state.spo2 += (spo2Ceiling - state.spo2) * CONFIG.SPO2_RECOVERY_GAIN * dt;
@@ -5041,6 +5706,11 @@ setInterval(() => {
     if (state.events.co2Embolism) {
         // Acute V/Q mismatch: etCO2 falls fast toward the dead-space target
         state.etco2 += (CONFIG.CO2_EMBOLISM_ETCO2_TARGET - state.etco2) * 0.08 * dt;
+    } else if (state.events.pulmEmbolism) {
+        // v3.77: thromboembolic PE - etCO2 falls toward a less-extreme
+        // target (22 mmHg) reflecting sub-massive dead-space mismatch.
+        // Slower equilibration than CO2 embolism: tau ~30s vs ~12s.
+        state.etco2 += (CONFIG.PE_ETCO2_TARGET - state.etco2) * 0.035 * dt;
     } else if (disconnected || state.events.laryngospasm) {
         // Apnoea/complete obstruction: ~3 mmHg/min rise at baseline metabolism
         state.etco2 += (3 / 60) * state.metabolicRate * dt;
@@ -5094,11 +5764,26 @@ function infusionToMgPerMin(drug, rate, wt) {
 const PLETH_BUFFER_FRAMES = Math.round(60 * CONFIG.PLETH_DELAY_S);
 
 function animate() {
-    if (!canvas.width) return requestAnimationFrame(animate);
+    if (!canvas.width || !cssW) return requestAnimationFrame(animate);
 
-    const dxF = CONFIG.SWEEP_FAST / 60;
-    const dxS = CONFIG.SWEEP_SLOW / 60;
-    const th = canvas.height / 6;
+    // v3.86: advance the sweep by real elapsed time, not a fixed per-frame step, so
+    // trace speed is correct on 120/144 Hz displays and stays in sync with the
+    // wall-clock-driven waveform shapes (kills the judder). Clamp the step so a
+    // backgrounded tab doesn't draw one giant line on return.
+    const _nowMs = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    let frameDt = (lastFrameMs ? (_nowMs - lastFrameMs) : 16.7) / 1000;
+    lastFrameMs = _nowMs;
+    frameDt = Math.min(Math.max(frameDt, 0), 0.1);
+    const dxF = CONFIG.SWEEP_FAST * frameDt;
+    const dxS = CONFIG.SWEEP_SLOW * frameDt;
+    const th = cssH / 6;
+
+    // v3.86: accumulate spontaneous breath phase from elapsed-time / cycle length so
+    // a changing respiratory rate (drug onset) smoothly retimes the breath instead of
+    // jumping phase. The old `performance.now() % cycleS` jumped every time the rate
+    // moved, producing the vertical judder on the CO2/flow traces.
+    const _spontCycleS = (state.effectiveRR > 0) ? 60 / state.effectiveRR : 0;
+    if (_spontCycleS > 0) spontPhase = (spontPhase + frameDt / _spontCycleS) % 1;
 
     ctx.fillStyle = 'black';
     ctx.fillRect(xF, 0, 50, th * 3);
@@ -5219,8 +5904,10 @@ function animate() {
             }
             // Spontaneous breathing overlay (only if not mid-bag-squeeze)
             if (state.patient.respDrive > CONFIG.RESP_DRIVE_GATE && bp < 0.05) {
-                const cycleS = 60 / (14 * state.patient.respDrive);
-                const bProg = (performance.now() / 1000 % cycleS) / cycleS;
+                // v3.85/v3.86: paced by the shared accumulated spontPhase (advanced
+                // from effectiveRR each frame), so capnogram timing matches the RR
+                // vital and stays smooth even as the rate changes.
+                const bProg = spontPhase;
                 if (bProg > 0.33) {
                     expProgress = (bProg - 0.33) / 0.67;
                     currentlyExpiring = true;
@@ -5343,9 +6030,10 @@ function animate() {
                 // Passive expiration - exponential decay, negative
                 flowV = -0.9 * bp;
             } else if (state.patient.respDrive > CONFIG.RESP_DRIVE_GATE) {
-                // Spontaneous breathing overlay: smooth sinusoidal flow
-                const cycleS = 60 / (14 * state.patient.respDrive);
-                const bProg = (performance.now() / 1000 % cycleS) / cycleS;
+                // Spontaneous breathing overlay: smooth sinusoidal flow.
+                // v3.86: shared accumulated spontPhase (rate-change safe, no judder),
+                // same breath cycle as the capnogram.
+                const bProg = spontPhase;
                 // Insp phase 0..0.4, exp phase 0.4..1 (slower than insp for realism)
                 if (bProg < 0.4) {
                     // Half-sine positive during insp
@@ -5406,9 +6094,9 @@ function animate() {
     }
 
     lastXF = xF; xF += dxF;
-    if (xF >= canvas.width) { xF = 0; lastXF = 0; resetY(true); }
+    if (xF >= cssW) { xF = 0; lastXF = 0; resetY(true); }
     lastXS = xS; xS += dxS;
-    if (xS >= canvas.width) { xS = 0; lastXS = 0; resetY(false); }
+    if (xS >= cssW) { xS = 0; lastXS = 0; resetY(false); }
     requestAnimationFrame(animate);
 }
 
@@ -5795,6 +6483,36 @@ function togglePanel() {
 }
 
 /* v3.52: Open/close the About modal (licence, disclaimer, attribution). */
+// v3.83: "Start here" novice orientation modal - open/close + step navigation.
+let shStep = 0;
+const SH_STEPS = 4;
+function toggleStartHere() {
+    const ov = document.getElementById('sh-overlay');
+    if (!ov) return;
+    ov.classList.toggle('open');
+    if (ov.classList.contains('open')) shGoto(0);
+}
+function shGoto(n) {
+    shStep = Math.max(0, Math.min(SH_STEPS - 1, n));
+    document.querySelectorAll('.sh-section').forEach((s, i) => s.classList.toggle('active', i === shStep));
+    document.querySelectorAll('#sh-steps .dot').forEach((d, i) => d.classList.toggle('active', i === shStep));
+    const back = document.getElementById('sh-back');
+    const next = document.getElementById('sh-next');
+    if (back) back.disabled = (shStep === 0);
+    if (next) next.textContent = (shStep === SH_STEPS - 1) ? 'Get started' : 'Next';
+    const body = document.getElementById('sh-body');
+    if (body) body.scrollTop = 0;
+}
+function shNext() {
+    if (shStep === SH_STEPS - 1) {
+        toggleStartHere();
+        if (typeof toggleScenariosModal === 'function') toggleScenariosModal();
+    } else {
+        shGoto(shStep + 1);
+    }
+}
+function shBack() { shGoto(shStep - 1); }
+
 function toggleAboutModal() {
     const ov = document.getElementById('about-modal-overlay');
     if (ov) ov.classList.toggle('open');
@@ -6001,6 +6719,175 @@ function triggerAwareness(kind) {
      Roc 50mg @ 5min after bolus ~ rocCe 5-7 (full block)
    ============================================================================= */
 const SCENARIOS = {
+    // v3.80: Introductory walkthrough for medical students.
+    // Patient awake on the table, monitors on, mask sitting, IV in,
+    // breathing room air. NOT an emergency - the student walks through
+    // a routine induction sequence and watches the physiology respond.
+    // No special physics needed - the existing sim handles all of this
+    // (FRC O2 reserve during apnoea, propofol BIS effect, sevo washin,
+    // paralysis from rocuronium, etc).
+    induction: {
+        name: 'Induction and maintenance',
+        briefing: '70kg adult on the table for an elective laparoscopic hernia repair. Monitors on, IV in, mask sitting on the face. Induce anaesthesia and get them to a stable maintenance state.',
+        setupBrief: '70kg adult, fit and well, elective laparoscopic hernia repair. The patient is on the operating table, awake and breathing spontaneously. IV is in the left hand and is working well. Standard monitors are on (ECG, SpO2, NIBP, BIS). The anaesthetic machine is on and the patient is breathing through the anaesthetic mask. No drugs have been given yet. Your job is to take them safely from awake to a stable, anaesthetised, intubated, ventilated state.',
+        objectives: [
+            '1. Pre-oxygenate: set FiO2 to 1.0 and increase fresh gas flow. This allows their FRC to fill with oxygen. At least 3 minutes for full denitrogenation - the patient looks no different but their reserve is now several minutes of apnoea instead of seconds',
+            '2. Induce: give propofol (150mg = ~2 mg/kg for a 70kg adult) and an opioid (fentanyl 100mcg). Watch BIS drop from ~98 to <60 over about a minute. MAP will drop from the propofol vasodilation and respiratory drive will reduce.',
+            '3. Support the blood pressure prophylactically: give metaraminol 1mg (or ephedrine 6mg) at the same time as induction. Without it, MAP will dip uncomfortably low in the absence of any surgical stimulus. This is routine practice in real induction - induction without a small vasopressor is the exception, not the rule.',
+            '4. Confirm loss of consciousness: BIS now <60, patient is apnoeic. Spontaneous breathing has stopped',
+            '5. Bag-mask ventilate: Deliver gentle assisted breaths. Watch etCO2 appear on the capnogram (it was reading "--" before because no breath was reaching the gas analyser)',
+            '6. Paralyse: give rocuronium 50mg. Watch the TOF count drop from 4 toward 0 over about 60 seconds',
+            '7. Wait for full paralysis: TOF = 0. Patient is now apnoeic AND paralysed - you are in complete control of their ventilation',
+            '8. Intubate: switch the airway from Mask to ETT (this represents successful laryngoscopy and tube placement). The ETT cuff is now sealing the airway',
+            '9. Confirm tube placement: the capnogram should continue to show a clear waveform with each breath. PIP and Vt are now visible',
+            '10. Start mechanical ventilation: switch ventilator mode to VCV. Default settings (RR 12, Vt 500, PEEP 5) should be fine for this patient',
+            '11. Start maintenance anaesthesia: dial sevoflurane to 1.5%. Watch etSEVO wash in over a couple of minutes. As propofol redistributes over 10-15 minutes, you reach a stable maintenance state: BIS 40-50, MAP 65-75, HR 70-85'
+        ],
+        hints: [
+            'The order matters. Pre-oxygenation buys you minutes of apnoea tolerance. If you induce without pre-oxygenating, SpO2 will start falling within 60-90 seconds of apnoea (the FRC contains mostly nitrogen)',
+            'You can see FRC oxygen content under "God Mode" -> c-frc if you want to watch denitrogenation numerically. At baseline (FiO2 0.21) it sits around 525 mL of O2. After pre-oxygenation it should be ~2300-2500 mL',
+            'Propofol stops breathing AND drops BP. Both are expected and self-limiting in a healthy patient',
+            'The prophylactic vasopressor is the difference between a tidy induction (MAP staying 60-75 throughout) and a deep MAP dip into the 50s. In real life, most anaesthetists give a small dose of metaraminol or ephedrine at induction. Try the scenario both with and without to see the difference',
+            'Rocuronium 50mg = 0.6 mg/kg, the standard intubating dose. Onset 60-90 seconds. The nerve stimulator (TOF) shows you when full block is achieved',
+            'A stable maintenance state in this scenario (no surgical stimulus yet): BIS 40-50, etSEVO 1.3-1.5%, etCO2 35-40, MAP 65-75, HR 70-85, SpO2 99-100, PIP 12-18. When surgery starts (nociception rises), BIS will lighten into the 50s and HR/BP will rise',
+            'If MAP does dip below 60 at any point, give another 0.5-1mg metaraminol or 250mL fluid bolus. It will recover quickly',
+            'You can repeat the scenario any number of times. Try doing it in different orders to see what goes wrong',
+            'A common error: forgetting to switch the airway to ETT after intubating. The cuff seal matters for accurate Vt and etCO2'
+        ],
+        setup() {
+            setProfile('adult');
+            const p = state.patient;
+            // Awake on the table. Mask is sitting on the face but circuit
+            // not actively ventilating - patient is breathing spontaneously
+            // through room air via the mask. (Mask airway allows gas
+            // exchange and capnometry but no positive-pressure assistance
+            // unless in Manual mode and the user squeezes the bag.)
+            p.airway = 'mask';
+            p.fio2 = 0.21;        // room air - student needs to pre-oxygenate
+            // Monitors that any patient on the table will have
+            ['ecg','spo2','bis'].forEach(m => {
+                if (!state.monitors[m]) toggleMon(m);
+            });
+            // NIBP: on auto cycle (already default)
+            // No art line for a routine case - students won't have one at
+            // this stage. Leave .art off (default).
+            // Ventilator: machine on but in Manual mode and idle. No sevo,
+            // FGF at minimum. Student dials these up themselves.
+            state.machine.vent.mode = 'manual';
+            state.machine.vent.rr = 12;
+            state.machine.vent.vt = 500;
+            state.machine.vent.peep = 5;
+            state.machine.vent.fio2 = 0.21;     // student bumps to 1.0 for pre-ox
+            state.machine.vent.sevo = 0;
+            state.machine.vent.fgf = 2;
+            state.circuitSevo = 0;
+            state.etSevo = 0;
+            // No drugs on board
+            p.propCp = 0;     p.propCe = 0;
+            p.fentCp = 0;     p.fentCe = 0;
+            p.remiCp = 0;     p.remiCe = 0;
+            p.rocCp = 0;      p.rocCe = 0;
+            p.midaCp = 0;     p.midaCe = 0;
+            p.ketCp = 0;      p.ketCe = 0;
+            p.paralysis = 0;
+            // All infusions off
+            state.machine.pumps.remi.rate = 0;
+            state.machine.pumps.prop.rate = 0;
+            // No surgical stimulus (patient is in the anaesthetic room, not
+            // yet draped or being operated on)
+            state.nociception = 0;
+            state.nociceptionTarget = 0;
+            // No active events
+            state.events.ischaemia = false;
+            state.ischaemia = 0;
+            state.events.pulmEmbolism = false;
+            state.peShunt = 0;
+            // FRC starts with room-air content (525 mL O2 at adult 70kg FRC).
+            // This is what makes pre-oxygenation meaningful - student must
+            // refill FRC with O2 by breathing FiO2 1.0 BEFORE apnoea hits.
+            p.frcO2 = state.profile.frc * p.fio2;
+            syncScenarioUI();
+            log('=== SCENARIO: Induction and maintenance walkthrough ===');
+            log('Awake adult, room air, mask sitting, monitors on. Begin with pre-oxygenation.');
+        }
+    },
+
+    // v3.81: Post-induction hypotension - the second teaching scenario for
+    // medical students. Builds on the induction walkthrough by teaching how
+    // to recognise and treat hypotension in a non-emergency setting. The
+    // patient is an elderly hypertensive whose baseline BP is high, so the
+    // anaesthetised MAP of ~55 is too low for them (target >65 for end-organ
+    // perfusion). Not an emergency, but needs treatment. No special physics
+    // - just a specific starting state.
+    hypotensionPostInd: {
+        name: 'Post-induction hypotension',
+        briefing: '78-year-old hypertensive, induced a few minutes ago. ETT, on sevo maintenance, surgery about to start. MAP sitting at 55. Their usual BP at home is 160/95.',
+        setupBrief: '78-year-old female for elective hemicolectomy. Background: long-standing hypertension on ramipril and amlodipine, well-controlled diabetes. Home BP 160/95. ASA 2. Induced a few minutes ago with propofol 100mg + fentanyl 100mcg, intubated easily, on sevoflurane 2% with VCV. Surgeon is just finishing draping. MAP is sitting at 55 and not improving. SpO2 99, etCO2 38, BIS 25, PIP 14. No bleeding, no rash. The patient needs treatment - for someone whose usual MAP is over 100, a MAP of 55 means renal and cerebral perfusion are at risk.',
+        objectives: [
+            '1. Recognise the hypotension (MAP < 60 is generally the alarm threshold; for this elderly hypertensive patient, target MAP should be >65)',
+            '2. Rule out emergencies by scanning the rest of the picture: no bleeding (no surgical loss yet), no anaphylaxis (no rash, no airway issues), no PE (etCO2 normal), no ischaemia (ECG looks ordinary). This is straightforward post-induction hypotension',
+            '3. Identify the contributors: anaesthetic vasodilation (sevo + residual propofol), mild pre-op fasting (8 hours NPO), no surgical stimulus yet to drive sympathetic tone, and the patient\'s vasculature is chronically remodelled secondary to their hypertension',
+            '4. Choose a treatment. Options that all work in this scenario:',
+            '   - Metaraminol 0.5-1mg IV (alpha agonist - direct vasoconstrictor)',
+            '   - Ephedrine 6mg IV (alpha + beta - raises BP and HR mildly)',
+            '   - Crystalloid 250-500mL bolus (treats the hypovolaemia component)',
+            '   - Reduce sevoflurane to 1.5% (less vasodilation, but takes minutes to wash out)',
+            '5. Verify the response: aim for MAP > 65 within 1-2 minutes. If not enough, give another dose',
+            '6. Consider what would have prevented this: prophylactic metaraminol at induction (as taught in the induction walkthrough scenario)'
+        ],
+        hints: [
+            'BP targets depend on the patient. A young fit 25-year-old tolerates MAP 55 fine. An elderly hypertensive needs MAP >65 (some would argue >70) because their organs are used to higher pressures - they don\'t autoregulate at low pressures the way a young person does',
+            'The fastest treatments: metaraminol or ephedrine. Effect within 10-30 seconds',
+            'Fluid is slower (1-2 minutes to peak effect) but addresses the underlying hypovolaemia. A 250mL bolus is a reasonable test dose',
+            'Reducing sevo helps but takes 3-5 minutes (the gas has to wash out of the lung and blood). Useful as part of the longer-term strategy, not the immediate fix',
+            'If you give nothing, MAP will slowly creep up as propofol redistributes. But 5-10 minutes at MAP 55 is too long for an elderly patient - the renal medulla and watershed brain areas will accumulate ischaemic damage',
+            'Why does metaraminol slow the HR? Pure alpha agonists raise BP through vasoconstriction. The baroreflex senses the higher BP and slows the heart in compensation. This is normal',
+            'Why does ephedrine raise the HR? It\'s a mixed alpha + beta agonist. The beta effect speeds the heart directly. Different mechanism, different look on the monitor',
+            'Once the case starts (surgical stimulus rises), the patient\'s sympathetic tone will lift their BP naturally. Most of the work of "managing post-induction hypotension" is just bridging the gap to the start of surgery'
+        ],
+        setup() {
+            setProfile('elderly');
+            const p = state.patient;
+            p.airway = 'ett';
+            p.fio2 = 0.5;
+            ['ecg','spo2','bis'].forEach(m => {
+                if (!state.monitors[m]) toggleMon(m);
+            });
+            // Mid-induction-state vent settings
+            state.machine.vent.mode = 'VCV';
+            state.machine.vent.rr = 12;
+            state.machine.vent.vt = 500;
+            state.machine.vent.peep = 5;
+            state.machine.vent.fio2 = 0.5;
+            state.machine.vent.sevo = 2.0;
+            state.machine.vent.fgf = 2;
+            state.circuitSevo = 2.0;
+            state.etSevo = 2.0;
+            // 10 minutes since the 100mg propofol induction bolus -
+            // some residual Ce on board (still falling)
+            p.propCp = 0.8;
+            p.propCe = 0.8;
+            // Fentanyl 100mcg induction dose - mostly on board still
+            p.fentCp = 0.0015;
+            p.fentCe = 0.0015;
+            // Roc paralysis still solid
+            p.rocCp = 4;
+            p.rocCe = 4;
+            p.paralysis = 0.85;
+            // Drapes going on, modest stimulus building - but not yet
+            // enough to drive a clinically useful sympathetic response
+            state.nociception = 4;
+            state.nociceptionTarget = 4;
+            // Mild hypovolaemia from 8 hours NPO. CentralVol at 92% of
+            // normal. Combined with the anaesthetic vasodilation this is
+            // what tips MAP into the 50s.
+            p.centralVolume = state.profile.centralVol * 0.92;
+            syncScenarioUI();
+            log('=== SCENARIO: Post-induction hypotension ===');
+            log(SCENARIOS.hypotensionPostInd.briefing);
+        }
+    },
+
     maintenance: {
         name: 'Gas maintenance',
         briefing: 'Mid-case: 70kg adult, 30 min into elective laparotomy.',
@@ -6061,19 +6948,16 @@ const SCENARIOS = {
     sepsis: {
         name: 'Septic laparotomy',
         briefing: 'Septic 70kg, urgent laparotomy for perforated viscus. Just induced. BP 75/45.',
-        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. Initial BP 75/45. Drapes going on, surgeon about to start. No a-line yet.',
+        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. Initial BP 75/45. Drapes going on, surgeon about to start.',
         objectives: [
             'Recognise the haemodynamic profile of sepsis (low SVR, mild tachycardia)',
             'Use vasopressors to restore perfusion pressure while assessing volume status',
-            'Anticipate the impact of surgical stimulus on a hypotensive patient',
-            'Decide when to insert an arterial line and start broader monitoring'
+            'Anticipate the impact of surgical stimulus on a hypotensive patient'
         ],
         hints: [
             'Septic patients have low SVR - they need vasopressor support, not just fluids',
-            'Metaraminol or noradrenaline (infusion) for sustained pressor support',
-            'Modest fluid bolus may help but be cautious of capillary leak',
-            'Once stabilised, consider arterial line for accurate beat-to-beat BP',
-            'Watch out for sudden hypotension at surgical incision (vasodilation + reduced reserve)'
+            'Metaraminol or noradrenaline infusion for sustained pressor support',
+            'Modest fluid bolus may help but be cautious of capillary leak'
         ],
         setup() {
             // (scenario reset already cleared events)
@@ -6266,7 +7150,7 @@ const SCENARIOS = {
     anaphylaxis: {
         name: 'Anaphylaxis',
         briefing: 'Routine induction just completed. Drugs in, ETT in, ventilation started. About to position for surgery.',
-        setupBrief: 'Adult, ASA 2, elective laparotomy. Just induced with propofol, fentanyl, rocuronium and antibiotics given. ETT in, ventilating well. Vitals look normal at t=0. About to position for surgery. Watch the trend carefully.',
+        setupBrief: 'Adult, ASA 2, elective laparotomy. Just induced with propofol, fentanyl, rocuronium and antibiotics given. ETT in, ventilating well. Vitals look normal initially. About to position for surgery. Watch the trend carefully.',
         objectives: [
             'Recognise the multi-system signature of anaphylaxis (CVS + respiratory)',
             'Give adrenaline boluses (not just pressors) - first-line treatment',
@@ -6280,7 +7164,7 @@ const SCENARIOS = {
             'Adrenaline treats BOTH the CVS and the respiratory components',
             'Aggressive fluids (capillary leak + vasodilation)',
             'Salbutamol and ketamine help with bronchospasm but adrenaline is the key',
-            'Stop the trigger drug if you can identify it; switch antibiotics'
+            'Stop the trigger drug if you can identify it. Don\'t forget topical agents.'
         ],
         setup() {
             setProfile('adult');
@@ -6378,9 +7262,10 @@ const SCENARIOS = {
             // Maintenance propofol level (LMA case may have used some at induction)
             p.propCp = 1.5;
             p.propCe = 1.5;
-            // Light fentanyl
-            p.fentCp = 0.0015;
-            p.fentCe = 0.0012;
+            // v3.84: fentanyl removed so resting RR sits ~7.6 (was ~4 with the
+            // recalibrated respiratory model). propCe 1.5 alone sets this RR floor.
+            p.fentCp = 0;
+            p.fentCe = 0;
             // Not paralysed - spontaneous breathing
             p.rocCp = 0;
             p.rocCe = 0;
@@ -6422,7 +7307,7 @@ const SCENARIOS = {
             'Salbutamol 250mcg IV (Emergency tab) for direct beta-2 effect',
             'Magnesium 2g IV adds bronchodilation by a different mechanism',
             'Low-dose adrenaline (10-100 mcg) for refractory cases',
-            'If MAP drops on the ventilator, suspect gas trapping - disconnect briefly may help'
+            'If MAP drops, suspect gas trapping - disconnecting briefly may help'
         ],
         setup() {
             setProfile('adult');
@@ -6795,10 +7680,10 @@ const SCENARIOS = {
     // pressor to raise DBP).
     ischaemia: {
         name: 'Intraoperative myocardial ischaemia',
-        briefing: 'Elderly patient, known IHD, mid-case. HR has crept up to 105, BP rising. ECG showing ISCHAEMIA.',
-        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol (beta-blocker held pre-op). Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 105, BP 165/85. ECG monitor flashing ISCHAEMIA. Patient cannot complain of chest pain.',
+        briefing: 'Elderly patient, known IHD, mid-case. HR has crept up to 105, BP rising. ECG showing progressive ST depression and T-wave changes.',
+        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol. Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 105, BP 150/95. ECG showing ST depression with T-wave flattening/inversion.',
         objectives: [
-            'Recognise myocardial ischaemia in the anaesthetised patient (HR up, BP up, monitor warning)',
+            'Recognise myocardial ischaemia in the anaesthetised patient (ST depression with T-wave changes on ECG, limited clinical signs unless severe enough to cause cardiogenic shock)',
             'Identify the demand-supply imbalance driving this',
             'Reduce myocardial oxygen DEMAND (slow the heart, reduce SBP, deepen anaesthesia/analgesia)',
             'Consider raising DIASTOLIC pressure to improve coronary supply',
@@ -6810,7 +7695,7 @@ const SCENARIOS = {
             'If HR remains high, esmolol 25-50mg slow IV to slow the heart',
             'GTN can help if SBP is high but watch the diastolic - too much reduces coronary supply',
             'An alpha-pressor (metaraminol) can RAISE DBP and thus coronary perfusion, BUT also raises SBP/afterload, so use cautiously',
-            'A trainee mistake is to give fluid - this raises preload, increases wall tension, and worsens demand'
+            'A common mistake is to give fluid - this raises preload, increases wall tension, and worsens demand'
         ],
         setup() {
             setProfile('elderly');
@@ -6820,48 +7705,117 @@ const SCENARIOS = {
             ['ecg','spo2','bis','art'].forEach(m => {
                 if (!state.monitors[m]) toggleMon(m);
             });
-            // v3.76: significantly LIGHT anaesthesia + high stimulus to produce
-            // the demand-driven ischaemia picture. Sevo low (0.6%), propofol
-            // already off, remi at a token rate. Strong stimulus pushes HR
-            // and BP up. This is the classic "patient is light - increase
-            // anaesthesia" picture.
+            // v3.78 retune: previous version used very light sevo (0.6%) plus
+            // pre-loaded alpha/beta tones to force "hot" starting vitals. This
+            // produced a transient overshoot to BP 230/140 in the first 5s
+            // and left BIS at 70 (awareness territory). Now: appropriate
+            // maintenance anaesthesia (sevo 1.5%, light remi, some fent),
+            // and a sustained high surgical stimulus that EXCEEDS the
+            // analgesia cover. HR and BP rise naturally over 30s to the
+            // demand-ischaemia picture without overshoot.
             state.machine.vent.mode = 'VCV';
             state.machine.vent.rr = 12;
             state.machine.vent.vt = 500;
             state.machine.vent.peep = 5;
             state.machine.vent.fio2 = 0.5;
-            state.machine.vent.sevo = 0.6;
+            state.machine.vent.sevo = 1.2;
             state.machine.vent.fgf = 1.5;
-            state.circuitSevo = 0.6;
-            state.etSevo = 0.5;
-            // No propofol on board (mid-case gas maintenance)
+            state.circuitSevo = 1.2;
+            state.etSevo = 1.0;        // near steady state for sevo dial 1.2%
+            // No propofol on board (mid-case, on gas)
             p.propCp = 0;
             p.propCe = 0;
-            // Very light remi maintenance
-            state.machine.pumps.remi.rate = 0.05;
-            // Some fent but largely worn off
-            p.fentCp = 0.0008;
-            p.fentCe = 0.0008;
+            // Light remi maintenance - present but insufficient for the
+            // rising surgical stimulus
+            state.machine.pumps.remi.rate = 0.08;
+            // Mid-case fentanyl on board, partially worn off
+            p.fentCp = 0.0010;
+            p.fentCe = 0.0010;
             // Roc maintenance
             p.rocCp = 3.0;
             p.rocCe = 3.0;
             p.paralysis = 0.7;
-            // Very high surgical stimulus drives the haemodynamics
-            state.nociception = 10;
-            state.nociceptionTarget = 10;   // v3.76: sustain - hysteresis lags toward Target
-            // Pre-load some sympathetic tone so vitals start "hot" at t=0
-            // rather than ramping up. Otherwise the scenario takes 30s+
-            // before it looks like an ischaemia picture.
-            state.alphaTone = 0.65;
-            state.betaTone  = 0.55;
-            // Trigger the ischaemia event flag - the AMPLIFIER on imbalance
-            // (representing coronary disease).
+            // Sustained surgical stimulus. Set both nociception and
+            // nociceptionTarget so the value doesn't decay. Tuned so the
+            // effectiveStimulus (nociception minus analgesia cover) drives
+            // HR up to ~105 and BP up into the 150-170 systolic range -
+            // the textbook intraop ischaemia picture - without overshooting.
+            state.nociception = 8;
+            state.nociceptionTarget = 8;
+            // Trigger the ischaemia event flag (amplifies demand-supply
+            // imbalance in the integrator - models impaired coronary reserve).
             state.events.ischaemia = true;
             state.ischaemia = 0;
-            state.ischaemiaLabel = false;
             syncScenarioUI();
             log('=== SCENARIO: Intraoperative myocardial ischaemia ===');
             log(SCENARIOS.ischaemia.briefing);
+        }
+    },
+
+    // v3.77: intraoperative pulmonary embolism.
+    // Adult patient, mid-case, sudden cardiopulmonary deterioration with
+    // the diagnostic triad: hypotension + hypoxia + DROPPING etCO2. PIP
+    // stays normal (not bronchospasm), no rash/airway pressures (not
+    // anaphylaxis). Persistent event - doesn't auto-resolve; user supports
+    // and escalates.
+    pulmEmbolism: {
+        name: 'Intraoperative pulmonary embolism',
+        briefing: 'Just rolled supine after laparoscopic cholecystectomy ended. Sudden hypotension, tachycardia, SpO2 falling. etCO2 dropping.',
+        setupBrief: '55-year-old, BMI 32, having had a 3-hour laparoscopic cholecystectomy in reverse Trendelenburg. The surgeon has just deflated the pneumoperitoneum and you have rolled the patient supine. Within seconds: HR has jumped to 115, BP fallen to 80/50, SpO2 dropping from 99 to 90, etCO2 falling from 38 to 25 despite unchanged ventilation. PIP is unchanged at 14. No wheeze, no rash. PE risk factors: long case, BMI, position changes.',
+        objectives: [
+            'Recognise the diagnostic triad: hypotension + hypoxia + LOW etCO2 with normal PIP',
+            'Distinguish from bronchospasm (high PIP, high etCO2) and anaphylaxis (rash, low SVR signature)',
+            'Support haemodynamics with pressors (avoid excessive fluid in RV failure)',
+            'Maximise FiO2 - limited benefit but every bit helps',
+            'Escalate: call for help, prepare for possible CPR, consider cardiothoracic referral',
+            'Recognise this is not something you fix at the bedside - the focus is stabilisation and escalation'
+        ],
+        hints: [
+            'The combo of hypotension + hypoxia + DROPPING etCO2 (with normal PIP) is PE until proven otherwise',
+            'V/Q dead-space mismatch: ventilated alveoli without perfusion -> etCO2 falls AND SpO2 drops',
+            'First priority: FiO2 to 1.0, support BP with metaraminol or noradrenaline',
+            'Fluid CAUTIOUSLY - right heart is already overloaded by the embolism',
+            'Avoid drugs that drop SVR (more propofol, more sevo) - maintain coronary perfusion to the strained right heart',
+            'Call for help. The definitive treatments (thrombolysis, embolectomy) are not bedside drugs',
+            'Persistence: the patient will stay unstable until pulmonary blood flow is restored - your job is to keep them alive for the cavalry'
+        ],
+        setup() {
+            setProfile('adult');
+            const p = state.patient;
+            p.airway = 'ett';
+            p.fio2 = 0.5;
+            ['ecg','spo2','bis','art'].forEach(m => {
+                if (!state.monitors[m]) toggleMon(m);
+            });
+            // End-of-case maintenance settings (3h case ending)
+            state.machine.vent.mode = 'VCV';
+            state.machine.vent.rr = 12;
+            state.machine.vent.vt = 500;
+            state.machine.vent.peep = 5;
+            state.machine.vent.fio2 = 0.5;
+            state.machine.vent.sevo = 1.5;
+            state.machine.vent.fgf = 1.0;
+            state.circuitSevo = 1.5;
+            state.etSevo = 1.2;
+            // Maintenance drugs - very light, end-of-case
+            p.propCp = 0;
+            p.propCe = 0;
+            state.machine.pumps.remi.rate = 0.08;
+            p.fentCp = 0.0008;
+            p.fentCe = 0.0008;
+            // Rocuronium worn off - end of case
+            p.rocCp = 1.0;
+            p.rocCe = 1.0;
+            p.paralysis = 0.3;
+            // Modest surgical stimulus - case ending, dressings on
+            state.nociceptionTarget = 2;
+            state.nociception = 2;
+            // Fire the PE event - shunt builds rapidly, CO drops, etCO2 drops
+            state.events.pulmEmbolism = true;
+            state.peShunt = 0;
+            syncScenarioUI();
+            log('=== SCENARIO: Intraoperative pulmonary embolism ===');
+            log(SCENARIOS.pulmEmbolism.briefing);
         }
     },
 
@@ -7230,6 +8184,7 @@ function eventIdSuffix(name) {
         tourniquetRelease:'tourni',
         vagal:'vagal',
         co2Embolism:'embol',
+        pulmEmbolism:'pe',
         ecgLeadsOff:'ecgoff',
         spo2ProbeOff:'spo2off',
         ivTissued:'tissued',
@@ -7264,7 +8219,7 @@ function resolveAllEvents() {
     state.aspirationSource = false; // v3.70
     state.aspirationReactivateTimer = 0;
     state.ischaemia = 0;           // v3.76
-    state.ischaemiaLabel = false;
+    state.peShunt = 0;             // v3.77
     log("All events resolved");
 }
 
@@ -7396,7 +8351,25 @@ function evaluateAlarms(dt) {
     if (state.monitors.spo2 && !state.events.spo2ProbeOff) newStates.spo2  = evalThreshold(state.spo2,  A.spo2);
     if (state.monitors.art)  {
         newStates.sys = evalThreshold(state.sys, A.sys);
-        newStates.dia = evalThreshold(state.dia, A.dia);
+        // v4.0: MAP low alarm (replaces diastolic). Same MAP as the ABP display.
+        newStates.map = evalThreshold((state.sys + 2 * state.dia) / 3, A.map);
+    }
+    // v4.0: respiratory rate alarm - active whenever a circuit is present, so
+    // apnoea (effectiveRR 0) trips the red low alarm.
+    if (state.patient.airway !== 'none' && !state.events.disconnect) {
+        newStates.rr = evalThreshold(state.effectiveRR, A.rr);
+    }
+    // v4.0: BIS alarm. Low side (too deep) is always active when BIS is on; the
+    // high side (awareness risk) is only armed once a hypnotic is on board, so an
+    // awake patient at the start of a scenario doesn't trip it.
+    if (state.monitors.bis) {
+        const hypnoticOnBoard = state.patient.propCe > 0.3
+                              || state.etSevo > 0.2
+                              || state.patient.midaCe > 0.05;
+        const bisT = hypnoticOnBoard
+            ? A.bis
+            : { medLow: A.bis.medLow, medHigh: null, highLow: A.bis.highLow, highHigh: null };
+        newStates.bis = evalThreshold(state.bis, bisT);
     }
     // etCO2 only alarms when CO2 is actually being measured (airway + ventilation)
     const co2Monitored = state.patient.airway !== 'none'
@@ -7406,6 +8379,10 @@ function evaluateAlarms(dt) {
                            || state.patient.respDrive > CONFIG.RESP_DRIVE_GATE
                            || state.patient.bagPressure > 0.05);
     if (co2Monitored) newStates.etco2 = evalThreshold(state.etco2, A.etco2);
+
+    // v4.0: low tidal-volume alarm - gated like etCO2 (active ventilation or
+    // spontaneous breathing). In apnoea (not monitored) the RR low alarm covers it.
+    if (co2Monitored) newStates.vt = evalThreshold(state.tidalVolume, A.vt);
 
     // v3.74: PIP alarm - only meaningful during mechanical ventilation, and only
     // once the machine has actually delivered a breath (state.peakPressure is
@@ -8091,15 +9068,6 @@ function updateNum() {
     if (!state.monitors.ecg) return;
     // HR display: leads off -> "--"; otherwise integer
     document.getElementById('num-hr').innerText = state.events.ecgLeadsOff ? '--' : Math.round(state.hr);
-    // v3.76: ISCHAEMIA flag visibility - hysteresis-gated by state.ischaemiaLabel.
-    // Suppressed if ECG leads are off (can't display monitor data).
-    {
-        const flag = document.getElementById('ischaemia-flag');
-        if (flag) {
-            const show = state.ischaemiaLabel && !state.events.ecgLeadsOff;
-            flag.style.display = show ? '' : 'none';
-        }
-    }
     // ABP shows sys/dia (MAP) in brackets
     if (state.monitors.art) {
         const sysR = Math.round(state.sys);
@@ -8122,6 +9090,12 @@ function updateNum() {
             || state.patient.respDrive > CONFIG.RESP_DRIVE_GATE
             || state.patient.bagPressure > 0.05);
     document.getElementById('num-co2').innerText  = co2Shown ? Math.round(state.etco2) : '--';
+    // v3.85: measured respiratory rate. Shown whenever a circuit is present (so it
+    // reads 0 during apnoea rather than blanking); '--' only with no airway/disconnect.
+    {
+        const rrShown = state.patient.airway !== 'none' && !state.events.disconnect;
+        document.getElementById('num-rr').innerText = rrShown ? Math.round(state.effectiveRR) : '--';
+    }
     document.getElementById('num-mac').innerText  = state.patient.airway !== 'none' ? state.etSevo.toFixed(1) : '--';
     document.getElementById('num-bis').innerText  = state.monitors.bis ? Math.round(state.bis) : '--';
     document.getElementById('num-tof').innerText  = state.tofCount;
@@ -8130,9 +9104,11 @@ function updateNum() {
     // ABP shares one box ('box-abp') so we use the more severe of sys/dia
     applyAlarmClass('box-hr',   state.alarmStates.hr);
     applyAlarmClass('box-spo2', state.alarmStates.spo2);
-    applyAlarmClass('box-abp',  worstAlarm(state.alarmStates.sys, state.alarmStates.dia));
+    applyAlarmClass('box-abp',  worstAlarm(state.alarmStates.sys, state.alarmStates.map));   // v4.0: sys + MAP
     applyAlarmClass('box-co2',  state.alarmStates.etco2);
-    applyAlarmClass('box-pipvt', state.alarmStates.pip);   // v3.74
+    applyAlarmClass('box-rr',   state.alarmStates.rr);                                        // v4.0
+    applyAlarmClass('box-bis',  state.alarmStates.bis);                                       // v4.0
+    applyAlarmClass('box-pipvt', worstAlarm(state.alarmStates.pip, state.alarmStates.vt));    // v4.0: PIP + Vt
 
     // PIP/Vt and PEEP displays
     // Show only when there's actual ventilation happening; '--' otherwise
@@ -8172,8 +9148,17 @@ function worstAlarm(a, b) {
 }
 
 function resize() {
-    canvas.width = canvas.parentElement.clientWidth;
-    canvas.height = canvas.parentElement.clientHeight;
+    // v3.86: render at device-pixel resolution so the waveforms aren't pixellated
+    // on HiDPI / OS-scaled displays. Backing store is sized in physical pixels
+    // (logical * dpr); all drawing stays in CSS pixels via the canvas transform.
+    // cssW/cssH carry the logical size the render loop uses for lane heights and
+    // sweep wrap. dpr capped at 3 to bound memory on extreme displays.
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    cssW = canvas.parentElement.clientWidth;
+    cssH = canvas.parentElement.clientHeight;
+    canvas.width  = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // draw in CSS px; reset each resize
 }
 
 /* =============================================================================
@@ -8195,7 +9180,7 @@ buildVariableGraph();
     // working. Other scenarios stay in the SCENARIOS object so they
     // can be tested via the scenario test harness, but are hidden
     // from the menu until each is confirmed clinically realistic.
-    const VERIFIED_SCENARIOS = ['maintenance', 'tiva', 'sepsis', 'haemorrhage', 'bronchospasm', 'anaphylaxis', 'vagal', 'aspiration', 'ischaemia'];
+    const VERIFIED_SCENARIOS = ['induction', 'hypotensionPostInd', 'maintenance', 'tiva', 'sepsis', 'haemorrhage', 'bronchospasm', 'anaphylaxis', 'vagal', 'aspiration', 'ischaemia', 'pulmEmbolism'];
     const keys = Object.keys(SCENARIOS)
         .filter(k => VERIFIED_SCENARIOS.includes(k))
         .sort((a, b) => SCENARIOS[a].name.localeCompare(SCENARIOS[b].name));
