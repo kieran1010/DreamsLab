@@ -47,7 +47,165 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v4.0</title>
+<title>Dreams Lab v4.8</title>
+<!--
+==================================================================================
+  DREAMS LAB  v4.8  ("Responsive monitor boxes")
+  ---------------------------------------------------------------------------------
+  v4.7's overflow:hidden fix prevented boxes covering the controls, but because
+  the boxes had a fixed height, small viewports (768px laptop) now clipped 3-4
+  boxes from the bottom. The correct fix is to make the boxes truly responsive.
+
+  Changes (CSS only):
+    .box:   flex:1 / height:auto / min-height:0  (was fixed 44px). Boxes now
+            distribute #numerics height proportionally - all 12 always visible.
+    #numerics gap: 1px (was 2px, saves 11px).
+    .value: font-size clamp(1.2rem, 3.5vh, 2.1rem) - 2.1rem at ≥960px, scales
+            down with viewport height below that (1.68rem at 768px).
+    .label: font-size clamp(0.45rem, 1.0vh, 0.6rem) - matches .value scaling.
+    NIBP / ABP inline: clamp(1.0rem, 2.5vh, 1.5rem) (was fixed 1.5rem).
+
+  At 768px (laptop): each box ≈ 35.7px; value 26.9px + label 7.7px = 34.6px →
+  fits with 1px spare. At 960px: box 45.3px; value 33.6px + label 9.6px → fits.
+  At 1080px fullscreen: box 51px; both fonts at their maximum (2.1rem / 0.6rem).
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.7  ("Fix controls clipping after PIP/Vt split")
+  ---------------------------------------------------------------------------------
+  After splitting PIP/Vt into two separate monitor boxes (v4.4), the numerics
+  panel gained a 12th box. Without an overflow constraint on #numerics, the extra
+  content spilt downward with overflow:visible (the default), visually masking the
+  top of the controls section in non-fullscreen browser windows.
+
+  Math:  11 boxes × 46px + 10 gaps × 2px = 526px (old; fits in 555px at 960px vp)
+         12 boxes × 46px + 11 gaps × 2px = 574px (new; overflows by 19px at 960px)
+
+  Fix:
+    1. overflow:hidden on #numerics - prevents overflow reaching the controls.
+    2. .box height reduced from 46px to 44px - 12×44+11×2 = 550px, fits within
+       the 60% of a 960px viewport (555px) so all boxes are visible in a typical
+       non-fullscreen 1080p browser window.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.6  ("Smooth capnogram shape")
+  ---------------------------------------------------------------------------------
+  Fixes the two-segment ("kinked") appearance of the CO2 upslope introduced by
+  v4.5's bezier smoothing revealing the underlying shape discontinuity.
+
+  Root cause: capnogramShape() was piecewise - Phase II used 0.88*(1-exp(-5x))
+  over expProgress [0, 0.15], while Phase III used a linear upslope over [0.15, 1].
+  They met with a slope discontinuity (~0.20 vs ~0.14), visible as a kink once the
+  bezier rendering was smooth enough to show the underlying shape clearly.
+
+  Fix: single unified formula covering the full expiration:
+    val = (1-upslope)*(1-exp(-k*expProgress)) + upslope*expProgress
+  C-infinity smooth (no junction). k=25 for normal breathing (near-vertical rise,
+  plateau established by expProgress ~0.15 - similar feel to the old formula);
+  k=3 for full bronchospasm (slow shark-fin); k blends linearly with sharkMix.
+  Curare cleft logic unchanged (now gated on expProgress > 0.15 rather than the
+  old phase2End variable).
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.5  ("Consistent monitor font sizes + smooth capnogram")
+  ---------------------------------------------------------------------------------
+  1. Monitor value font sizes unified. Five different sizes were in use; now only
+     two: 2.1rem (default, all single/short values) and 1.5rem (NIBP and ABP,
+     justified by their long "sys/dia (MAP)" format). Changes:
+       etSEVO: 1.4rem -> 2.1rem (removed override)
+       TOF:    1.4rem -> 2.1rem (removed override)
+       PEEP:   1.2rem -> 2.1rem (removed override)
+       ABP:    1.7rem -> 1.5rem (now matches NIBP)
+
+  2. Capnogram (CO2) and flow staircase eliminated. Root cause: SWEEP_SLOW=35px/s
+     at 60fps produces ~0.58px per frame - sub-pixel line segments. drawLine calls
+     ctx.beginPath/stroke for each, so the browser anti-aliases each tiny segment
+     in isolation, producing a staircase on gradual slopes.
+     Fix: quadratic bezier midpoint smoothing (Chaikin-style) for the flow and CO2
+     slow-lane traces. Each frame draws a quadratic bezier from midpoint(prev,last)
+     through (last) to midpoint(last,current). The browser anti-aliases the full
+     bezier as one smooth curve. Requires prevXS/prevSY globals; falls back to
+     straight drawLine for ~2 frames after a sweep wrap. Pressure trace left on
+     straight lines (square wave shape benefits from sharp edges).
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.4  ("PIP/Vt split + scenario text sync + bronchospasm PCV")
+  ---------------------------------------------------------------------------------
+  1. PIP and Vt now have separate monitor boxes (were combined as "PIP / Vt").
+     box-pip / num-pip (PIP alarm) and box-vt / num-vt (Vt alarm) are independent,
+     so a student can immediately see which is abnormal. Start Here mock and cards
+     updated accordingly (two cards replacing one).
+
+  2. Bronchospasm scenario updated (v4.4):
+     - FiO2 0.3 (was 1.0) - realistic air/O2 mix for a post-induction patient
+     - PCV mode, pinsp 20 cmH2O (was VCV, Vt 500) - the Vt collapse from
+       bronchospasm is now the obvious primary signal (falls to ~150 mL, trips
+       the Vt alarm) rather than a PIP spike. Combined with the new separate Vt
+       box, the obstruction severity is immediately legible.
+
+  3. Scenario text re-synced with Google Doc (edits that hadn't come through):
+     - aspiration setupBrief: removed "At t=0"
+     - bronchospasm briefing: "lap" -> "laparotomy"
+     - ischaemia setupBrief: added "progressive" before "ST depression"
+     - pulmEmbolism setupBrief: "rolled the patient supine" -> "repositioned"
+     - pulmEmbolism objective 2: "low SVR signature)" -> "low SVR) signature"
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.3  ("Sepsis Starling ceiling")
+  ---------------------------------------------------------------------------------
+  Adds preloadCeiling: 1.2 to the sepsis profile, completing the Starling-plateau
+  picture across all active profiles:
+    adult   1.6  (healthy heart, generous plateau)
+    elderly 1.4  (age-related volume unresponsiveness)
+    sepsis  1.2  (septic cardiomyopathy - plateau at the fluid overload threshold)
+
+  For sepsis the ceiling coincides with FLUID_OVERLOAD_THRESHOLD (1.2), so beyond
+  ~6 L central volume preload can't rise further while contractility simultaneously
+  starts to fall. Excess fluid actively harms CO without providing any preload
+  benefit - the intended teaching signal.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.2  ("Adult Starling ceiling")
+  ---------------------------------------------------------------------------------
+  Adds preloadCeiling: 1.6 to the standard adult profile. The elderly profile
+  already had 1.4 with the comment "reduced from default 1.6", confirming 1.6 as
+  the intended baseline for a healthy adult heart. Without this the adult preload
+  was uncapped, so extreme fluid loading kept increasing SV even as contractility
+  was being pushed down by the overload mechanism - unrealistic beyond the Starling
+  plateau. At the new ceiling (centralVolume = 8 L, 60% above baseline) the patient
+  is already in the fully decompensated zone (contractility maximally depressed,
+  SpO2 ceiling at its minimum), so the plateau lands where it physiologically should.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.1  ("HR-dependent MAP")
+  ---------------------------------------------------------------------------------
+  Reported mean arterial pressure is now heart-rate dependent (bug B-035).
+
+  MAP = DBP + k·(SBP-DBP), with k (systolic fraction of the cardiac cycle) rising
+  with HR: anchored to the classic k = 1/3 at HR 60, bounded 0.30-0.50. So MAP now
+  reads slightly higher at tachycardia (where diastole shortens and systole weights
+  more) and is unchanged at resting rates. New calcMAP() helper feeds the ABP/NIBP
+  display, the v4.0 MAP alarm, and the diagnostics readout.
+
+  Deliberately NOT changed: the baroreflex's internal MAP reference still uses the
+  classic (SBP+2·DBP)/3 - it is the regulation set-point and is tuned against that
+  formula; unifying it would shift autonomic dynamics across every scenario and
+  needs separate testing. Tracked under B-035.
+==================================================================================
+-->
 <!--
 ==================================================================================
   DREAMS LAB  v4.0  ("First public release")
@@ -1129,7 +1287,7 @@
 
      C. Reduced cardiac reserve (new fields):
         elderly.contractilityCeiling: 1.4 (default 1.6)
-        elderly.preloadCeiling:       1.4 (default no cap)
+        elderly.preloadCeiling:       1.4 (adult default 1.6 added v4.2)
 
         Models blunted inotropic reserve and flat Frank-Starling
         response (volume unresponsiveness). Elderly cannot mount
@@ -1331,12 +1489,15 @@ canvas { display: block; width: 100%; height: 100%; }
     padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
+    overflow: hidden;   /* v4.7: prevent monitor boxes overflowing into controls */
     background: #000;
     position: relative;
 }
 .box {
-    height: 46px;
+    flex: 1;         /* v4.8: distribute available height proportionally so all 12 */
+    min-height: 0;   /* boxes are visible at any viewport without overflow */
+    height: auto;    /* was fixed 44px → now fills #numerics column proportionally */
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1346,13 +1507,13 @@ canvas { display: block; width: 100%; height: 100%; }
     position: relative;
 }
 .label {
-    font-size: 0.6rem;
+    font-size: clamp(0.45rem, 1.0vh, 0.6rem); /* v4.8: scales with vh; 9.6px at 960px, 7.7px at 768px */
     font-weight: bold;
     color: var(--text-dim);
     letter-spacing: 0.5px;
 }
 .value {
-    font-size: 2.1rem;
+    font-size: clamp(1.2rem, 3.5vh, 2.1rem); /* v4.8: scales with vh; 2.1rem at 960px+, 1.68rem at 768px */
     font-family: 'Consolas', 'Courier New', monospace;
     text-align: right;
     line-height: 1;
@@ -2455,7 +2616,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.0</div>
+        <div class="version">Version 4.8</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -2520,7 +2681,7 @@ input[type=range] {
         <h3>You are the anaesthetist</h3>
         <p class="lead">For the next while, you are the anaesthetist looking after a patient through an operation.</p>
         <p>This screen is the patient <strong>monitor</strong> &mdash; the same kind that sits beside an anaesthetised patient in theatre. Your job is to keep them asleep, breathing, and stable while the surgery happens. The controls let you give drugs and respond to what the monitor is telling you.</p>
-        <p>Nothing here is real. The physiology is deliberately simplified for teaching, so this is a safe place to try things, make mistakes, and watch what happens &mdash; none of it can hurt anyone.</p>
+        <p>This is a safe place to try things, make mistakes, and watch what happens &mdash; none of it can hurt anyone! Note that although the physiology is reasonably high-fidelity it does not capture every nuance, and real patients may behave differently.</p>
         <p style="color:#999;">The next three steps cover the monitor, the controls, and how to start your first case. You can reopen this any time from <strong>Start here</strong> in the top bar.</p>
       </div>
 
@@ -2547,7 +2708,8 @@ input[type=range] {
             <div class="sh-num"><span class="lbl">etSEVO</span><span class="val" style="color:#ffffff">2.0</span></div>
             <div class="sh-num"><span class="lbl">BIS</span><span class="val" style="color:#d4ff00">50</span></div>
             <div class="sh-num"><span class="lbl">TOF</span><span class="val" style="color:#ff9933">4</span></div>
-            <div class="sh-num"><span class="lbl">PIP/Vt</span><span class="val" style="color:#ffffff">18/480</span></div>
+            <div class="sh-num"><span class="lbl">PIP</span><span class="val" style="color:#ffffff">18</span></div>
+            <div class="sh-num"><span class="lbl">Vt (mL)</span><span class="val" style="color:#ffffff">480</span></div>
             <div class="sh-num"><span class="lbl">PEEP</span><span class="val" style="color:#ffffff">5</span></div>
           </div>
         </div>
@@ -2564,7 +2726,8 @@ input[type=range] {
           <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">etSEVO &mdash; exhaled anaesthetic vapour</span><div class="desc">End-tidal sevoflurane (%). Sevoflurane is the anaesthetic vapour the patient breathes; the exhaled percentage closely mirrors the brain concentration keeping them asleep. Around 2% is a typical surgical depth (about 1 MAC). This is your main readout of how much volatile agent is on board.</div></div>
           <div class="sh-card" style="border-color:#d4ff00"><span class="tag" style="color:#d4ff00">BIS &mdash; depth of anaesthesia</span><div class="desc">Bispectral index: a processed brain-wave number from 0 (no activity) to 100 (wide awake). Aim for 40&ndash;60 during surgery &mdash; deep enough to be properly unconscious, not needlessly deeper.</div></div>
           <div class="sh-card" style="border-color:#ff9933"><span class="tag" style="color:#ff9933">TOF &mdash; train-of-four</span><div class="desc">Tests how much muscle relaxant is still working. A nerve is stimulated four times and the twitches counted &mdash; 4 means little or no block, 0 means deep block. You watch it to time relaxant doses and confirm recovery before waking the patient.</div></div>
-          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PIP / Vt &mdash; ventilator pressure & breath size</span><div class="desc">Peak inspiratory pressure (cmH2O) and tidal volume (mL): the highest pressure reached during each ventilator breath, and the size of that breath. Rising PIP for the same volume means stiffer or obstructed lungs or circuit &mdash; for example bronchospasm or a kinked tube.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PIP &mdash; peak inspiratory pressure</span><div class="desc">The highest pressure (cmH2O) reached in the breathing circuit during each ventilator breath. Rising PIP for the same tidal volume means stiffer or more obstructed lungs &mdash; for example bronchospasm, a kinked tube, or a patient coughing on the tube.</div></div>
+          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">Vt &mdash; tidal volume</span><div class="desc">The size of each breath in mL. In volume-controlled ventilation (VCV) this is fixed by the ventilator setting; in pressure-controlled ventilation (PCV) it varies with lung compliance and resistance &mdash; a falling Vt in PCV is an early sign of worsening bronchospasm or stiffening lungs.</div></div>
           <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PEEP &mdash; end-expiratory pressure</span><div class="desc">Positive end-expiratory pressure (cmH2O): a small pressure held in the lungs at the end of each breath to stop airways collapsing and help oxygenation. Often set around 5.</div></div>
         </div>
 
@@ -2986,24 +3149,28 @@ input[type=range] {
             <span id="num-hr" class="value">--</span>
         </div>
         <div class="box cyan"   id="box-spo2"><span class="label">SpO2</span><span id="num-spo2" class="value">--</span></div>
-        <div class="box cyan"   id="box-nibp" onclick="takeNIBP()"><span class="label">NIBP (AUTO 2.5min)</span><span id="num-nibp" class="value" style="font-size: 1.5rem;">--/--</span></div>
-        <div class="box red"    id="box-abp"><span class="label">ABP (ART)</span><span id="num-bp" class="value" style="font-size:1.7rem;">--/--</span></div>
+        <div class="box cyan"   id="box-nibp" onclick="takeNIBP()"><span class="label">NIBP (AUTO 2.5min)</span><span id="num-nibp" class="value" style="font-size: clamp(1.0rem, 2.5vh, 1.5rem);">--/--</span></div>
+        <div class="box red"    id="box-abp"><span class="label">ABP (ART)</span><span id="num-bp" class="value" style="font-size: clamp(1.0rem, 2.5vh, 1.5rem);">--/--</span></div>
         <div class="box yellow" id="box-co2"><span class="label">etCO2</span><span id="num-co2" class="value">--</span></div>
         <div class="box white"  id="box-rr"><span class="label">RR (/min)</span><span id="num-rr" class="value">--</span></div>
-        <div class="box white"  id="box-mac"><span class="label">etSEVO (%)</span><span id="num-mac" class="value" style="font-size:1.4rem;">--</span></div>
+        <div class="box white"  id="box-mac"><span class="label">etSEVO (%)</span><span id="num-mac" class="value">--</span></div>
         <div class="box purple" id="box-bis" onclick="toggleMon('bis')">
             <span class="label">BIS</span>
             <span id="num-bis" class="value">--</span>
             <div id="ov-bis" onclick="event.stopPropagation(); toggleMon('bis')">INIT BIS</div>
         </div>
-        <div class="box orange" id="box-tof"><span class="label">TOF</span><span id="num-tof" class="value" style="font-size:1.4rem;">4</span></div>
-        <div class="box white" id="box-pipvt">
-            <span class="label">PIP / Vt</span>
-            <span id="num-pipvt" class="value" style="font-size:1.1rem;">--/--</span>
+        <div class="box orange" id="box-tof"><span class="label">TOF</span><span id="num-tof" class="value">4</span></div>
+        <div class="box white" id="box-pip">
+            <span class="label">PIP</span>
+            <span id="num-pip" class="value">--</span>
+        </div>
+        <div class="box white" id="box-vt">
+            <span class="label">Vt (mL)</span>
+            <span id="num-vt" class="value">--</span>
         </div>
         <div class="box white" id="box-peep">
             <span class="label">PEEP</span>
-            <span id="num-peep" class="value" style="font-size:1.2rem;">--</span>
+            <span id="num-peep" class="value">--</span>
         </div>
     </div>
 </div>
@@ -3585,6 +3752,7 @@ const PROFILES = {
         compliance: 70,         // mL/cmH2O (normal adult ~50-100)
         airwayReactivity: 0.3,  // baseline reactivity (0=none, 1=very brisk)
         svrBase: 0.97,          // v3.37: 0.59->0.97 (revert v3.36); calibrated for resting MAP 90 with new SVR_ALPHA_GAIN=0.2
+        preloadCeiling: 1.6,    // v4.2: Frank-Starling plateau (the elderly profile is 1.4, explicitly reduced from this value)
     },
     paed: {
         name: 'Paed 20kg',
@@ -3666,6 +3834,10 @@ const PROFILES = {
         // hypovolaemia AND a heart that can't compensate. Treat with fluid +
         // pressors before (or during) induction.
         contractilityCeiling: 1.0,
+        preloadCeiling: 1.2,    // v4.3: septic cardiomyopathy - Starling plateau coincides with the
+                                 // fluid overload threshold (120% centralVol). Beyond ~6 L central,
+                                 // preload can't rise further while contractility starts falling -
+                                 // excess fluid actively harms CO without providing any preload benefit.
     },
 };
 
@@ -4197,42 +4369,36 @@ function hasPulse() {
      Bronchospastic: [0, 0.45] slurred rise, [0.45, 1.0] steep upslope (shark-fin)
    ============================================================================= */
 function capnogramShape(expProgress, resistance, curareCleft) {
-    // Interpolate Phase II fraction between normal and bronchospastic
-    // At resistance=5 -> normal; at resistance=80 -> full shark-fin
-    const sharkMix = clamp((resistance - 5) / 75, 0, 1);
-    const phase2End = CONFIG.CO2_PHASE2_FRAC
-                   + sharkMix * (CONFIG.CO2_BRONCH_SLUR_FRAC - CONFIG.CO2_PHASE2_FRAC);
-    // Upslope magnitude similarly blends
-    const upslope = CONFIG.CO2_PHASE3_UPSLOPE
-                 + sharkMix * (CONFIG.CO2_BRONCH_UPSLOPE - CONFIG.CO2_PHASE3_UPSLOPE);
+    /* v4.6: unified smooth formula for the capnogram expiratory curve.
+       Previously Phase II (exponential rise) and Phase III (linear plateau+upslope)
+       were computed as separate pieces joined at phase2End=0.15. They met with a
+       slope discontinuity (~0.20 vs ~0.14 per unit expProgress), visible as a kink
+       in the upslope. Now a single formula covers the full expiration:
 
-    let val;
-    if (expProgress < phase2End) {
-        // Phase II: rise from 0 to (1 - upslope), i.e. to the start of the plateau
-        // Normal: sharp linear-ish rise; bronchospasm: slurred (concave-up curve)
-        const localProg = expProgress / phase2End;
-        if (sharkMix < 0.1) {
-            // Normal: quick exponential-ish rise
-            val = (1 - upslope) * (1 - Math.exp(-localProg * 5));
-        } else {
-            // Bronchospastic: slurred, more linear rise
-            val = (1 - upslope) * Math.pow(localProg, 0.7);
-        }
-    } else {
-        // Phase III: plateau with upslope
-        const plateauProg = (expProgress - phase2End) / (1 - phase2End);
-        val = (1 - upslope) + upslope * plateauProg;
-    }
+           val = (1-upslope) * (1-exp(-k * expProgress)) + upslope * expProgress
 
-    // Curare cleft: dip down midway through Phase III
-    if (curareCleft && expProgress >= phase2End) {
-        const plateauProg = (expProgress - phase2End) / (1 - phase2End);
-        // Cleft centred around plateauProg = 0.5, width = CURARE_CLEFT_WIDTH
-        const distFromCentre = Math.abs(plateauProg - 0.5) / CONFIG.CURARE_CLEFT_WIDTH;
+       This is C-infinity (smooth everywhere): it rises steeply at expiration onset,
+       smoothly decelerates into the alveolar plateau, and then the upslope term
+       carries it gently to peak. No junction, no kink.
+
+       k=25: normal breathing - near-vertical Phase II, plateau well-established
+             by expProgress ~0.15. Comparable rise speed to the old formula.
+       k=3:  full bronchospasm - slow slurred rise all the way to peak (shark-fin).
+       Intermediate resistance blends k linearly between 25 and 3. */
+    const sharkMix  = clamp((resistance - 5) / 75, 0, 1);
+    const upslope   = CONFIG.CO2_PHASE3_UPSLOPE
+                    + sharkMix * (CONFIG.CO2_BRONCH_UPSLOPE - CONFIG.CO2_PHASE3_UPSLOPE);
+    const k         = 25 - 22 * sharkMix; // 25 (normal) → 3 (bronchospasm)
+
+    let val = (1 - upslope) * (1 - Math.exp(-k * expProgress))
+            + upslope * expProgress;
+
+    // Curare cleft: mid-plateau dip from partial neuromuscular block + residual
+    // respiratory effort. Applied once the steep rise is complete (expProgress > 0.15).
+    if (curareCleft && expProgress > 0.15) {
+        const distFromCentre = Math.abs(expProgress - 0.6) / CONFIG.CURARE_CLEFT_WIDTH;
         if (distFromCentre < 1) {
-            // Gaussian-ish dip
-            const cleftDepth = CONFIG.CURARE_CLEFT_DEPTH * Math.exp(-distFromCentre * distFromCentre * 3);
-            val -= cleftDepth;
+            val -= CONFIG.CURARE_CLEFT_DEPTH * Math.exp(-distFromCentre * distFromCentre * 3);
         }
     }
 
@@ -4247,6 +4413,9 @@ let lastY = { ecg: 0, pleth: 0, art: 0, pressure: 0, flow: 0, co2: 0 };
 // v3.86: logical canvas size (CSS px) for DPR-correct rendering; wall-clock anchor
 // for time-based sweep; accumulated spontaneous breath phase (rate-change safe).
 let cssW = 0, cssH = 0, lastFrameMs = 0, spontPhase = 0;
+// v4.5: previous slow-sweep position, used for quadratic bezier midpoint smoothing
+// of pressure/flow/CO2 traces. Reset to 0 on sweep wrap.
+let prevXS = 0, prevSY = { pressure: 0, flow: 0, co2: 0 };
 let lastVIndex = 0;
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -5004,7 +5173,9 @@ setInterval(() => {
        Uses MAP from the previous tick. Feedback loop: low BP -> sympTone up
        (reflex tachycardia + vasoconstriction), high BP -> parasympTone up
        (reflex bradycardia). Effectiveness blunted by sevo and propofol. */
-    const prevMAP = (state.sys + 2 * state.dia) / 3;
+    const prevMAP = (state.sys + 2 * state.dia) / 3;   // v4.1: kept on the classic
+    // formula deliberately - this is the baroreflex's internal regulation reference,
+    // tuned against (SBP+2·DBP)/3. The reported MAP (display/alarm) uses calcMAP().
     state.mapError = (state.profile.mapTarget - prevMAP) / state.profile.mapTarget;
     // Blunting factor: 1.0 normal, lower when anaesthetised
     // v3.48: state.mac gets hSens multiplier here (pE already has it baked in)
@@ -6086,8 +6257,35 @@ function animate() {
         if (xS > lastXS && lastY.pressure !== 0) drawLine(lastXS, lastY.pressure, xS, yP, '#fff');
         // Draw a faint reference baseline for flow so +/- is visually obvious
         drawLine(xS, baselineFlow, xS + 1, baselineFlow, 'rgba(150,200,255,0.18)');
-        if (xS > lastXS && lastY.flow !== 0)     drawLine(lastXS, lastY.flow, xS, yF, '#9cf');
-        if (xS > lastXS && lastY.co2 !== 0) drawLine(lastXS, lastY.co2, xS, yC, '#ff0');
+        // v4.5: quadratic bezier midpoint smoothing (Chaikin-style) for flow and CO2.
+        // At SWEEP_SLOW=35px/s and 60fps, raw drawLine produces ~0.58px segments —
+        // sub-pixel, individually anti-aliased as dots, visible as a staircase.
+        // Drawing a quadratic bezier from midpoint(prev,last) through (last) to
+        // midpoint(last,current) lets the browser anti-alias the full curve as one
+        // shape, eliminating the staircase. Falls back to straight line for ~2 frames
+        // after a sweep wrap (when prevXS is 0 or behind lastXS).
+        if (xS > lastXS) {
+            if (prevXS > 0 && lastXS >= prevXS) {
+                const drawBez = (color, py, ly, cy) => {
+                    if (ly === 0 && py === 0) return;
+                    const mx0 = (prevXS + lastXS) / 2, my0 = (py   + ly) / 2;
+                    const mx1 = (lastXS + xS)    / 2, my1 = (ly   + cy) / 2;
+                    ctx.beginPath();
+                    ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+                    ctx.lineCap = 'round';  ctx.lineJoin = 'round';
+                    ctx.moveTo(mx0, my0);
+                    ctx.quadraticCurveTo(lastXS, ly, mx1, my1);
+                    ctx.stroke();
+                };
+                drawBez('#9cf', prevSY.flow, lastY.flow, yF);
+                drawBez('#ff0', prevSY.co2,  lastY.co2,  yC);
+            } else {
+                if (lastY.flow !== 0) drawLine(lastXS, lastY.flow, xS, yF, '#9cf');
+                if (lastY.co2  !== 0) drawLine(lastXS, lastY.co2,  xS, yC, '#ff0');
+            }
+        }
+        prevXS = lastXS;
+        prevSY = { pressure: lastY.pressure, flow: lastY.flow, co2: lastY.co2 };
         lastY.pressure = yP;
         lastY.flow = yF;
         lastY.co2 = yC;
@@ -6096,7 +6294,7 @@ function animate() {
     lastXF = xF; xF += dxF;
     if (xF >= cssW) { xF = 0; lastXF = 0; resetY(true); }
     lastXS = xS; xS += dxS;
-    if (xS >= cssW) { xS = 0; lastXS = 0; resetY(false); }
+    if (xS >= cssW) { xS = 0; lastXS = 0; resetY(false); prevXS = 0; }
     requestAnimationFrame(animate);
 }
 
@@ -7223,7 +7421,7 @@ const SCENARIOS = {
     aspiration: {
         name: 'Aspiration of gastric contents',
         briefing: 'Elective hernia repair under LMA. You notice gastric contents in the oropharynx around the LMA cuff.',
-        setupBrief: 'Adult, ASA 2, elective inguinal hernia repair under LMA. Anaesthetised with propofol + sevo, spontaneously ventilating. At t=0 you notice gastric contents around the LMA cuff and in the oropharynx. SpO2 is starting to fall.',
+        setupBrief: 'Adult, ASA 2, elective inguinal hernia repair under LMA. Anaesthetised with propofol + sevo, spontaneously ventilating. You notice gastric contents around the LMA cuff and in the oropharynx. SpO2 is starting to fall.',
         objectives: [
             'Recognise the aspiration signature (sudden SpO2 drop + rising airway pressures + wheeze)',
             'Take steps to deliver maximum FiO2',
@@ -7291,7 +7489,7 @@ const SCENARIOS = {
     // Tests user on a managed escalation - ventilator strategy + drug therapy.
     bronchospasm: {
         name: 'Severe bronchospasm',
-        briefing: 'Just induced for emergency lap. Propofol TIVA, ETT in. PIP 45, VT 150, SpO2 falling.',
+        briefing: 'Just induced for emergency laparotomy. Propofol TIVA, ETT in. PIP 45, VT 150, SpO2 falling.',
         setupBrief: 'Adult, just intubated for an emergency laparotomy. Propofol TIVA running, ETT secured. Within seconds of intubation: high airway pressures (PIP 45+), very low delivered tidal volumes (~150 mL). Wheeze on auscultation, SpO2 starting to fall. Some gas trapping already - autoPEEP visible.',
         objectives: [
             'Recognise the high-pressure / low-volume signature of severe bronchospasm',
@@ -7313,16 +7511,20 @@ const SCENARIOS = {
             setProfile('adult');
             const p = state.patient;
             p.airway = 'ett';
-            p.fio2 = 1.0;
+            p.fio2 = 0.3;                          // v4.4: realistic air/O2 mix, not pre-oxygenated FiO2
             ['ecg','spo2','bis','art'].forEach(m => {
                 if (!state.monitors[m]) toggleMon(m);
             });
-            // Vent settings - already trying to ventilate, struggling.
-            state.machine.vent.mode = 'VCV';
-            state.machine.vent.rr = 14;       // typical post-induction default
-            state.machine.vent.vt = 500;
+            // v4.4: PCV mode so bronchospasm effect is immediately visible as a
+            // Vt collapse (pressure-limited breath can't shift volume against high
+            // resistance) rather than a PIP spike. pinsp 20 cmH2O would deliver
+            // ~450 mL in a normal patient; in established bronchospasm Vt drops to
+            // ~150 mL - obvious on the now-separate Vt display and trips the alarm.
+            state.machine.vent.mode = 'PCV';
+            state.machine.vent.rr = 14;
+            state.machine.vent.pinsp = 20;
             state.machine.vent.peep = 5;
-            state.machine.vent.fio2 = 1.0;
+            state.machine.vent.fio2 = 0.3;
             state.machine.vent.sevo = 0;     // TIVA - no volatile in use yet
             state.machine.vent.fgf = 2;
             // Propofol TIVA already running. Calibrated for stable BIS ~40.
@@ -7681,7 +7883,7 @@ const SCENARIOS = {
     ischaemia: {
         name: 'Intraoperative myocardial ischaemia',
         briefing: 'Elderly patient, known IHD, mid-case. HR has crept up to 105, BP rising. ECG showing progressive ST depression and T-wave changes.',
-        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol. Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 105, BP 150/95. ECG showing ST depression with T-wave flattening/inversion.',
+        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol. Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 105, BP 150/95. ECG showing progressive ST depression with T-wave flattening/inversion.',
         objectives: [
             'Recognise myocardial ischaemia in the anaesthetised patient (ST depression with T-wave changes on ECG, limited clinical signs unless severe enough to cause cardiogenic shock)',
             'Identify the demand-supply imbalance driving this',
@@ -7761,10 +7963,10 @@ const SCENARIOS = {
     pulmEmbolism: {
         name: 'Intraoperative pulmonary embolism',
         briefing: 'Just rolled supine after laparoscopic cholecystectomy ended. Sudden hypotension, tachycardia, SpO2 falling. etCO2 dropping.',
-        setupBrief: '55-year-old, BMI 32, having had a 3-hour laparoscopic cholecystectomy in reverse Trendelenburg. The surgeon has just deflated the pneumoperitoneum and you have rolled the patient supine. Within seconds: HR has jumped to 115, BP fallen to 80/50, SpO2 dropping from 99 to 90, etCO2 falling from 38 to 25 despite unchanged ventilation. PIP is unchanged at 14. No wheeze, no rash. PE risk factors: long case, BMI, position changes.',
+        setupBrief: '55-year-old, BMI 32, having had a 3-hour laparoscopic cholecystectomy in reverse Trendelenburg. The surgeon has just deflated the pneumoperitoneum and you have repositioned the patient. Within seconds: HR has jumped to 115, BP fallen to 80/50, SpO2 dropping from 99 to 90, etCO2 falling from 38 to 25 despite unchanged ventilation. PIP is unchanged at 14. No wheeze, no rash. PE risk factors: long case, BMI, position changes.',
         objectives: [
             'Recognise the diagnostic triad: hypotension + hypoxia + LOW etCO2 with normal PIP',
-            'Distinguish from bronchospasm (high PIP, high etCO2) and anaphylaxis (rash, low SVR signature)',
+            'Distinguish from bronchospasm (high PIP, high etCO2) and anaphylaxis (rash, low SVR) signature',
             'Support haemodynamics with pressors (avoid excessive fluid in RV failure)',
             'Maximise FiO2 - limited benefit but every bit helps',
             'Escalate: call for help, prepare for possible CPR, consider cardiothoracic referral',
@@ -8330,6 +8532,20 @@ function beepAtSpO2() {
    ============================================================================= */
 
 /* Determine alarm level for a single parameter value against its threshold set */
+// v4.1: HR-dependent mean arterial pressure. MAP = DBP + k·(SBP-DBP), where k is
+// the fraction of the cardiac cycle spent in systole. The classic (SBP+2·DBP)/3
+// fixes k = 1/3, which only holds near resting HR; as HR rises diastole shortens,
+// systole occupies more of the cycle, and MAP weights toward systolic (so the
+// classic rule under-reads at tachycardia, over-weights diastole at bradycardia).
+// Anchored to k = 1/3 at HR 60, bounded 0.30-0.50. A pragmatic approximation
+// (see bug B-035) but directionally correct. NOTE: the baroreflex still uses the
+// fixed formula as its internal reference (it's tuned against that); only the
+// reported MAP (display, alarm, diagnostics) uses this.
+function calcMAP(sys, dia, hr) {
+    const k = Math.max(0.30, Math.min(0.50, (1 / 3) + (hr - 60) * 0.0015));
+    return dia + k * (sys - dia);
+}
+
 function evalThreshold(value, t) {
     if (t.highLow !== null && value < t.highLow) return 'high';
     if (t.highHigh !== null && value > t.highHigh) return 'high';
@@ -8352,7 +8568,7 @@ function evaluateAlarms(dt) {
     if (state.monitors.art)  {
         newStates.sys = evalThreshold(state.sys, A.sys);
         // v4.0: MAP low alarm (replaces diastolic). Same MAP as the ABP display.
-        newStates.map = evalThreshold((state.sys + 2 * state.dia) / 3, A.map);
+        newStates.map = evalThreshold(calcMAP(state.sys, state.dia, state.hr), A.map);
     }
     // v4.0: respiratory rate alarm - active whenever a circuit is present, so
     // apnoea (effectiveRR 0) trips the red low alarm.
@@ -8558,7 +8774,7 @@ const VG_NODES = [
                                                                           const rcf = (CONFIG.RHYTHM_CO_FACTOR[state.rhythm] !== undefined) ? CONFIG.RHYTHM_CO_FACTOR[state.rhythm] : 1.0;
                                                                           return (state.hr * sv * rcf) / 1000; },
                                           fmt: v => v.toFixed(1) + ' L/min' },
-    { id: 'map',      col: 3, row: 2, label: 'MAP',                  get: () => (state.sys + 2 * state.dia) / 3, fmt: v => Math.round(v) + ' mmHg' },
+    { id: 'map',      col: 3, row: 2, label: 'MAP',                  get: () => calcMAP(state.sys, state.dia, state.hr), fmt: v => Math.round(v) + ' mmHg' },
 
     // Bottom CNS/respiratory band - separate row coords (all row=99 = special CNS row)
     { id: 'bis',       cnsRow: true, cnsCol: 0, label: 'Level of consciousness', get: () => state.consciousness,       fmt: v => Math.round(v) },
@@ -9072,7 +9288,7 @@ function updateNum() {
     if (state.monitors.art) {
         const sysR = Math.round(state.sys);
         const diaR = Math.round(state.dia);
-        const mapR = Math.round((sysR + 2 * diaR) / 3);
+        const mapR = Math.round(calcMAP(state.sys, state.dia, state.hr));
         document.getElementById('num-bp').innerText = `${sysR}/${diaR} (${mapR})`;
     } else {
         document.getElementById('num-bp').innerText = '--/-- (--)';
@@ -9108,9 +9324,10 @@ function updateNum() {
     applyAlarmClass('box-co2',  state.alarmStates.etco2);
     applyAlarmClass('box-rr',   state.alarmStates.rr);                                        // v4.0
     applyAlarmClass('box-bis',  state.alarmStates.bis);                                       // v4.0
-    applyAlarmClass('box-pipvt', worstAlarm(state.alarmStates.pip, state.alarmStates.vt));    // v4.0: PIP + Vt
+    applyAlarmClass('box-pip',  state.alarmStates.pip);                                        // v4.4: split from box-pipvt
+    applyAlarmClass('box-vt',   state.alarmStates.vt);                                         // v4.4: split from box-pipvt
 
-    // PIP/Vt and PEEP displays
+    // PIP and Vt displays (v4.4: split from combined PIP/Vt box)
     // Show only when there's actual ventilation happening; '--' otherwise
     const ventActive = state.patient.airway !== 'none'
         && !state.events.disconnect
@@ -9119,10 +9336,11 @@ function updateNum() {
             || (state.machine.vent.mode === 'MANUAL' && state.patient.bagPressure > 0.05)
             || state.patient.respDrive > CONFIG.RESP_DRIVE_GATE);
     if (ventActive) {
-        document.getElementById('num-pipvt').innerText =
-            `${Math.round(state.peakPressure)}/${Math.round(state.tidalVolume)}`;
+        document.getElementById('num-pip').innerText = Math.round(state.peakPressure);
+        document.getElementById('num-vt').innerText  = Math.round(state.tidalVolume);
     } else {
-        document.getElementById('num-pipvt').innerText = '--/--';
+        document.getElementById('num-pip').innerText = '--';
+        document.getElementById('num-vt').innerText  = '--';
     }
     // PEEP: show user setting when in VCV/PCV, else --
     const showPeep = (state.machine.vent.mode === 'VCV' || state.machine.vent.mode === 'PCV')
