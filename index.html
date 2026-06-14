@@ -47,7 +47,32 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v4.8</title>
+<title>Dreams Lab v4.9</title>
+<!--
+==================================================================================
+  DREAMS LAB  v4.9  ("Remove PEEP box, revert layout, fix mobile resize")
+  ---------------------------------------------------------------------------------
+  The PIP/Vt split (v4.4) added a 12th monitor box, triggering a series of layout
+  workarounds (v4.7 overflow:hidden, v4.8 flex:1 + clamp fonts) that introduced
+  mobile bugs: canvas cleared on scroll (resize fired by address bar show/hide)
+  and touch targets offset ~1cm below actual touch position.
+
+  Resolution: drop the PEEP monitor box instead. PEEP is a ventilator SETTING,
+  already readable in the ventilator panel - it doesn't need a measured-vital box.
+  This restores 11 boxes (same count as pre-v4.4) while keeping split PIP and Vt.
+
+  Changes:
+    - PEEP monitor box removed (box-peep / num-peep / showPeep display logic)
+    - PEEP removed from Start Here mock monitor and onboarding card
+    - v4.7/v4.8 layout workarounds reverted: overflow:hidden on #numerics removed,
+      gap back to 2px, .box back to fixed height 46px, .value/.label back to
+      fixed font sizes (2.1rem / 0.6rem), NIBP/ABP back to fixed 1.5rem
+    - resize() now checks if canvas backing-store dimensions actually changed
+      before clearing; mobile address-bar show/hide fires 'resize' without
+      changing the canvas parent's clientWidth/Height, so the early-return
+      prevents the waveform history being wiped on every scroll gesture
+==================================================================================
+-->
 <!--
 ==================================================================================
   DREAMS LAB  v4.8  ("Responsive monitor boxes")
@@ -1489,15 +1514,12 @@ canvas { display: block; width: 100%; height: 100%; }
     padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    overflow: hidden;   /* v4.7: prevent monitor boxes overflowing into controls */
+    gap: 2px;
     background: #000;
     position: relative;
 }
 .box {
-    flex: 1;         /* v4.8: distribute available height proportionally so all 12 */
-    min-height: 0;   /* boxes are visible at any viewport without overflow */
-    height: auto;    /* was fixed 44px → now fills #numerics column proportionally */
+    height: 46px;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1507,13 +1529,13 @@ canvas { display: block; width: 100%; height: 100%; }
     position: relative;
 }
 .label {
-    font-size: clamp(0.45rem, 1.0vh, 0.6rem); /* v4.8: scales with vh; 9.6px at 960px, 7.7px at 768px */
+    font-size: 0.6rem;
     font-weight: bold;
     color: var(--text-dim);
     letter-spacing: 0.5px;
 }
 .value {
-    font-size: clamp(1.2rem, 3.5vh, 2.1rem); /* v4.8: scales with vh; 2.1rem at 960px+, 1.68rem at 768px */
+    font-size: 2.1rem;
     font-family: 'Consolas', 'Courier New', monospace;
     text-align: right;
     line-height: 1;
@@ -2616,7 +2638,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.8</div>
+        <div class="version">Version 4.9</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -2710,7 +2732,6 @@ input[type=range] {
             <div class="sh-num"><span class="lbl">TOF</span><span class="val" style="color:#ff9933">4</span></div>
             <div class="sh-num"><span class="lbl">PIP</span><span class="val" style="color:#ffffff">18</span></div>
             <div class="sh-num"><span class="lbl">Vt (mL)</span><span class="val" style="color:#ffffff">480</span></div>
-            <div class="sh-num"><span class="lbl">PEEP</span><span class="val" style="color:#ffffff">5</span></div>
           </div>
         </div>
         <p class="sh-mock-cap">Illustrative values for a stable, anaesthetised patient.</p>
@@ -2728,7 +2749,6 @@ input[type=range] {
           <div class="sh-card" style="border-color:#ff9933"><span class="tag" style="color:#ff9933">TOF &mdash; train-of-four</span><div class="desc">Tests how much muscle relaxant is still working. A nerve is stimulated four times and the twitches counted &mdash; 4 means little or no block, 0 means deep block. You watch it to time relaxant doses and confirm recovery before waking the patient.</div></div>
           <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PIP &mdash; peak inspiratory pressure</span><div class="desc">The highest pressure (cmH2O) reached in the breathing circuit during each ventilator breath. Rising PIP for the same tidal volume means stiffer or more obstructed lungs &mdash; for example bronchospasm, a kinked tube, or a patient coughing on the tube.</div></div>
           <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">Vt &mdash; tidal volume</span><div class="desc">The size of each breath in mL. In volume-controlled ventilation (VCV) this is fixed by the ventilator setting; in pressure-controlled ventilation (PCV) it varies with lung compliance and resistance &mdash; a falling Vt in PCV is an early sign of worsening bronchospasm or stiffening lungs.</div></div>
-          <div class="sh-card" style="border-color:#ffffff"><span class="tag" style="color:#ffffff">PEEP &mdash; end-expiratory pressure</span><div class="desc">Positive end-expiratory pressure (cmH2O): a small pressure held in the lungs at the end of each breath to stop airways collapsing and help oxygenation. Often set around 5.</div></div>
         </div>
 
         <div class="sh-cards-head">The waveforms</div>
@@ -3149,8 +3169,8 @@ input[type=range] {
             <span id="num-hr" class="value">--</span>
         </div>
         <div class="box cyan"   id="box-spo2"><span class="label">SpO2</span><span id="num-spo2" class="value">--</span></div>
-        <div class="box cyan"   id="box-nibp" onclick="takeNIBP()"><span class="label">NIBP (AUTO 2.5min)</span><span id="num-nibp" class="value" style="font-size: clamp(1.0rem, 2.5vh, 1.5rem);">--/--</span></div>
-        <div class="box red"    id="box-abp"><span class="label">ABP (ART)</span><span id="num-bp" class="value" style="font-size: clamp(1.0rem, 2.5vh, 1.5rem);">--/--</span></div>
+        <div class="box cyan"   id="box-nibp" onclick="takeNIBP()"><span class="label">NIBP (AUTO 2.5min)</span><span id="num-nibp" class="value" style="font-size: 1.5rem;">--/--</span></div>
+        <div class="box red"    id="box-abp"><span class="label">ABP (ART)</span><span id="num-bp" class="value" style="font-size:1.5rem;">--/--</span></div>
         <div class="box yellow" id="box-co2"><span class="label">etCO2</span><span id="num-co2" class="value">--</span></div>
         <div class="box white"  id="box-rr"><span class="label">RR (/min)</span><span id="num-rr" class="value">--</span></div>
         <div class="box white"  id="box-mac"><span class="label">etSEVO (%)</span><span id="num-mac" class="value">--</span></div>
@@ -3167,10 +3187,6 @@ input[type=range] {
         <div class="box white" id="box-vt">
             <span class="label">Vt (mL)</span>
             <span id="num-vt" class="value">--</span>
-        </div>
-        <div class="box white" id="box-peep">
-            <span class="label">PEEP</span>
-            <span id="num-peep" class="value">--</span>
         </div>
     </div>
 </div>
@@ -9342,11 +9358,7 @@ function updateNum() {
         document.getElementById('num-pip').innerText = '--';
         document.getElementById('num-vt').innerText  = '--';
     }
-    // PEEP: show user setting when in VCV/PCV, else --
-    const showPeep = (state.machine.vent.mode === 'VCV' || state.machine.vent.mode === 'PCV')
-                  && state.patient.airway !== 'none'
-                  && !state.events.disconnect;
-    document.getElementById('num-peep').innerText = showPeep ? Math.round(state.machine.vent.peep) : '--';
+    // PEEP: removed from monitor panel (v4.9) - readable in ventilator settings
 }
 
 /* Apply or remove alarm flash class on a vital box */
@@ -9371,9 +9383,18 @@ function resize() {
     // (logical * dpr); all drawing stays in CSS pixels via the canvas transform.
     // cssW/cssH carry the logical size the render loop uses for lane heights and
     // sweep wrap. dpr capped at 3 to bound memory on extreme displays.
+    //
+    // v4.9: bail out early if the canvas backing store dimensions haven't changed.
+    // On mobile, the browser fires 'resize' whenever the address bar shows or hides,
+    // even though the canvas parent's actual clientWidth/Height hasn't moved. Without
+    // this guard every address-bar scroll cleared the waveform history.
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    cssW = canvas.parentElement.clientWidth;
-    cssH = canvas.parentElement.clientHeight;
+    const newCssW = canvas.parentElement.clientWidth;
+    const newCssH = canvas.parentElement.clientHeight;
+    if (Math.round(newCssW * dpr) === canvas.width &&
+        Math.round(newCssH * dpr) === canvas.height) return;
+    cssW = newCssW;
+    cssH = newCssH;
     canvas.width  = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // draw in CSS px; reset each resize
