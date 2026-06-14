@@ -47,7 +47,32 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v4.9</title>
+<title>Dreams Lab v4.10</title>
+<!--
+==================================================================================
+  DREAMS LAB  v4.10  ("Awake bronchospasm fix")
+  ---------------------------------------------------------------------------------
+  Bug: inserting an ETT into an awake patient triggered bronchospasm (correct)
+  but it was impossible to treat — bronchodilators (sevo, adrenaline, ketamine,
+  salbutamol) had no visible effect, and even toggling the bronchospasm event
+  off via the panel made no difference.
+
+  Root cause: COUGH_RESISTANCE (100 cmH2O/L/s) > BRONCH_RESISTANCE (80), so
+  the v3.25 persistent-cough block was keeping p.resistance at 100 every
+  physics tick regardless of bronchospasm treatment. The effective resistance
+  is effResistance = max(p.resistance, bronchResistance). Bronchodilators
+  reduce bronchResistance from 80 toward ~8, but max(100, 8) = 100 — the cough
+  floor masked all treatment. Even toggling the event off (bronchResistance→5)
+  left effResistance = max(100, 5) = 100, entirely unchanged.
+
+  Fix (one branch in the persistent-cough block): when bronchospasm event is
+  active, reset p.resistance to 5 so bronchResistance governs. Bronchodilators
+  now visibly reduce resistance (80→~8). When the event clears, the cough floor
+  (p.resistance = 100) takes over again — correctly teaching that the two
+  problems (bronchospasm and bucking on an unsecured tube) need separate
+  treatments: bronchodilators for the spasm, anaesthesia to tolerate the tube.
+==================================================================================
+-->
 <!--
 ==================================================================================
   DREAMS LAB  v4.9  ("Remove PEEP box, revert layout, fix mobile resize")
@@ -2638,7 +2663,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.9</div>
+        <div class="version">Version 4.10</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -5715,7 +5740,21 @@ setInterval(() => {
     // remove airway), the timer naturally winds down over 2 sec.
     if (isLight && hasReactiveAirway && blunting > 0.7) {
         state.patient.coughTimer = CONFIG.COUGH_DURATION;
-        p.resistance = Math.max(p.resistance, CONFIG.COUGH_RESISTANCE);
+        // v4.10 fix: COUGH_RESISTANCE (100) > BRONCH_RESISTANCE (80), so the
+        // persistent cough was keeping p.resistance at 100 every tick regardless
+        // of bronchospasm treatment — effResistance = max(100, decaying bronch)
+        // = 100 always. Bronchodilators and even the event toggle had zero visible
+        // effect because the cough floor dominated.
+        // Fix: when bronchospasm is active, release p.resistance to baseline so
+        // bronchResistance (which responds to bronchodilators) governs. When
+        // bronchospasm clears, cough resistance takes back over — the two
+        // problems require two separate treatments (bronchodilators for the
+        // spasm, anaesthesia to tolerate the tube).
+        if (state.events.bronchospasm) {
+            p.resistance = 5;   // bronchResistance governs while event is active
+        } else {
+            p.resistance = Math.max(p.resistance, CONFIG.COUGH_RESISTANCE);
+        }
         // Continuous symp surge - smaller per-tick than a one-shot cough
         // (the one-shot adds 0.4 immediately; here we drip ~0.4/sec via dt).
         state.alphaTone += CONFIG.COUGH_SYMP_SURGE * dt * 0.5;
