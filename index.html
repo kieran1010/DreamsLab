@@ -47,7 +47,32 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v4.10</title>
+<title>Dreams Lab v4.11</title>
+<!--
+==================================================================================
+  DREAMS LAB  v4.11  ("Instant scenario reset")
+  ---------------------------------------------------------------------------------
+  scenarioReset() already cleared drugs, autonomic tones and events, but the
+  displayed physiological state (HR, BP, SpO2, etCO2, sevo, MAC, resistance,
+  central volume, ventilator settings, airway device) all persisted from the
+  previous scenario and converged slowly via the physics lag. Loading a new
+  scenario left the wrong vitals on screen for several seconds.
+
+  Fix: a new snap-to-baseline section at the end of scenarioReset() sets all of
+  these synchronously before setup() is called. The scenario's own setup()
+  overrides any values it needs (e.g. setting ETT, propCe, VCV mode). Scenarios
+  that don't specify a value get the correct clean awake-patient default.
+
+  Also: the waveform canvas is cleared and sweep positions reset to zero on each
+  scenario load, so old traces don't persist into the new scenario.
+
+  Snapped on every reset (before scenario setup overrides):
+    HR → profile.hrBase | BP → profile.mapTarget | SpO2 → 99 | etCO2 → 0
+    etSevo / circuitSevo / MAC / vent.sevo → 0 | FiO2 → 0.21 (room air)
+    vent.mode → MANUAL | airway → mask | resistance → 5
+    centralVolume → profile.centralVol | preload → CONFIG.PRELOAD_BASELINE
+==================================================================================
+-->
 <!--
 ==================================================================================
   DREAMS LAB  v4.10  ("Awake bronchospasm fix")
@@ -2663,7 +2688,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.10</div>
+        <div class="version">Version 4.11</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -8287,6 +8312,60 @@ function scenarioReset() {
 
     // Visual log separator so the user can see where the reset happened
     log('--- scenario reset ---');
+
+    // v4.11: snap physiological state immediately to profile baseline values.
+    // Previously all displayed vitals (HR, BP, SpO2 etc.) persisted from the
+    // previous scenario and converged slowly via the physics lag (TAU_HR,
+    // TAU_SPO2, sevo washout). Now they're set synchronously so the new
+    // scenario starts clean on the first tick.
+    state.hr   = state.profile.hrBase;
+    state.spo2 = 99;
+    state.etco2 = 0;
+    state.effectiveRR = 0;
+    // Snap BP to profile MAP target (matches the formula used in setProfile)
+    const _mt = state.profile.mapTarget;
+    if (_mt) { state.sys = _mt * 1.3; state.dia = _mt * 0.8; }
+
+    // Clear volatile agent from circuit, dial, and MAC display
+    state.etSevo      = 0;
+    state.circuitSevo = 0;
+    state.mac         = 0;
+    state.machine.vent.sevo = 0;
+    state.machine.vent.fio2 = 0.21;  // room air default; scenario overrides as needed
+    p.fio2 = 0.21;
+    p.frcO2 = state.profile.frc * 0.21;
+
+    // Reset ventilator to neutral defaults; scenarios that need VCV/PCV or
+    // specific settings will override in their setup()
+    state.machine.vent.mode  = 'MANUAL';
+    state.machine.vent.rr    = 12;
+    state.machine.vent.vt    = 500;
+    state.machine.vent.pinsp = 15;
+    state.machine.vent.peep  = 5;
+    state.machine.vent.fgf   = 2;
+
+    // Airway to mask (scenarios that need LMA/ETT call setAirway in setup).
+    // Set state directly rather than via setAirway() to avoid the reactivity
+    // boost that setAirway() triggers.
+    p.airway = 'mask';
+    document.querySelectorAll('[id^="aw-"]').forEach(b => b.classList.remove('active'));
+    const _awMask = document.getElementById('aw-mask');
+    if (_awMask) _awMask.classList.add('active');
+
+    // Remaining patient physiology
+    p.resistance    = 5;
+    p.centralVolume = state.profile.centralVol;
+    p.preload       = CONFIG.PRELOAD_BASELINE;
+
+    // Clear the waveform canvas so old traces don't persist into the new scenario
+    if (typeof ctx !== 'undefined' && ctx && cssW && cssH) {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, cssW, cssH);
+    }
+    if (typeof xF  !== 'undefined') { xF  = 0; lastXF = 0; }
+    if (typeof xS  !== 'undefined') { xS  = 0; lastXS = 0; }
+    if (typeof prevXS !== 'undefined') prevXS = 0;
+    if (typeof resetY === 'function') { resetY(true); resetY(false); }
 }
 
 /* Called when user picks a scenario from the dropdown */
