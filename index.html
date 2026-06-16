@@ -47,7 +47,7 @@
 
 ==================================================================================
 -->
-<title>Dreams Lab v4.11</title>
+<title>Dreams Lab v4.15</title>
 <!--
 ==================================================================================
   DREAMS LAB  v4.11  ("Instant scenario reset")
@@ -1465,11 +1465,35 @@ body {
     background: #050505;
     border-bottom: 1px solid #1a1a1a;
 }
-#brand-name {
+/* v4.12: Hypnos branding link ------------------------------------------------ */
+#hypnos-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    text-decoration: none;
+    opacity: 0.85;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+    align-self: center;
+}
+#hypnos-brand:hover { opacity: 1; }
+#hypnos-wordmark {
+    font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
     font-size: 0.95rem;
     font-weight: 500;
-    letter-spacing: 0.5px;
-    color: #e4e4e4;
+    color: #fff;
+    letter-spacing: -0.01em;
+    line-height: 1;
+}
+/* ---------------------------------------------------------------------------- */
+#brand-name {
+    font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+    font-size: 0.95rem;
+    font-weight: 400;  /* v4.14: 400 not 500 — Playfair D/L/b letterforms are
+                          inherently heavier than H/y/p/n/o/s, so matching weight
+                          500 still looked mismatched; 400 balances visually */
+    letter-spacing: -0.01em;
+    color: #fff;
 }
 #brand-author {
     font-size: 0.6rem;
@@ -2649,6 +2673,10 @@ input[type=range] {
     }
 }
 </style>
+    <!-- v4.12: Playfair Display for the Hypnos wordmark in the brand bar -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
 
@@ -2666,7 +2694,12 @@ input[type=range] {
          "Dr Kieran Gillick" text baseline-aligns with "Dreams Lab" rather
          than appearing optically high due to the font-size mismatch. -->
     <div style="display:flex; align-items:baseline; gap:10px;">
-        <div id="brand-name">Dreams Lab</div>
+        <a href="https://hypnos.one" target="_blank" rel="noopener" id="hypnos-brand" title="Hypnos Medical — hypnos.one">
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="#1B7A8A"/>
+            </svg>
+            <span id="hypnos-wordmark">Hypnos <span style="opacity:0.35">·</span> Dreams Lab</span>
+        </a>
         <!-- v3.83: START HERE button - opens the novice orientation modal -->
         <button id="brand-starthere-btn" onclick="toggleStartHere()" title="New here? A guided orientation to the monitor and controls">START HERE</button>
         <!-- v3.64: SCENARIOS button - opens scenario picker modal -->
@@ -2688,7 +2721,7 @@ input[type=range] {
     <div id="about-modal">
         <h2>Dreams Lab</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.11</div>
+        <div class="version">Version 4.15</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
