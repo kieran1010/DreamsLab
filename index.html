@@ -68,7 +68,7 @@
   scenario load, so old traces don't persist into the new scenario.
 
   Snapped on every reset (before scenario setup overrides):
-    HR → profile.hrBase | BP → profile.mapTarget | SpO2 → 99 | etCO2 → 0
+    HR → profile.hrBase | BP → profile.mapTarget | SpO2 → 99 | etCO2 → 38
     etSevo / circuitSevo / MAC / vent.sevo → 0 | FiO2 → 0.21 (room air)
     vent.mode → MANUAL | airway → mask | resistance → 5
     centralVolume → profile.centralVol | preload → CONFIG.PRELOAD_BASELINE
@@ -8354,7 +8354,7 @@ function scenarioReset() {
     // scenario starts clean on the first tick.
     state.hr   = state.profile.hrBase;
     state.spo2 = 99;
-    state.etco2 = 0;
+    state.etco2 = 38;
     state.effectiveRR = 0;
     // Snap BP to profile MAP target (matches the formula used in setProfile)
     const _mt = state.profile.mapTarget;
