@@ -1466,11 +1466,13 @@ body {
     background: #050505;
     border-bottom: 1px solid #1a1a1a;
 }
-/* v4.12: Hypnos branding link ------------------------------------------------ */
+/* v4.16: Hypnos/Synapse brand lockup — matches the Hypnos Medical /
+   Tribulator header spec: icon, stacked Hypnos/MEDICAL wordmark, divider,
+   bold product name — scaled down to fit Synapse's thin metadata bar. */
 #hypnos-brand {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
     text-decoration: none;
     opacity: 0.85;
     transition: opacity 0.15s;
@@ -1478,13 +1480,34 @@ body {
     align-self: center;
 }
 #hypnos-brand:hover { opacity: 1; }
-#hypnos-wordmark {
+.brand-icon { width: 18px; height: 18px; flex-shrink: 0; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.05; }
+.brand-hypnos {
     font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
-    font-size: 0.95rem;
-    font-weight: 500;
+    font-size: 0.62rem;
+    letter-spacing: 0.02em;
     color: #fff;
+}
+.brand-medical {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 0.42rem;
+    letter-spacing: 0.16em;
+    color: #8a95a0;
+    font-weight: 600;
+}
+.brand-divider {
+    width: 1px;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.25);
+    flex-shrink: 0;
+}
+.brand-product {
+    font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+    font-weight: 600;
+    font-size: 0.85rem;
     letter-spacing: -0.01em;
-    line-height: 1;
+    color: #fff;
+    white-space: nowrap;
 }
 /* ---------------------------------------------------------------------------- */
 #brand-name {
@@ -2688,23 +2711,31 @@ input[type=range] {
 <!-- Dreams Lab branding strip: name on the left, author credit on the right.
      Kept thin so it doesn't steal space from the monitor. -->
 <div id="brand-bar">
-    <!-- v3.30: PANEL on the left (panel slides out from the left edge); title
-         and author moved to the right, with audio toggle and fullscreen. -->
-    <button id="brand-panel-btn" onclick="togglePanel()" title="Open/close panel">PANEL</button>
+    <!-- v4.16: Hypnos/Synapse lockup moved to the left edge, restyled to match
+         the Hypnos Medical / Tribulator header spec (icon + stacked
+         Hypnos/MEDICAL wordmark + divider + bold product name). -->
+    <a href="https://hypnos.one" target="_blank" rel="noopener" id="hypnos-brand" title="Hypnos Medical — hypnos.one">
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="brand-icon">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="#1B7A8A"/>
+        </svg>
+        <div class="brand-text">
+            <span class="brand-hypnos">Hypnos</span>
+            <span class="brand-medical">MEDICAL</span>
+        </div>
+        <span class="brand-divider"></span>
+        <span class="brand-product">Synapse</span>
+    </a>
     <!-- v3.64: align-items changed from center to baseline so the small
          "Dr Kieran Gillick" text baseline-aligns with "Dreams Lab" rather
          than appearing optically high due to the font-size mismatch. -->
     <div style="display:flex; align-items:baseline; gap:10px;">
-        <a href="https://hypnos.one" target="_blank" rel="noopener" id="hypnos-brand" title="Hypnos Medical — hypnos.one">
-            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="#1B7A8A"/>
-            </svg>
-            <span id="hypnos-wordmark">Hypnos <span style="opacity:0.35">·</span> Synapse</span>
-        </a>
         <!-- v3.83: START HERE button - opens the novice orientation modal -->
         <button id="brand-starthere-btn" onclick="toggleStartHere()" title="New here? A guided orientation to the monitor and controls">START HERE</button>
         <!-- v3.64: SCENARIOS button - opens scenario picker modal -->
         <button id="brand-scenarios-btn" onclick="toggleScenariosModal()" title="Scenarios">SCENARIOS</button>
+        <!-- v4.16: PANEL moved from the far left into the right-hand button
+             group, between SCENARIOS and ABOUT. -->
+        <button id="brand-panel-btn" onclick="togglePanel()" title="Open/close panel">PANEL</button>
         <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
         <button id="brand-about-btn" onclick="toggleAboutModal()" title="About / licence / disclaimer">ABOUT</button>
         <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">SILENT</button>
