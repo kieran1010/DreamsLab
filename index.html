@@ -2026,18 +2026,15 @@ input[type=range] {
    immediately after the panel using left:0 + a margin that tracks panel state. */
 /* v3.28: panel-handle and floating-silence removed - both now live in brand bar
    as standard buttons. Brand bar button styling: */
-#brand-panel-btn, #brand-silence-btn {
+#brand-silence-btn {
     padding: 4px 10px;
     font-size: 0.65rem;
-    background: var(--accent);
-    color: white;
     border: none;
     border-radius: 3px;
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
-#brand-panel-btn:hover { background: #d22; }
 /* v3.30: silence button has three states with distinct colours */
 #brand-silence-btn { background: rgba(42,42,42,0.85); color: #ccc; border: 1px solid #666; }
 #brand-silence-btn:hover { filter: brightness(1.2); }
@@ -2048,7 +2045,9 @@ input[type=range] {
 
 /* v3.52: About button (small, low-contrast - it's reference info, not a primary control) */
 #brand-about-btn,
-#brand-scenarios-btn {     /* v3.64: SCENARIOS button uses same styling */
+#brand-scenarios-btn,
+#brand-panel-btn {     /* v3.64: SCENARIOS button uses same styling. v4.17: PANEL too - it
+                           only turns accent-blue while the side panel is actually open. */
     padding: 4px 10px;
     font-size: 0.6rem;
     background: rgba(42,42,42,0.85);
@@ -2060,9 +2059,13 @@ input[type=range] {
     letter-spacing: 0.5px;
 }
 #brand-about-btn:hover,
-#brand-scenarios-btn:hover { background: rgba(60,60,60,0.85); color: #ddd; border-color: #888; }
+#brand-scenarios-btn:hover,
+#brand-panel-btn:hover { background: rgba(60,60,60,0.85); color: #ddd; border-color: #888; }
 /* v3.64: highlight the SCENARIOS button when a scenario is active. */
 #brand-scenarios-btn.active { background: #235; color: #def; border-color: #6cf; }
+/* v4.17: PANEL button lights up accent-blue only while the panel is open */
+#brand-panel-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#brand-panel-btn.active:hover { filter: brightness(1.15); }
 
 /* v3.52: About modal */
 /* v3.83: "Start here" novice orientation modal.
@@ -2738,7 +2741,7 @@ input[type=range] {
         <button id="brand-panel-btn" onclick="togglePanel()" title="Open/close panel">PANEL</button>
         <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
         <button id="brand-about-btn" onclick="toggleAboutModal()" title="About / licence / disclaimer">ABOUT</button>
-        <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">SILENT</button>
+        <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">AUDIO ON</button>
         <button id="fullscreen-toggle" onclick="toggleFullscreenMonitor()"
                 title="Toggle full-screen monitor view"
                 aria-label="Toggle fullscreen">&#9974;</button>
@@ -4062,7 +4065,7 @@ const state = {
     // ===== Alarm system state =====
     alarmStates: {},           // { hr: 'high'|'med'|'ok', spo2: ..., ... }
     alarmSilenced: 0,          // (v3.30: legacy - audio behaviour now driven by audioMode)
-    audioMode: 'silent',       // v3.30: 'silent' | 'on' | 'ecgOnly'
+    audioMode: 'on',           // v4.17: defaults to on. 'silent' | 'on' | 'ecgOnly'
     nibpNextDue: 0,            // v3.34: sim-seconds until next auto NIBP. 0 = take now.
     nibpInterval: 150,         // v3.34: cycle interval in sim-seconds (2.5 min)
     alarmNextHighBurst: 0,     // sim-sec until next high-priority burst
@@ -6816,7 +6819,9 @@ function logInf(d, v) {
 /* Open/close the left pop-out panel */
 function togglePanel() {
     const p = document.getElementById('left-panel');
-    p.classList.toggle('open');
+    const isOpen = p.classList.toggle('open');
+    // v4.17: PANEL button only lights up accent-blue while the panel is open.
+    document.getElementById('brand-panel-btn').classList.toggle('active', isOpen);
     // The panel's width transition is 0.3s. Fire resize events a few times so
     // the canvas reflows as the container width animates (prevents the trace
     // looking squished until the transition completes).
@@ -9639,10 +9644,10 @@ buildVariableGraph();
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
 });
-// v3.30: initialise audio button visual state to match default (silent)
+// v4.17: initialise audio button visual state to match default (on)
 {
     const btn = document.getElementById('brand-silence-btn');
-    if (btn) btn.classList.add('audio-silent');
+    if (btn) btn.classList.add('audio-on');
 }
 
 /* =============================================================================
