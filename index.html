@@ -51,6 +51,30 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.21  ("Active-event chips in the header")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. First step toward retiring the left Panel:
+  active events now surface as chips in the brand bar, so they're visible
+  without opening the panel.
+
+  - One red chip per active state.events flag, with a pulsing status dot and a
+    friendly label (haemorrhage chips show their severity). Chips are built by
+    polling state.events (300ms), so scenario-driven activation - which sets
+    state.events.X = true directly - appears automatically, and auto-clearing
+    events (movement, breath-holding) drop off on their own.
+  - Events are turned ON only by scenarios (no on-switch here, by design).
+    Users can turn one OFF by clicking its chip: the first click arms a
+    "Disable <event>?" confirmation (chip turns amber); a second click within
+    ~3.5s disables it, otherwise it reverts. disableEvent() flips the flag via
+    the existing toggleEvent()/setBleed() paths and clears the event's
+    associated timer/accumulator so it actually stops.
+
+  The Panel's Events tab is left in place for now; this just mirrors active
+  state where it's always visible.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.20  ("Physiology dashboard modal")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes. Replaces the cramped "Physiology" tab in the
@@ -1678,6 +1702,73 @@ body {
     from { background-position: 0 0; }
     to   { background-position: 12px 0; }
 }
+
+/* v4.21: active-event chips in the brand bar. Persistent (unlike the transient
+   drug-delivery chips): one chip per active state.events flag. Scenario-driven
+   activation; users disable an event by clicking (two-click confirm). */
+#event-tray {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    align-self: center;
+    overflow: hidden;
+    padding: 0 6px;
+}
+.event-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(120,28,28,0.9);
+    border: 1px solid #b45;
+    color: #ffdede;
+    font-size: 0.6rem;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+.event-chip:hover { filter: brightness(1.12); }
+/* Pulsing status dot marks a live event */
+.event-chip .ec-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #ff6b6b;
+    flex: 0 0 auto;
+    animation: event-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes event-dot-pulse {
+    0%, 100% { opacity: 1;   box-shadow: 0 0 4px #ff6b6b; }
+    50%      { opacity: 0.35; box-shadow: 0 0 0 #ff6b6b; }
+}
+/* Confirm state: amber, "Disable? " prompt, dot becomes an ✕ glyph */
+.event-chip[data-state="confirm"] {
+    background: rgba(150,96,18,0.95);
+    border-color: #e0a020;
+    color: #fff;
+}
+.event-chip[data-state="confirm"] .ec-dot {
+    width: auto; height: auto;
+    border-radius: 0;
+    background: none;
+    animation: none;
+    box-shadow: none;
+    font-size: 0.62rem;
+    line-height: 1;
+    color: #fff;
+}
+.event-chip[data-state="confirm"] .ec-dot::before { content: '✕'; }
+
 /* v3.7: fullscreen toggle button in brand bar */
 #fullscreen-toggle {
     background: transparent;
@@ -3098,6 +3189,8 @@ input[type=range] {
         <span class="brand-divider"></span>
         <span class="brand-product">Synapse</span>
     </a>
+    <!-- v4.21: active-event chips (scenario-driven; click to disable) -->
+    <div id="event-tray"></div>
     <!-- v4.18: bolus delivery chips (drug name + progress bar) appear here -->
     <div id="delivery-tray"></div>
     <!-- v3.64: align-items changed from center to baseline so the small
@@ -9047,6 +9140,7 @@ function toggleEvent(name) {
     // physiology tick (see top of tick). Nothing to do on toggle here - the
     // smoothing will ease to/from the high value over ~15s.
     log((state.events[name] ? "EVENT ON: " : "EVENT OFF: ") + name);
+    if (typeof updateEventChips === 'function') updateEventChips();   // v4.21
 }
 
 /* Graded haemorrhage control. Mutually exclusive severity levels.
@@ -9076,6 +9170,7 @@ function setBleed(severity) {
         const btn = document.getElementById('evt-bleed-' + s);
         if (btn) btn.classList.toggle('active', state.events.bleed && state.bleedSeverity === s);
     });
+    if (typeof updateEventChips === 'function') updateEventChips();   // v4.21
 }
 
 function eventIdSuffix(name) {
@@ -9101,6 +9196,127 @@ function eventIdSuffix(name) {
         eyeOpening:'eyes',
     })[name] || name;
 }
+
+/* =============================================================================
+   ACTIVE-EVENT CHIPS (v4.21)  -- brand-bar surfacing of active events
+   ---------------------------------------------------------------------------------
+   Events are switched ON only by scenarios (which set state.events.X = true
+   directly). This renders one chip per active flag and lets the user switch an
+   event OFF with a two-click confirm. Rendering is a poll of state.events so it
+   picks up scenario activation and auto-clearing events without extra hooks.
+   ============================================================================= */
+const EVENT_LABELS = {
+    laryngospasm:'Laryngospasm', aspiration:'Aspiration', apnoea:'Central apnoea',
+    disconnect:'Circuit disconnect', kinkedETT:'Kinked ETT', bronchospasm:'Bronchospasm',
+    bleed:'Haemorrhage', anaphylaxis:'Anaphylaxis', tourniquetRelease:'Tourniquet release',
+    vagal:'Vagal episode', co2Embolism:'CO₂ embolism', pulmEmbolism:'Pulmonary embolism',
+    ischaemia:'Myocardial ischaemia', ecgLeadsOff:'ECG leads off', spo2ProbeOff:'SpO₂ probe off',
+    ivTissued:'IV tissued', nibpCuffFail:'NIBP cuff fail', movement:'Patient movement',
+    breathHolding:'Breath holding', eyeOpening:'Eye opening', mh:'Malignant hyperthermia',
+    last:'LA toxicity',
+};
+
+function eventChipLabel(key) {
+    let label = EVENT_LABELS[key] || key;
+    if (key === 'bleed' && state.bleedSeverity) label += ' (' + state.bleedSeverity + ')';
+    return label;
+}
+
+/* Keys of currently-active events, in a stable order. */
+function getActiveEventKeys() {
+    return Object.keys(state.events).filter(k => state.events[k]);
+}
+
+/* Disable a single active event: flip the flag via the existing off-paths and
+   clear the event's associated timer/accumulator so it actually stops. */
+function disableEvent(key) {
+    if (key === 'bleed') {
+        if (state.bleedSeverity) setBleed(state.bleedSeverity);   // toggles bleed off
+        return;
+    }
+    if (state.events[key]) toggleEvent(key);
+    switch (key) {
+        case 'anaphylaxis':      state.anaphylaxisTimer = 0; break;
+        case 'tourniquetRelease': state.tourniquetTimer = 0; break;
+        case 'vagal':            state.vagalTimer = 0; break;
+        case 'movement':         state.movementTimer = 0; break;
+        case 'breathHolding':    state.breathHoldTimer = 0; break;
+        case 'mh':               state.mhSeverity = 0; break;
+        case 'last':             state.lastTimer = 0; break;
+        case 'pulmEmbolism':     state.peShunt = 0; break;
+        case 'ischaemia':        state.ischaemia = 0; break;
+        case 'aspiration':
+            state.aspirationSource = false;
+            state.aspirationInjury = 0;
+            state.aspirationReactivateTimer = 0;
+            break;
+    }
+    updateEventChips();
+}
+
+/* First click arms a confirm; second click (within the timeout) disables. */
+function onEventChipClick(chip, key) {
+    if (chip.dataset.state === 'confirm') {
+        if (chip._revertTimer) clearTimeout(chip._revertTimer);
+        disableEvent(key);   // removes the chip on next render
+        return;
+    }
+    // Revert any other chip already in confirm state
+    document.querySelectorAll('.event-chip[data-state="confirm"]').forEach(c => {
+        if (c !== chip) revertEventChip(c);
+    });
+    chip.dataset.state = 'confirm';
+    chip.querySelector('.ec-text').textContent = 'Disable ' + eventChipLabel(key) + '?';
+    chip.title = 'Click again to confirm';
+    chip._revertTimer = setTimeout(() => revertEventChip(chip), 3500);
+}
+
+function revertEventChip(chip) {
+    if (chip._revertTimer) { clearTimeout(chip._revertTimer); chip._revertTimer = null; }
+    const key = chip.dataset.event;
+    chip.dataset.state = 'active';
+    chip.querySelector('.ec-text').textContent = eventChipLabel(key);
+    chip.title = 'Click to disable';
+}
+
+function createEventChip(key) {
+    const chip = document.createElement('button');
+    chip.className = 'event-chip';
+    chip.dataset.event = key;
+    chip.dataset.state = 'active';
+    chip.title = 'Click to disable';
+    chip.innerHTML = `<span class="ec-dot"></span><span class="ec-text">${eventChipLabel(key)}</span>`;
+    chip.onclick = () => onEventChipClick(chip, key);
+    return chip;
+}
+
+/* Incremental render: add chips for new events, remove chips for cleared ones,
+   refresh labels on existing (active-state) chips. Chips mid-confirm are left
+   untouched so a poll can't wipe the confirmation prompt. */
+function updateEventChips() {
+    const tray = document.getElementById('event-tray');
+    if (!tray) return;
+    const active = getActiveEventKeys();
+    // Remove chips whose event is no longer active
+    [...tray.children].forEach(chip => {
+        if (!active.includes(chip.dataset.event)) {
+            if (chip._revertTimer) clearTimeout(chip._revertTimer);
+            chip.remove();
+        }
+    });
+    // Add / refresh
+    active.forEach(key => {
+        let chip = tray.querySelector(`.event-chip[data-event="${key}"]`);
+        if (!chip) {
+            tray.appendChild(createEventChip(key));
+        } else if (chip.dataset.state === 'active') {
+            const txt = chip.querySelector('.ec-text');
+            const label = eventChipLabel(key);
+            if (txt.textContent !== label) txt.textContent = label;   // e.g. bleed severity change
+        }
+    });
+}
+setInterval(updateEventChips, 300);
 
 function resolveAllEvents() {
     Object.keys(state.events).forEach(k => {
