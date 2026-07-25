@@ -51,6 +51,38 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.20  ("Physiology dashboard modal")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. Replaces the cramped "Physiology" tab in the
+  left pop-out (a fixed-size influence-graph SVG that was illegible in the
+  narrow panel) with a full-screen modal launched from a new PHYSIOLOGY button
+  in the brand bar.
+
+  The modal shows the genuine underlying-physiology variables (the integrated
+  model state, not the derived monitor numbers) as labelled gauges, grouped
+  into tabs:
+    - Cardiovascular: circulating volume, preload, contractility, SVR tone,
+      HR; plus derived MAP and cardiac output.
+    - Respiratory: respiratory drive, airway resistance, lung volume, auto-PEEP,
+      inspired/alveolar O2; plus derived SpO2, etCO2, tidal volume.
+    - Neuro / Autonomic: level of consciousness (NOT the BIS display),
+      alpha / beta / parasympathetic tone, nociception, MAC, paralysis,
+      beta-blockade fraction.
+    - Pathways: the original influence graph, relocated here at full size.
+
+  Each gauge is a horizontal track spanning the variable's physiological
+  floor->ceiling, with a baseline tick (resting value), a colour-coded fill
+  (accent when near baseline; amber/red as it approaches a limit, or as its
+  monitor alarm thresholds are crossed for the true vitals), a live number,
+  and a 60 s sparkline. A lightweight always-on 2 Hz sampler keeps the
+  sparkline history so trends are visible the instant the modal opens.
+
+  Removed: left-panel tab-vars / panel-vars. The influence-graph builder and
+  updater are unchanged - only the SVG's host element moved.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.19  ("Tablet touch targets + infusion chips")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes.
@@ -2214,8 +2246,10 @@ input[type=range] {
 /* v3.52: About button (small, low-contrast - it's reference info, not a primary control) */
 #brand-about-btn,
 #brand-scenarios-btn,
+#brand-phys-btn,
 #brand-panel-btn {     /* v3.64: SCENARIOS button uses same styling. v4.17: PANEL too - it
-                           only turns accent-blue while the side panel is actually open. */
+                           only turns accent-blue while the side panel is actually open.
+                           v4.20: PHYSIOLOGY button shares the styling. */
     padding: 4px 10px;
     font-size: 0.6rem;
     background: rgba(42,42,42,0.85);
@@ -2228,7 +2262,11 @@ input[type=range] {
 }
 #brand-about-btn:hover,
 #brand-scenarios-btn:hover,
+#brand-phys-btn:hover,
 #brand-panel-btn:hover { background: rgba(60,60,60,0.85); color: #ddd; border-color: #888; }
+/* v4.20: PHYSIOLOGY button lights up accent-blue while its modal is open */
+#brand-phys-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#brand-phys-btn.active:hover { filter: brightness(1.15); }
 /* v3.64: highlight the SCENARIOS button when a scenario is active. */
 #brand-scenarios-btn.active { background: #235; color: #def; border-color: #6cf; }
 /* v4.17: PANEL button lights up accent-blue only while the panel is open */
@@ -2618,6 +2656,170 @@ input[type=range] {
    from forward CV flow. */
 .vg-edge-feedback { opacity: 0.45; stroke-dasharray: 4 3; }
 
+/* === PHYSIOLOGY DASHBOARD MODAL (v4.20) ================================== */
+#phys-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.78);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+#phys-modal-overlay.open { display: flex; }
+#phys-modal {
+    background: #141414;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #ccc;
+    width: 100%;
+    max-width: 900px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#phys-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px 10px;
+    border-bottom: 1px solid #262626;
+    flex: 0 0 auto;
+}
+#phys-modal-head h2 {
+    margin: 0;
+    font-size: 1.0rem;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: #e4e4e4;
+}
+#phys-modal-head .sub {
+    font-size: 0.6rem;
+    color: #666;
+    margin-top: 2px;
+}
+#phys-modal-close {
+    background: transparent;
+    color: #999;
+    border: 1px solid #555;
+    width: 28px; height: 28px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+#phys-modal-close:hover { color: #fff; border-color: #888; }
+/* Tab strip */
+#phys-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 8px 20px 0;
+    border-bottom: 1px solid #262626;
+    flex: 0 0 auto;
+    overflow-x: auto;
+}
+#phys-tabs button {
+    background: #1e1e1e;
+    border: 1px solid #333;
+    border-bottom: none;
+    color: #999;
+    padding: 8px 16px;
+    font-size: 0.68rem;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 4px 4px 0 0;
+    white-space: nowrap;
+    touch-action: manipulation;
+}
+#phys-tabs button:hover { color: #ddd; }
+#phys-tabs button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+/* Body / panes */
+#phys-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 16px 20px 20px;
+}
+.phys-pane { display: none; }
+.phys-pane.active { display: block; }
+/* Gauge grid: two columns on wide, one on narrow */
+.phys-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 26px;
+}
+@media (max-width: 640px) { .phys-grid { grid-template-columns: 1fr; } }
+.phys-section-label {
+    grid-column: 1 / -1;
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #777;
+    margin: 10px 0 2px;
+    border-top: 1px solid #262626;
+    padding-top: 10px;
+}
+.phys-section-label:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+/* A single gauge */
+.phys-gauge { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+.pg-top { display: flex; justify-content: space-between; align-items: baseline; }
+.pg-label { font-size: 0.72rem; color: #ccc; }
+.pg-val {
+    font-family: 'Consolas', monospace;
+    font-size: 0.82rem;
+    color: #fff;
+    font-weight: 500;
+}
+.pg-val .pg-unit { font-size: 0.6rem; color: #888; margin-left: 3px; font-weight: 400; }
+.pg-row { display: flex; align-items: center; gap: 8px; }
+.pg-track {
+    position: relative;
+    flex: 1 1 auto;
+    height: 12px;
+    background: #222;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.pg-fill {
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 3px 0 0 3px;
+    transition: width 0.35s ease-out, background-color 0.35s;
+}
+.pg-fill.warn   { background: #d9a520; }
+.pg-fill.danger { background: #d24545; }
+/* Baseline tick: a vertical marker at the resting value */
+.pg-base {
+    position: absolute;
+    top: -2px; bottom: -2px;
+    width: 2px;
+    background: #cfcfcf;
+    opacity: 0.85;
+    transform: translateX(-1px);
+    pointer-events: none;
+}
+.pg-spark {
+    flex: 0 0 auto;
+    width: 88px;
+    height: 22px;
+    display: block;
+}
+.pg-spark polyline { fill: none; stroke: #5a9bd8; stroke-width: 1.2; }
+.pg-spark line { stroke: #444; stroke-width: 1; stroke-dasharray: 2 2; }
+/* Pathways tab holds the influence graph SVG at full width */
+#phys-pane-pathways .vg-hint {
+    font-size: 0.62rem; color: #666; margin: 0 0 8px;
+}
+
 /* === SCENARIO BRIEFING MODAL (v3.6) ===================================== */
 #scenario-briefing-modal {
     display: none;                    /* shown via JS */
@@ -2909,6 +3111,8 @@ input[type=range] {
         <!-- v4.16: PANEL moved from the far left into the right-hand button
              group, between SCENARIOS and ABOUT. -->
         <button id="brand-panel-btn" onclick="togglePanel()" title="Open/close panel">PANEL</button>
+        <!-- v4.20: PHYSIOLOGY button - opens the physiology dashboard modal -->
+        <button id="brand-phys-btn" onclick="togglePhysiologyModal()" title="Live physiology dashboard">PHYSIOLOGY</button>
         <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
         <button id="brand-about-btn" onclick="toggleAboutModal()" title="About / licence / disclaimer">ABOUT</button>
         <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">AUDIO ON</button>
@@ -2920,6 +3124,40 @@ input[type=range] {
 <!-- v3.7: floating exit button shown only in fullscreen-monitor mode -->
 <button id="fullscreen-exit" onclick="toggleFullscreenMonitor()"
         title="Exit full-screen" aria-label="Exit fullscreen">&times;</button>
+
+<!-- v4.20: Physiology dashboard modal - opens via the PHYSIOLOGY brand-bar button.
+     Gauges are built dynamically by buildPhysiologyGauges(); the Pathways tab
+     hosts the influence-graph SVG (relocated here from the old panel-vars tab). -->
+<div id="phys-modal-overlay" onclick="if(event.target.id==='phys-modal-overlay') togglePhysiologyModal()">
+    <div id="phys-modal">
+        <div id="phys-modal-head">
+            <div>
+                <h2>Physiology</h2>
+                <div class="sub">Underlying model state &mdash; the real variables driving the monitor. Updates live.</div>
+            </div>
+            <button id="phys-modal-close" onclick="togglePhysiologyModal()" title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div id="phys-tabs">
+            <button id="phys-tab-cv"       class="active" onclick="setPhysTab('cv')">Cardiovascular</button>
+            <button id="phys-tab-resp"                    onclick="setPhysTab('resp')">Respiratory</button>
+            <button id="phys-tab-neuro"                   onclick="setPhysTab('neuro')">Neuro / Autonomic</button>
+            <button id="phys-tab-pathways"                onclick="setPhysTab('pathways')">Pathways</button>
+        </div>
+        <div id="phys-body">
+            <div id="phys-pane-cv"    class="phys-pane active"><div class="phys-grid" id="phys-grid-cv"></div></div>
+            <div id="phys-pane-resp"  class="phys-pane"><div class="phys-grid" id="phys-grid-resp"></div></div>
+            <div id="phys-pane-neuro" class="phys-pane"><div class="phys-grid" id="phys-grid-neuro"></div></div>
+            <div id="phys-pane-pathways" class="phys-pane">
+                <p class="vg-hint">Directed influence map. Green = positive drive, red = negative. Edge thickness reflects how active each pathway is right now; dashed edges are baroreflex feedback.</p>
+                <svg id="vg-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 460"
+                     preserveAspectRatio="xMidYMin meet"
+                     style="width: 100%; height: auto; display: block;">
+                    <!-- Edges + nodes rendered dynamically by buildVariableGraph() -->
+                </svg>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- v3.52: About modal - opens via the ABOUT button in the brand bar -->
 <div id="about-modal-overlay" onclick="if(event.target.id==='about-modal-overlay') toggleAboutModal()">
@@ -3144,7 +3382,7 @@ input[type=range] {
              Default open = Setup. -->
         <button id="tab-config" class="active"   onclick="setPanelTab('config')">Setup</button>
         <button id="tab-events"                  onclick="setPanelTab('events')">Events</button>
-        <button id="tab-vars"                    onclick="setPanelTab('vars')">Physiology</button>
+        <!-- v4.20: "Physiology" tab removed - moved to the PHYSIOLOGY brand-bar modal. -->
         <button id="tab-god"                     onclick="setPanelTab('god')">Parameters</button>
         <button id="tab-log"                     onclick="setPanelTab('log')">Log</button>
     </div>
@@ -3419,20 +3657,9 @@ input[type=range] {
         <button id="log-clear" onclick="clearLog()">Clear log</button>
     </div>
 
-    <!-- ======= PHYSIOLOGY TAB (live variable graph) ======= -->
-    <div id="panel-vars" class="panel-content">
-        <div id="vg-header">
-            <div style="font-size: 0.75rem; color: #ccc; font-weight: 500;">Physiology variables</div>
-            <div style="font-size: 0.55rem; color: #666; margin-top: 2px;">
-                Green = positive influence, red = negative. Updates live.
-            </div>
-        </div>
-        <svg id="vg-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 460"
-             preserveAspectRatio="xMidYMin meet"
-             style="width: 100%; height: auto; display: block; margin-top: 8px;">
-            <!-- Edges + nodes rendered dynamically by buildVariableGraph() -->
-        </svg>
-    </div>
+    <!-- v4.20: Physiology tab relocated to the PHYSIOLOGY brand-bar modal.
+         The influence-graph SVG (id="vg-svg") now lives in that modal's
+         Pathways tab; buildVariableGraph()/updateVariableGraph() are unchanged. -->
 </div>
 
 <div id="monitor">
@@ -7260,7 +7487,8 @@ function pickScenario(key) {
 function setPanelTab(tab) {
     // Deactivate all tabs and content
     // v3.17: dropped 'pk' (merged into 'god' = Parameters)
-    ['events', 'config', 'log', 'god', 'vars'].forEach(t => {
+    // v4.20: 'vars' removed - Physiology is now the brand-bar modal.
+    ['events', 'config', 'log', 'god'].forEach(t => {
         const btn = document.getElementById('tab-' + t);
         const pane = document.getElementById('panel-' + t);
         if (btn) btn.classList.remove('active');
@@ -7271,9 +7499,6 @@ function setPanelTab(tab) {
     const pane = document.getElementById('panel-' + tab);
     if (btn) btn.classList.add('active');
     if (pane) pane.classList.add('active');
-    // If activating Variables, do an immediate value refresh so user doesn't
-    // see dashes for up to 250ms while waiting for the next interval tick.
-    if (tab === 'vars') updateVariableGraph();
 }
 
 /* "Log" shortcut: open panel to log tab */
@@ -9558,12 +9783,255 @@ function updateVariableGraph() {
     });
 }
 
-/* Start a throttled update loop. Only ticks the DOM while the Variables tab
-   is open; otherwise it's a no-op (check is cheap). 4 Hz is plenty for values
-   that otherwise move on a 10 Hz physiology tick. */
+/* =============================================================================
+   PHYSIOLOGY DASHBOARD MODAL (v4.20)
+   ---------------------------------------------------------------------------------
+   A full-screen dashboard of the genuine underlying-physiology variables (the
+   integrated model state), shown as labelled gauges grouped into tabs. Each
+   gauge is a horizontal track spanning the variable's physiological floor->
+   ceiling, with a baseline tick at the resting value, a colour-coded fill, a
+   live number, and a 60 s sparkline. The Pathways tab hosts the existing
+   influence graph.
+
+   Colour modes:
+     'alarm'   - true monitored vitals; amber/red from CONFIG.ALARMS thresholds
+     'ceiling' - saturating mechanism vars; amber/red as they approach the top
+                 of their range ("maxed out - no more headroom")
+     'floor'   - vars where dropping toward zero is the concern (e.g. resp drive)
+     'none'    - neutral accent fill; the baseline tick tells the story
+   ============================================================================= */
+
+/* Cardiac output (L/min) - mirrors the physiology tick's SV calc. */
+function physCardiacOutput() {
+    const svScale = Math.pow(state.profile.weight / PROFILES.adult.weight, 0.75);
+    const sv = state.patient.preload * state.patient.contractility * CONFIG.SV_BASE * svScale;
+    const rcf = (CONFIG.RHYTHM_CO_FACTOR[state.rhythm] !== undefined) ? CONFIG.RHYTHM_CO_FACTOR[state.rhythm] : 1.0;
+    return (state.hr * sv * rcf) / 1000;
+}
+
+/* Gauge groups. min/max/base may be numbers or functions (resolved live so
+   profile changes are reflected). All values are genuine category-A state. */
+const PHYS_GROUPS = {
+    cv: [
+        { section: 'Determinants' },
+        { key:'circVol',  label:'Circulating volume', unit:'L',   min:2,   max:8,
+          base:()=>state.profile.centralVol, get:()=>state.patient.centralVolume, fmt:v=>v.toFixed(2), colour:'none' },
+        { key:'preload',  label:'Preload',            unit:'',    min:0,   max:1.8,
+          base:()=>CONFIG.PRELOAD_BASELINE,  get:()=>state.patient.preload,       fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'contract', label:'Contractility',      unit:'',    min:()=>CONFIG.CONT_FLOOR, max:()=>CONFIG.CONT_CEILING,
+          base:()=>1.0,                      get:()=>state.patient.contractility, fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'svr',      label:'SVR tone',           unit:'',    min:()=>CONFIG.SVR_FLOOR,  max:()=>CONFIG.SVR_CEILING,
+          base:()=>1.0,                      get:()=>state.patient.svrTone,       fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'hr',       label:'Heart rate',         unit:'bpm', min:()=>CONFIG.HR_FLOOR,   max:()=>CONFIG.HR_CEILING,
+          base:()=>state.profile.hrBase,     get:()=>state.hr,                    fmt:v=>Math.round(v), colour:'alarm', alarm:'hr' },
+        { section: 'Outputs' },
+        { key:'map',      label:'MAP',                unit:'mmHg', min:30,  max:160,
+          base:()=>state.profile.mapTarget,  get:()=>calcMAP(state.sys, state.dia, state.hr), fmt:v=>Math.round(v), colour:'alarm', alarm:'map' },
+        { key:'co',       label:'Cardiac output',     unit:'L/min', min:0,  max:12,
+          base:()=>5.0,                      get:()=>physCardiacOutput(),         fmt:v=>v.toFixed(1), colour:'none' },
+    ],
+    resp: [
+        { section: 'Determinants' },
+        { key:'respDrive', label:'Respiratory drive', unit:'',    min:0,   max:1,
+          base:()=>1.0,                      get:()=>state.patient.respDrive,     fmt:v=>v.toFixed(2), colour:'floor' },
+        { key:'resistance', label:'Airway resistance', unit:'cmH₂O/L/s', min:5, max:100,
+          base:()=>5,                        get:()=>state.patient.bronchResistance, fmt:v=>Math.round(v), colour:'ceiling' },
+        { key:'lungVol',   label:'Lung volume',       unit:'mL',  min:0,   max:()=>state.profile.tlc,
+          base:()=>state.profile.frc,        get:()=>state.patient.lungVolume,    fmt:v=>Math.round(v), colour:'none' },
+        { key:'autoPEEP',  label:'Auto-PEEP',         unit:'cmH₂O', min:0, max:20,
+          base:()=>0,                        get:()=>state.patient.autoPEEP,      fmt:v=>v.toFixed(1), colour:'ceiling' },
+        { key:'fio2',      label:'Inspired O₂ (FiO₂)', unit:'',   min:0.21, max:1.0,
+          base:()=>0.21,                     get:()=>state.patient.fio2,          fmt:v=>v.toFixed(2), colour:'none' },
+        { section: 'Outputs' },
+        { key:'spo2',      label:'SpO₂',              unit:'%',   min:40,  max:100,
+          base:()=>98,                       get:()=>state.spo2,                  fmt:v=>Math.round(v), colour:'alarm', alarm:'spo2' },
+        { key:'etco2',     label:'End-tidal CO₂',     unit:'mmHg', min:0,  max:80,
+          base:()=>38,                       get:()=>state.etco2,                 fmt:v=>Math.round(v), colour:'alarm', alarm:'etco2' },
+        { key:'vt',        label:'Tidal volume',      unit:'mL',  min:0,   max:800,
+          base:()=>500,                      get:()=>state.tidalVolume,           fmt:v=>Math.round(v), colour:'alarm', alarm:'vt' },
+    ],
+    neuro: [
+        { section: 'Depth' },
+        { key:'consc',     label:'Level of consciousness', unit:'', min:0, max:100,
+          base:()=>98,                       get:()=>state.consciousness,         fmt:v=>Math.round(v), colour:'none' },
+        { key:'mac',       label:'MAC (volatile depth)', unit:'',  min:0,   max:3,
+          base:()=>0,                        get:()=>state.mac,                   fmt:v=>v.toFixed(2), colour:'none' },
+        { section: 'Autonomic tone' },
+        { key:'alpha',     label:'Alpha tone',        unit:'',    min:0,   max:1.5,
+          base:()=>CONFIG.ALPHA_REST,        get:()=>state.alphaTone,             fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'beta',      label:'Beta tone',         unit:'',    min:0,   max:1.5,
+          base:()=>CONFIG.BETA_REST,         get:()=>state.betaTone,              fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'parasymp',  label:'Parasympathetic tone', unit:'', min:0,   max:1.5,
+          base:()=>CONFIG.PARASYMP_REST,     get:()=>state.parasympTone,          fmt:v=>v.toFixed(2), colour:'ceiling' },
+        { key:'noci',      label:'Nociception',       unit:'',    min:0,   max:10,
+          base:()=>0,                        get:()=>state.nociception,           fmt:v=>v.toFixed(1), colour:'ceiling' },
+        { section: 'Neuromuscular' },
+        { key:'paralysis', label:'Paralysis',         unit:'',    min:0,   max:1,
+          base:()=>0,                        get:()=>state.patient.paralysis,     fmt:v=>v.toFixed(2), colour:'none' },
+        { key:'bbBlock',   label:'β-blockade fraction', unit:'',  min:0,   max:1,
+          base:()=>0,                        get:()=>state.bbBlockFraction,       fmt:v=>v.toFixed(2), colour:'none' },
+    ],
+};
+
+const physResolve = (x) => (typeof x === 'function' ? x() : x);
+
+let physBuilt = false;
+const physGauges = {};          // key -> { spec, numEl, fillEl, baseEl, sparkPoly, sparkBase }
+const physHistory = {};         // key -> number[] (last ~60s at 2 Hz)
+const PHYS_HISTORY_LEN = 120;
+
+/* Build gauge DOM once, into the three system grids. */
+function buildPhysiologyGauges() {
+    if (physBuilt) return;
+    Object.keys(PHYS_GROUPS).forEach(groupKey => {
+        const grid = document.getElementById('phys-grid-' + groupKey);
+        if (!grid) return;
+        PHYS_GROUPS[groupKey].forEach(item => {
+            if (item.section) {
+                const s = document.createElement('div');
+                s.className = 'phys-section-label';
+                s.textContent = item.section;
+                grid.appendChild(s);
+                return;
+            }
+            const g = document.createElement('div');
+            g.className = 'phys-gauge';
+            g.innerHTML =
+                `<div class="pg-top">
+                   <span class="pg-label">${item.label}</span>
+                   <span class="pg-val"><span class="pg-num">--</span>${item.unit ? `<span class="pg-unit">${item.unit}</span>` : ''}</span>
+                 </div>
+                 <div class="pg-row">
+                   <div class="pg-track"><div class="pg-fill"></div><div class="pg-base"></div></div>
+                   <svg class="pg-spark" viewBox="0 0 88 22" preserveAspectRatio="none">
+                     <line x1="0" x2="88" y1="11" y2="11"></line>
+                     <polyline points=""></polyline>
+                   </svg>
+                 </div>`;
+            grid.appendChild(g);
+            physGauges[item.key] = {
+                spec: item,
+                numEl: g.querySelector('.pg-num'),
+                fillEl: g.querySelector('.pg-fill'),
+                baseEl: g.querySelector('.pg-base'),
+                sparkPoly: g.querySelector('.pg-spark polyline'),
+                sparkBase: g.querySelector('.pg-spark line'),
+            };
+            physHistory[item.key] = [];
+        });
+    });
+    physBuilt = true;
+}
+
+/* Colour class for a gauge value. */
+function physStatus(spec, v, min, max) {
+    if (spec.colour === 'alarm') {
+        const a = CONFIG.ALARMS[spec.alarm];
+        if (!a) return '';
+        if ((a.highLow != null && v <= a.highLow) || (a.highHigh != null && v >= a.highHigh)) return 'danger';
+        if ((a.medLow  != null && v <= a.medLow)  || (a.medHigh  != null && v >= a.medHigh))  return 'warn';
+        return '';
+    }
+    const span = max - min;
+    if (span <= 0) return '';
+    const frac = (v - min) / span;   // 0 at floor, 1 at ceiling
+    if (spec.colour === 'ceiling') {
+        if (frac >= 0.90) return 'danger';
+        if (frac >= 0.75) return 'warn';
+    } else if (spec.colour === 'floor') {
+        if (frac <= 0.10) return 'danger';
+        if (frac <= 0.25) return 'warn';
+    }
+    return '';
+}
+
+/* Push one history sample per gauge. Always-on (cheap) so the sparklines
+   already show a trend the moment the modal is opened. */
+function samplePhysiologyHistory() {
+    Object.keys(physGauges).forEach(key => {
+        const spec = physGauges[key].spec;
+        let v;
+        try { v = spec.get(); } catch (e) { v = NaN; }
+        const arr = physHistory[key];
+        arr.push(v);
+        if (arr.length > PHYS_HISTORY_LEN) arr.shift();
+    });
+}
+
+/* Update the visible gauges (only called while the modal is open). */
+function updatePhysiologyGauges() {
+    Object.keys(physGauges).forEach(key => {
+        const g = physGauges[key];
+        const spec = g.spec;
+        const min = physResolve(spec.min), max = physResolve(spec.max), base = physResolve(spec.base);
+        let v;
+        try { v = spec.get(); } catch (e) { v = NaN; }
+        if (v === undefined || isNaN(v)) { g.numEl.textContent = '--'; return; }
+
+        g.numEl.textContent = spec.fmt(v);
+        const pct = clamp((v - min) / (max - min), 0, 1) * 100;
+        g.fillEl.style.width = pct.toFixed(1) + '%';
+        const status = physStatus(spec, v, min, max);
+        g.fillEl.classList.toggle('warn',   status === 'warn');
+        g.fillEl.classList.toggle('danger', status === 'danger');
+
+        const basePct = clamp((base - min) / (max - min), 0, 1) * 100;
+        g.baseEl.style.left = basePct.toFixed(1) + '%';
+
+        // Sparkline: fixed y-scale over [min,max], newest at right.
+        const arr = physHistory[key];
+        if (arr && arr.length > 1) {
+            const n = arr.length;
+            const pts = new Array(n);
+            for (let i = 0; i < n; i++) {
+                const x = (i / (n - 1)) * 88;
+                const y = 22 - clamp((arr[i] - min) / (max - min), 0, 1) * 20 - 1;
+                pts[i] = x.toFixed(1) + ',' + y.toFixed(1);
+            }
+            g.sparkPoly.setAttribute('points', pts.join(' '));
+        }
+        const baseY = 22 - clamp((base - min) / (max - min), 0, 1) * 20 - 1;
+        g.sparkBase.setAttribute('y1', baseY.toFixed(1));
+        g.sparkBase.setAttribute('y2', baseY.toFixed(1));
+    });
+}
+
+let physTab = 'cv';
+function setPhysTab(tab) {
+    physTab = tab;
+    ['cv', 'resp', 'neuro', 'pathways'].forEach(t => {
+        const btn  = document.getElementById('phys-tab-' + t);
+        const pane = document.getElementById('phys-pane-' + t);
+        if (btn)  btn.classList.toggle('active', t === tab);
+        if (pane) pane.classList.toggle('active', t === tab);
+    });
+    if (tab === 'pathways') updateVariableGraph();
+    else updatePhysiologyGauges();
+}
+
+function togglePhysiologyModal() {
+    const ov = document.getElementById('phys-modal-overlay');
+    if (!ov) return;
+    const opening = !ov.classList.contains('open');
+    ov.classList.toggle('open', opening);
+    document.getElementById('brand-phys-btn').classList.toggle('active', opening);
+    if (opening) {
+        buildPhysiologyGauges();
+        if (physTab === 'pathways') updateVariableGraph();
+        else updatePhysiologyGauges();
+    }
+}
+
+/* Always-on 2 Hz history sampler (keeps sparkline trends warm). */
+buildPhysiologyGauges();
+setInterval(samplePhysiologyHistory, 500);
+
+/* Live update loop: refresh whichever physiology view is open. 4 Hz. */
 setInterval(() => {
-    const pane = document.getElementById('panel-vars');
-    if (pane && pane.classList.contains('active')) updateVariableGraph();
+    const ov = document.getElementById('phys-modal-overlay');
+    if (!ov || !ov.classList.contains('open')) return;
+    if (physTab === 'pathways') updateVariableGraph();
+    else updatePhysiologyGauges();
 }, 250);
 
 function renderLog() {
