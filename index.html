@@ -51,6 +51,36 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.19  ("Tablet touch targets + infusion chips")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes.
+
+  1. Tablet-friendly buttons. Dose buttons get a modest base-size bump
+     (padding 4x8 -> 5x10, min-width 40 -> 44) plus touch-action:
+     manipulation everywhere (kills the double-tap zoom delay - matters
+     when re-dosing quickly) and no tap-highlight flash (the .dosing pulse
+     is the feedback). On coarse-pointer devices (tablets/phones) a
+     @media (pointer: coarse) block enlarges dose buttons to >=42px tall
+     and drug-deck tab buttons to >=40px, with wider gaps so adjacent
+     doses aren't mis-tapped.
+
+  2. Infusion chips in the delivery tray. Every running pump (rate > 0)
+     shows a persistent chip: drug name + rate + unit over an animated
+     flowing-stripe bar (continuous flow, vs the bolus chip's one-shot
+     fill). Chips appear/disappear as pumps start/stop - instantly via
+     setInf(), and via a 500ms poll to catch scenarios that set
+     state.machine.pumps directly and scenarioReset() zeroing them.
+     Bolus-chip eviction now only counts bolus chips, so a busy tray
+     never evicts a running infusion's chip.
+
+  Also fixes a latent logInf() bug: its name/unit maps only covered
+  prop/remi/metar, so adjusting noradrenaline, dobutamine or vasopressin
+  logged "undefined infusion -> ...". Both maps replaced by the shared
+  INF_META table, which covers all seven pump keys (incl. reserved dex).
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.18  ("Bolus delivery feedback")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes. Dose buttons previously gave no visual
@@ -1602,6 +1632,20 @@ body {
     /* width transition duration is set inline per-delivery by showDelivery() */
 }
 .delivery-chip.fluid .dc-fill { background: #1B7A8A; }
+/* v4.19: infusion chips - persistent while the pump runs. The bar is full
+   width with flowing stripes (continuous delivery) rather than the bolus
+   chip's one-shot linear fill. Created/removed by updateInfusionChips(). */
+.delivery-chip.infusion .dc-fill {
+    width: 100%;
+    background: repeating-linear-gradient(90deg,
+        var(--accent) 0px, var(--accent) 6px,
+        rgba(0, 123, 255, 0.30) 6px, rgba(0, 123, 255, 0.30) 12px);
+    animation: inf-flow 0.9s linear infinite;
+}
+@keyframes inf-flow {
+    from { background-position: 0 0; }
+    to   { background-position: 12px 0; }
+}
 /* v3.7: fullscreen toggle button in brand bar */
 #fullscreen-toggle {
     background: transparent;
@@ -1867,12 +1911,14 @@ h4 {
     background: #2e2e2e;
     border: 1px solid #4a4a4a;
     font-size: 0.66rem;
-    padding: 4px 8px;
+    padding: 5px 10px;    /* v4.19: 4x8 -> 5x10 for easier tapping */
     color: white;
     cursor: pointer;
     border-radius: 2px;
     transition: background 0.15s;
-    min-width: 40px;
+    min-width: 44px;      /* v4.19: 40 -> 44 */
+    /* v4.19: no grey tap flash on touch - the .dosing pulse is the feedback */
+    -webkit-tap-highlight-color: transparent;
 }
 .drug-row button:hover { background: #3a3a3a; border-color: #666; }
 /* v4.18: clicked dose button pulses while the bolus is delivered. Class is
@@ -1886,6 +1932,29 @@ h4 {
 @keyframes dose-pulse {
     0%, 100% { filter: brightness(1.35); }
     50%      { filter: brightness(0.75); }
+}
+
+/* v4.19: tablet friendliness. touch-action: manipulation kills the browser's
+   double-tap-to-zoom wait on all buttons - matters when re-dosing quickly.
+   On coarse-pointer devices (tablet/phone) enlarge the drug deck's touch
+   targets toward the ~44px guideline and widen gaps so adjacent dose
+   buttons aren't mis-tapped. Desktop density is unchanged. */
+button { touch-action: manipulation; }
+@media (pointer: coarse) {
+    .drug-grid { gap: 6px; }
+    .drug-row { font-size: 0.78rem; }
+    .drug-row .dose-btns { gap: 6px; }
+    .drug-row button {
+        min-height: 42px;
+        min-width: 56px;
+        font-size: 0.78rem;
+        padding: 8px 12px;
+    }
+    #tabs-container button {
+        min-height: 40px;
+        font-size: 0.75rem;
+        padding: 8px 6px;
+    }
 }
 
 /* === SLIDER ROWS =========================================================== */
@@ -6918,7 +6987,10 @@ function showDelivery(drug, dose, btn) {
     const tray = document.getElementById('delivery-tray');
     let chip = null;
     if (tray) {
-        while (tray.children.length >= 4) tray.removeChild(tray.firstChild);
+        // v4.19: only bolus chips count toward the cap - never evict a
+        // running infusion's chip to make room for a bolus.
+        const bolusChips = [...tray.querySelectorAll('.delivery-chip:not(.infusion)')];
+        while (bolusChips.length >= 4) bolusChips.shift().remove();
         chip = document.createElement('div');
         chip.className = 'delivery-chip' + (drug.type === 'flu' ? ' fluid' : '');
         const label = document.createElement('div');
@@ -6952,24 +7024,69 @@ function showDelivery(drug, dose, btn) {
     }, durMs);
 }
 
+/* v4.19: shared name/unit table for all pump keys. Replaces logInf's old
+   local maps, which only covered prop/remi/metar - adjusting nor/dobut/vaso
+   logged "undefined infusion -> ...". Also drives the infusion chips. */
+const INF_META = {
+    prop:  { name: 'Propofol',        unit: 'mg/kg/hr'   },
+    remi:  { name: 'Remifentanil',    unit: 'mcg/kg/min' },
+    dex:   { name: 'Dexmedetomidine', unit: 'mcg/kg/hr'  },  // reserved: PK exists, no UI slider yet
+    metar: { name: 'Metaraminol',     unit: 'mg/hr'      },
+    nor:   { name: 'Noradrenaline',   unit: 'mcg/kg/min' },
+    dobut: { name: 'Dobutamine',      unit: 'mcg/kg/min' },
+    vaso:  { name: 'Vasopressin',     unit: 'U/hr'       },
+};
+
 function setInf(d, v) {
     state.machine.pumps[d] = parseFloat(v);
     document.getElementById('v-' + d).innerText = v;
+    updateInfusionChips();   // v4.19: chip appears/updates as the slider moves
 }
 /* Called on slider release (onchange) - logs the final value */
 function logInf(d, v) {
-    const nameMap = {
-        prop:  'Propofol',
-        remi:  'Remifentanil',
-        metar: 'Metaraminol',
-    };
-    const unitMap = {
-        prop:  'mg/kg/hr',
-        remi:  'mcg/kg/min',
-        metar: 'mg/hr',
-    };
-    log(`${nameMap[d]} infusion -> ${parseFloat(v).toFixed(2)} ${unitMap[d]}`);
+    const m = INF_META[d] || { name: d, unit: '' };
+    log(`${m.name} infusion -> ${parseFloat(v).toFixed(2)} ${m.unit}`);
 }
+
+/* v4.19: persistent delivery-tray chips for running infusions. One chip per
+   pump with rate > 0: "Drug rate unit" over a flowing-stripe bar. Called
+   from setInf() for instant feedback, and polled every 500ms to catch
+   scenarios that write state.machine.pumps directly and scenarioReset()
+   zeroing the pumps - neither goes through setInf(). */
+function updateInfusionChips() {
+    const tray = document.getElementById('delivery-tray');
+    if (!tray) return;
+    Object.keys(state.machine.pumps).forEach(d => {
+        const rate = state.machine.pumps[d];
+        const meta = INF_META[d];
+        if (!meta) return;
+        let chip = document.getElementById('inf-chip-' + d);
+        if (rate > 0) {
+            if (!chip) {
+                chip = document.createElement('div');
+                chip.id = 'inf-chip-' + d;
+                chip.className = 'delivery-chip infusion';
+                const label = document.createElement('div');
+                label.className = 'dc-label';
+                const bar = document.createElement('div');
+                bar.className = 'dc-bar';
+                const fill = document.createElement('div');
+                fill.className = 'dc-fill';
+                bar.appendChild(fill);
+                chip.appendChild(label);
+                chip.appendChild(bar);
+                // Infusions sit ahead of transient bolus chips in the tray
+                tray.insertBefore(chip, tray.firstChild);
+            }
+            const digits = (rate < 1) ? 2 : 1;
+            chip.querySelector('.dc-label').innerText =
+                `${meta.name} ${rate.toFixed(digits)} ${meta.unit}`;
+        } else if (chip) {
+            chip.remove();
+        }
+    });
+}
+setInterval(updateInfusionChips, 500);
 
 /* =============================================================================
    SIDE PANEL CONTROL (tabbed: God Mode / Log / PK reference)
