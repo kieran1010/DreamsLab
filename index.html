@@ -51,6 +51,17 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.23  ("Move About into Start-here footer")
+  ---------------------------------------------------------------------------------
+  UI only. Declutters the brand bar further: the ABOUT button is removed from
+  the header and re-homed as an "About & licence" text link in the footer of
+  the START HERE orientation modal (next to "Skip for now"). Clicking it closes
+  Start-here and opens the existing About modal. No change to the About modal
+  itself. Header button group is now START HERE / SCENARIOS / PHYSIOLOGY / AUDIO.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.22  ("Rhythm chips, severity colours, retire PANEL button")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes. Builds on the v4.21 event chips.
@@ -2489,6 +2500,13 @@ input[type=range] {
 #sh-foot button.primary { background: #2a8060; border-color: #3aa777; color: #eafff5; font-weight: bold; }
 #sh-foot button:disabled { opacity: 0.3; cursor: default; }
 #sh-skip { background: none; border: none; color: #777; padding-left: 0; }
+/* v4.23: left-side footer group + About link (subtle text, styled like Skip) */
+#sh-foot .sh-foot-left { display: flex; align-items: center; gap: 16px; }
+#sh-foot #sh-about-link {
+    background: none; border: none; color: #777; padding: 0;
+    text-decoration: underline; font-size: 0.72rem; cursor: pointer;
+}
+#sh-foot #sh-about-link:hover { color: #aaa; }
 /* brand bar button - subtly highlighted so newcomers notice it */
 #brand-starthere-btn {
     padding: 4px 10px; font-size: 0.6rem;
@@ -3246,8 +3264,8 @@ input[type=range] {
              later rehoming of Setup/Parameters/Log. -->
         <!-- v4.20: PHYSIOLOGY button - opens the physiology dashboard modal -->
         <button id="brand-phys-btn" onclick="togglePhysiologyModal()" title="Live physiology dashboard">PHYSIOLOGY</button>
-        <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
-        <button id="brand-about-btn" onclick="toggleAboutModal()" title="About / licence / disclaimer">ABOUT</button>
+        <!-- v4.23: ABOUT button removed - re-homed as a link in the START HERE
+             modal footer (see #sh-about-link / shOpenAbout()). -->
         <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">AUDIO ON</button>
         <button id="fullscreen-toggle" onclick="toggleFullscreenMonitor()"
                 title="Toggle full-screen monitor view"
@@ -3441,7 +3459,11 @@ input[type=range] {
     </div>
 
     <div id="sh-foot">
-      <button id="sh-skip" onclick="toggleStartHere()">Skip for now</button>
+      <div class="sh-foot-left">
+        <button id="sh-skip" onclick="toggleStartHere()">Skip for now</button>
+        <!-- v4.23: About moved here from the brand bar -->
+        <button id="sh-about-link" onclick="shOpenAbout()">About &amp; licence</button>
+      </div>
       <div class="sh-nav-right">
         <button id="sh-back" onclick="shBack()">Back</button>
         <button id="sh-next" class="primary" onclick="shNext()">Next</button>
@@ -7497,6 +7519,12 @@ function shNext() {
     } else {
         shGoto(shStep + 1);
     }
+}
+/* v4.23: About link in the Start-here footer. Close Start-here, open About. */
+function shOpenAbout() {
+    const sh = document.getElementById('sh-overlay');
+    if (sh) sh.classList.remove('open');
+    toggleAboutModal();
 }
 function shBack() { shGoto(shStep - 1); }
 
