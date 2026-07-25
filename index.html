@@ -51,6 +51,32 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.18  ("Bolus delivery feedback")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. Dose buttons previously gave no visual
+  acknowledgement beyond a line in the event log, so it was easy to doubt
+  whether a click registered (and double-dose as a result).
+
+  1. Clicked dose button pulses in accent blue for the duration of the
+     "delivery" (class .dosing, removed when the delivery completes).
+     Rapid repeat clicks are ref-counted via data-dosing so the pulse
+     persists until the LAST delivery finishes.
+
+  2. New delivery tray in the centre of the brand bar (#delivery-tray).
+     Each bolus spawns a chip showing "Drug dose" above a progress bar
+     that fills linearly over the delivery time, then fades out. Up to 4
+     chips show at once (oldest evicted). Fluids fill in brand teal,
+     drugs in accent blue.
+
+  Delivery time is cosmetic (drug PK is unchanged - Cp still steps up
+  immediately): 5 s for drug boluses, 12 s for fluid bags, divided by
+  timeScale so time compression shortens it. Tissued-IV clicks show the
+  same feedback - the injection still visibly "goes in", matching the
+  deliberately subtle lowercase log line.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.11  ("Instant scenario reset")
   ---------------------------------------------------------------------------------
   scenarioReset() already cleared drugs, autonomic tones and events, but the
@@ -1524,6 +1550,58 @@ body {
     color: #666;
     letter-spacing: 0.3px;
 }
+/* v4.18: delivery tray - chips appear here while a bolus is "going in".
+   Sits between the brand lockup and the right-hand button group; flex:1 +
+   min-width:0 lets it absorb spare bar width and truncate rather than
+   pushing the buttons off-screen when several chips are active. */
+#delivery-tray {
+    flex: 1 1 auto;
+    min-width: 0;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 10px;
+    overflow: hidden;
+}
+.delivery-chip {
+    flex: 0 1 auto;
+    min-width: 90px;
+    max-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: rgba(20, 32, 44, 0.9);
+    border: 1px solid var(--accent-muted);
+    border-radius: 3px;
+    padding: 3px 8px;
+    opacity: 1;
+    transition: opacity 0.4s;
+}
+.delivery-chip.done { opacity: 0; }
+.delivery-chip .dc-label {
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    color: #cfe2f5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.delivery-chip .dc-bar {
+    height: 3px;
+    background: #1a2530;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.delivery-chip .dc-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 2px;
+    /* width transition duration is set inline per-delivery by showDelivery() */
+}
+.delivery-chip.fluid .dc-fill { background: #1B7A8A; }
 /* v3.7: fullscreen toggle button in brand bar */
 #fullscreen-toggle {
     background: transparent;
@@ -1797,6 +1875,18 @@ h4 {
     min-width: 40px;
 }
 .drug-row button:hover { background: #3a3a3a; border-color: #666; }
+/* v4.18: clicked dose button pulses while the bolus is delivered. Class is
+   added/removed by showDelivery(); ref-counted via data-dosing so rapid
+   repeat clicks keep pulsing until the last delivery finishes. */
+.drug-row button.dosing {
+    background: var(--accent);
+    border-color: var(--accent);
+    animation: dose-pulse 0.8s ease-in-out infinite;
+}
+@keyframes dose-pulse {
+    0%, 100% { filter: brightness(1.35); }
+    50%      { filter: brightness(0.75); }
+}
 
 /* === SLIDER ROWS =========================================================== */
 .slider-row {
@@ -2737,6 +2827,8 @@ input[type=range] {
         <span class="brand-divider"></span>
         <span class="brand-product">Synapse</span>
     </a>
+    <!-- v4.18: bolus delivery chips (drug name + progress bar) appear here -->
+    <div id="delivery-tray"></div>
     <!-- v3.64: align-items changed from center to baseline so the small
          "Dr Kieran Gillick" text baseline-aligns with "Dreams Lab" rather
          than appearing optically high due to the font-size mismatch. -->
@@ -6729,7 +6821,7 @@ function setDrugTab(cls) {
         drug.doses.forEach(dose => {
             const b = document.createElement('button');
             b.innerText = dose.label;
-            b.onclick = () => giveBolus(drug, dose);
+            b.onclick = () => giveBolus(drug, dose, b);  // v4.18: pass btn for click feedback
             btnGroup.appendChild(b);
         });
         row.appendChild(btnGroup);
@@ -6744,12 +6836,15 @@ function setDrugTab(cls) {
      - 'flu' (fluid) goes into fluidBuffer instead
      - 'neoglyco' is combined: gives neostigmine AND glycopyrrolate
      - drugs without PK entries (still a few) are just logged */
-function giveBolus(drug, dose) {
+function giveBolus(drug, dose, btn) {
     const t = drug.type;
     // IV tissued: drug goes to subcutaneous sink, never reaches plasma.
     // Log with lowercase "tissuing:" so it's visible but less alarming than GIVEN.
+    // v4.18: still show delivery feedback - the injection visibly "goes in",
+    // it just doesn't reach plasma. Keeps the tissued IV as subtle as its log line.
     if (state.events.ivTissued) {
         log(`tissuing: ${drug.name} ${dose.label}`);
+        showDelivery(drug, dose, btn);
         return;
     }
     if (t === 'flu') {
@@ -6770,6 +6865,7 @@ function giveBolus(drug, dose) {
         state.patient[t + 'Cp'] += dose.d / effVd;
     }
     log(`GIVEN: ${drug.name} ${dose.label}`);
+    showDelivery(drug, dose, btn);  // v4.18: button pulse + brand-bar chip
 
     /* --- Resuscitation hooks (adrenaline during arrest or anaphylaxis) --- */
     if (t === 'adr') {
@@ -6800,6 +6896,60 @@ function giveBolus(drug, dose) {
             log(`Anaphylaxis: timer advanced to ${newTimer.toFixed(0)}s from adrenaline`);
         }
     }
+}
+
+/* v4.18: visual feedback that a bolus is being delivered.
+   Two parts, both purely cosmetic (PK is unchanged - Cp steps up at click):
+     1. The clicked dose button gets .dosing (accent pulse) for the delivery
+        time. data-dosing ref-counts overlapping deliveries from rapid repeat
+        clicks so the pulse only stops when the LAST one finishes.
+     2. A chip in the brand-bar delivery tray shows "Drug dose" over a
+        progress bar that fills linearly, then fades out.
+   Delivery time: fluids 12s (a bag going in), everything else 5s (a push),
+   divided by timeScale so time compression shortens it to match. */
+function showDelivery(drug, dose, btn) {
+    const durMs = ((drug.type === 'flu') ? 12000 : 5000) / state.timeScale;
+
+    if (btn) {
+        btn.dataset.dosing = (parseInt(btn.dataset.dosing || '0', 10) + 1);
+        btn.classList.add('dosing');
+    }
+
+    const tray = document.getElementById('delivery-tray');
+    let chip = null;
+    if (tray) {
+        while (tray.children.length >= 4) tray.removeChild(tray.firstChild);
+        chip = document.createElement('div');
+        chip.className = 'delivery-chip' + (drug.type === 'flu' ? ' fluid' : '');
+        const label = document.createElement('div');
+        label.className = 'dc-label';
+        label.innerText = `${drug.name} ${dose.label}`;
+        const bar = document.createElement('div');
+        bar.className = 'dc-bar';
+        const fill = document.createElement('div');
+        fill.className = 'dc-fill';
+        bar.appendChild(fill);
+        chip.appendChild(label);
+        chip.appendChild(bar);
+        tray.appendChild(chip);
+        // Two frames so the width:0 start is committed before the transition
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            fill.style.transition = `width ${durMs}ms linear`;
+            fill.style.width = '100%';
+        }));
+    }
+
+    setTimeout(() => {
+        if (btn) {
+            const n = parseInt(btn.dataset.dosing || '1', 10) - 1;
+            btn.dataset.dosing = n;
+            if (n <= 0) btn.classList.remove('dosing');
+        }
+        if (chip) {
+            chip.classList.add('done');            // opacity fade (0.4s CSS)
+            setTimeout(() => chip.remove(), 450);
+        }
+    }, durMs);
 }
 
 function setInf(d, v) {
