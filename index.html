@@ -51,6 +51,35 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.22  ("Rhythm chips, severity colours, retire PANEL button")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. Builds on the v4.21 event chips.
+
+  1. Rhythm chips. A non-sinus cardiac rhythm now shows a chip alongside the
+     event chips (label = rhythm name). Two-click disable reverts to sinus via
+     the existing setRhythm('sinus'). The chip is inserted at the front of the
+     tray for prominence and updates its label live if the rhythm changes.
+
+  2. Severity colours. Chips are now colour-graded by a data-sev attribute
+     (yellow -> orange -> red) instead of only red:
+       - Haemorrhage chip now reads just "Haemorrhage" (severity dropped from
+         the label) and instead encodes severity by colour: slow=yellow,
+         moderate=orange, severe=red.
+       - Rhythm chips: arrest rhythms (VF/VT-pulseless/asystole) red; other
+         non-sinus rhythms orange.
+       - All other events stay red.
+     data-sev + label are refreshed on the live poll, so a bleed that escalates
+     or a rhythm that changes recolours/relabels in place.
+
+  3. Retired the PANEL button. With active events + rhythm now surfaced in the
+     header and physiology in its own modal, the left pop-out no longer needs a
+     header trigger. The button is removed; the panel DOM stays (unreachable)
+     so the Setup/Parameters/Log content can be rehomed later. togglePanel()
+     is left defined and null-guarded but is now unused.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.21  ("Active-event chips in the header")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes. First step toward retiring the left Panel:
@@ -1721,6 +1750,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    /* default (data-sev="red") appearance; other severities override below */
     background: rgba(120,28,28,0.9);
     border: 1px solid #b45;
     color: #ffdede;
@@ -1739,7 +1769,11 @@ body {
     transition: background-color 0.2s, border-color 0.2s;
 }
 .event-chip:hover { filter: brightness(1.12); }
-/* Pulsing status dot marks a live event */
+/* v4.22: severity grading (yellow -> orange -> red) */
+.event-chip[data-sev="yellow"] { background: rgba(140,112,16,0.9); border-color: #d8b020; color: #fff6d8; }
+.event-chip[data-sev="orange"] { background: rgba(148,78,16,0.9);  border-color: #e08624; color: #ffe6d0; }
+.event-chip[data-sev="red"]    { background: rgba(120,28,28,0.9);  border-color: #b45;    color: #ffdede; }
+/* Pulsing status dot marks a live event; dot colour follows severity */
 .event-chip .ec-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
@@ -1747,9 +1781,12 @@ body {
     flex: 0 0 auto;
     animation: event-dot-pulse 1.6s ease-in-out infinite;
 }
+.event-chip[data-sev="yellow"] .ec-dot { background: #ffd84d; }
+.event-chip[data-sev="orange"] .ec-dot { background: #ff9d4d; }
+.event-chip[data-sev="red"]    .ec-dot { background: #ff6b6b; }
 @keyframes event-dot-pulse {
-    0%, 100% { opacity: 1;   box-shadow: 0 0 4px #ff6b6b; }
-    50%      { opacity: 0.35; box-shadow: 0 0 0 #ff6b6b; }
+    0%, 100% { opacity: 1;   box-shadow: 0 0 4px currentColor; }
+    50%      { opacity: 0.35; box-shadow: 0 0 0 currentColor; }
 }
 /* Confirm state: amber, "Disable? " prompt, dot becomes an ✕ glyph */
 .event-chip[data-state="confirm"] {
@@ -3203,7 +3240,10 @@ input[type=range] {
         <button id="brand-scenarios-btn" onclick="toggleScenariosModal()" title="Scenarios">SCENARIOS</button>
         <!-- v4.16: PANEL moved from the far left into the right-hand button
              group, between SCENARIOS and ABOUT. -->
-        <button id="brand-panel-btn" onclick="togglePanel()" title="Open/close panel">PANEL</button>
+        <!-- v4.22: PANEL button retired - events/rhythm now surface as header
+             chips and physiology has its own modal, so the left pop-out no
+             longer needs a header trigger. Panel DOM kept (unreachable) for
+             later rehoming of Setup/Parameters/Log. -->
         <!-- v4.20: PHYSIOLOGY button - opens the physiology dashboard modal -->
         <button id="brand-phys-btn" onclick="togglePhysiologyModal()" title="Live physiology dashboard">PHYSIOLOGY</button>
         <!-- v3.52: about button - opens modal with version, licence, disclaimer -->
@@ -7415,9 +7455,12 @@ setInterval(updateInfusionChips, 500);
 /* Open/close the left pop-out panel */
 function togglePanel() {
     const p = document.getElementById('left-panel');
+    if (!p) return;
     const isOpen = p.classList.toggle('open');
     // v4.17: PANEL button only lights up accent-blue while the panel is open.
-    document.getElementById('brand-panel-btn').classList.toggle('active', isOpen);
+    // v4.22: button retired - guard its absence (togglePanel is now unused).
+    const pb = document.getElementById('brand-panel-btn');
+    if (pb) pb.classList.toggle('active', isOpen);
     // The panel's width transition is 0.3s. Fire resize events a few times so
     // the canvas reflows as the container width animates (prevents the trace
     // looking squished until the transition completes).
@@ -9216,20 +9259,48 @@ const EVENT_LABELS = {
     last:'LA toxicity',
 };
 
+/* v4.22: shared rhythm labels (also used by setRhythm). */
+const RHYTHM_LABELS = {
+    sinus: 'Sinus rhythm', svt: 'SVT (180)', af: 'Atrial fibrillation',
+    vtPulse: 'VT with pulse', vtPulseless: 'VT pulseless',
+    vf: 'Ventricular fibrillation', asystole: 'Asystole', chb: 'Complete heart block',
+};
+const ARREST_RHYTHMS = ['vtPulseless', 'vf', 'asystole'];
+
 function eventChipLabel(key) {
-    let label = EVENT_LABELS[key] || key;
-    if (key === 'bleed' && state.bleedSeverity) label += ' (' + state.bleedSeverity + ')';
-    return label;
+    // v4.22: 'rhythm' is a pseudo-key for the non-sinus cardiac rhythm.
+    // Haemorrhage no longer carries its severity in the label - colour shows it.
+    if (key === 'rhythm') return RHYTHM_LABELS[state.rhythm] || state.rhythm;
+    return EVENT_LABELS[key] || key;
 }
 
-/* Keys of currently-active events, in a stable order. */
+/* v4.22: chip severity colour: 'yellow' | 'orange' | 'red'. */
+function chipSeverity(key) {
+    if (key === 'bleed') {
+        return { slow: 'yellow', moderate: 'orange', severe: 'red' }[state.bleedSeverity] || 'red';
+    }
+    if (key === 'rhythm') {
+        return ARREST_RHYTHMS.includes(state.rhythm) ? 'red' : 'orange';
+    }
+    return 'red';
+}
+
+/* Keys of everything to surface as a chip: active events + a non-sinus rhythm.
+   Rhythm is prepended so it sits at the front of the tray. */
 function getActiveEventKeys() {
-    return Object.keys(state.events).filter(k => state.events[k]);
+    const keys = Object.keys(state.events).filter(k => state.events[k]);
+    if (state.rhythm && state.rhythm !== 'sinus') keys.unshift('rhythm');
+    return keys;
 }
 
-/* Disable a single active event: flip the flag via the existing off-paths and
-   clear the event's associated timer/accumulator so it actually stops. */
+/* Disable a single active chip: flip the flag via the existing off-paths and
+   clear the associated timer/accumulator so it actually stops. */
 function disableEvent(key) {
+    if (key === 'rhythm') {
+        setRhythm('sinus');
+        updateEventChips();
+        return;
+    }
     if (key === 'bleed') {
         if (state.bleedSeverity) setBleed(state.bleedSeverity);   // toggles bleed off
         return;
@@ -9284,6 +9355,7 @@ function createEventChip(key) {
     chip.className = 'event-chip';
     chip.dataset.event = key;
     chip.dataset.state = 'active';
+    chip.dataset.sev = chipSeverity(key);
     chip.title = 'Click to disable';
     chip.innerHTML = `<span class="ec-dot"></span><span class="ec-text">${eventChipLabel(key)}</span>`;
     chip.onclick = () => onEventChipClick(chip, key);
@@ -9291,13 +9363,14 @@ function createEventChip(key) {
 }
 
 /* Incremental render: add chips for new events, remove chips for cleared ones,
-   refresh labels on existing (active-state) chips. Chips mid-confirm are left
-   untouched so a poll can't wipe the confirmation prompt. */
+   refresh label + severity colour on existing (active-state) chips. Chips
+   mid-confirm are left untouched so a poll can't wipe the confirmation prompt.
+   The rhythm chip is inserted at the front of the tray for prominence. */
 function updateEventChips() {
     const tray = document.getElementById('event-tray');
     if (!tray) return;
     const active = getActiveEventKeys();
-    // Remove chips whose event is no longer active
+    // Remove chips whose event/rhythm is no longer active
     [...tray.children].forEach(chip => {
         if (!active.includes(chip.dataset.event)) {
             if (chip._revertTimer) clearTimeout(chip._revertTimer);
@@ -9308,11 +9381,16 @@ function updateEventChips() {
     active.forEach(key => {
         let chip = tray.querySelector(`.event-chip[data-event="${key}"]`);
         if (!chip) {
-            tray.appendChild(createEventChip(key));
+            chip = createEventChip(key);
+            if (key === 'rhythm') tray.insertBefore(chip, tray.firstChild);
+            else tray.appendChild(chip);
         } else if (chip.dataset.state === 'active') {
+            // Refresh label (rhythm change) and severity colour (bleed escalation)
             const txt = chip.querySelector('.ec-text');
             const label = eventChipLabel(key);
-            if (txt.textContent !== label) txt.textContent = label;   // e.g. bleed severity change
+            if (txt.textContent !== label) txt.textContent = label;
+            const sev = chipSeverity(key);
+            if (chip.dataset.sev !== sev) chip.dataset.sev = sev;
         }
     });
 }
@@ -9371,12 +9449,8 @@ function setRhythm(r) {
         const btn = document.getElementById('rh-' + key);
         if (btn) btn.classList.toggle('active', state.rhythm === key);
     });
-    const labelMap = {
-        sinus: 'Sinus rhythm', svt: 'SVT (180)', af: 'Atrial fibrillation',
-        vtPulse: 'VT with pulse', vtPulseless: 'VT pulseless',
-        vf: 'Ventricular fibrillation', asystole: 'Asystole', chb: 'Complete heart block'
-    };
-    log(`RHYTHM: ${labelMap[r] || r}`);
+    log(`RHYTHM: ${RHYTHM_LABELS[r] || r}`);
+    if (typeof updateEventChips === 'function') updateEventChips();   // v4.22: rhythm chip
 }
 
 /* =============================================================================
