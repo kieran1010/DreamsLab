@@ -51,6 +51,18 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.24  ("Physiology Neuro tab tidy-up")
+  ---------------------------------------------------------------------------------
+  UI only. Reorganises the Physiology modal's Neuro / Autonomic tab:
+    - Removed the MAC gauge.
+    - β-blockade fraction moved up into the "Autonomic tone" section.
+    - Level of consciousness, nociception and paralysis are now grouped in a
+      single section ("Depth, nociception & paralysis"); the old "Depth" and
+      "Neuromuscular" sections are gone.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.23  ("Move About into Start-here footer")
   ---------------------------------------------------------------------------------
   UI only. Declutters the brand bar further: the ABOUT button is removed from
@@ -10169,11 +10181,15 @@ const PHYS_GROUPS = {
           base:()=>500,                      get:()=>state.tidalVolume,           fmt:v=>Math.round(v), colour:'alarm', alarm:'vt' },
     ],
     neuro: [
-        { section: 'Depth' },
+        // v4.24: MAC removed; consciousness / nociception / paralysis grouped
+        // together; β-blockade fraction moved up into Autonomic tone.
+        { section: 'Depth, nociception & paralysis' },
         { key:'consc',     label:'Level of consciousness', unit:'', min:0, max:100,
           base:()=>98,                       get:()=>state.consciousness,         fmt:v=>Math.round(v), colour:'none' },
-        { key:'mac',       label:'MAC (volatile depth)', unit:'',  min:0,   max:3,
-          base:()=>0,                        get:()=>state.mac,                   fmt:v=>v.toFixed(2), colour:'none' },
+        { key:'noci',      label:'Nociception',       unit:'',    min:0,   max:10,
+          base:()=>0,                        get:()=>state.nociception,           fmt:v=>v.toFixed(1), colour:'ceiling' },
+        { key:'paralysis', label:'Paralysis',         unit:'',    min:0,   max:1,
+          base:()=>0,                        get:()=>state.patient.paralysis,     fmt:v=>v.toFixed(2), colour:'none' },
         { section: 'Autonomic tone' },
         { key:'alpha',     label:'Alpha tone',        unit:'',    min:0,   max:1.5,
           base:()=>CONFIG.ALPHA_REST,        get:()=>state.alphaTone,             fmt:v=>v.toFixed(2), colour:'ceiling' },
@@ -10181,11 +10197,6 @@ const PHYS_GROUPS = {
           base:()=>CONFIG.BETA_REST,         get:()=>state.betaTone,              fmt:v=>v.toFixed(2), colour:'ceiling' },
         { key:'parasymp',  label:'Parasympathetic tone', unit:'', min:0,   max:1.5,
           base:()=>CONFIG.PARASYMP_REST,     get:()=>state.parasympTone,          fmt:v=>v.toFixed(2), colour:'ceiling' },
-        { key:'noci',      label:'Nociception',       unit:'',    min:0,   max:10,
-          base:()=>0,                        get:()=>state.nociception,           fmt:v=>v.toFixed(1), colour:'ceiling' },
-        { section: 'Neuromuscular' },
-        { key:'paralysis', label:'Paralysis',         unit:'',    min:0,   max:1,
-          base:()=>0,                        get:()=>state.patient.paralysis,     fmt:v=>v.toFixed(2), colour:'none' },
         { key:'bbBlock',   label:'β-blockade fraction', unit:'',  min:0,   max:1,
           base:()=>0,                        get:()=>state.bbBlockFraction,       fmt:v=>v.toFixed(2), colour:'none' },
     ],
