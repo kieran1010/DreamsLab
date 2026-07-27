@@ -51,6 +51,31 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.28  ("Fix waveform jitter when heart rate changes")
+  ---------------------------------------------------------------------------------
+  Bug fix. Giving esmolol to the intraoperative-MI patient (or any large HR
+  change) made all the beat-driven traces (ECG, pleth, ART) jitter until the
+  HR settled.
+
+  Cause: the beat phase pr was computed positionally as (xF % pxBeat)/pxBeat,
+  with pxBeat = pixels-per-beat from the live HR. state.hr is updated by the
+  10 Hz physics tick, so the render (60 fps) sees it as a 100 ms staircase. Each
+  HR step changed pxBeat and nudged pr slightly BACKWARD, redrawing the PQRST/
+  pleth/ART a few % of a beat in reverse. A fast, large HR change - esmolol on
+  the ischaemia patient drops HR ~102->58 in a few seconds, the sim's steepest -
+  did this ~20 times, reading as all traces jittering until HR settled. Same
+  class of bug v3.86 fixed for the breath phase.
+
+  Fix: pr is now a time-accumulated phase (ecgBeatPhase, advanced by
+  frameDt / beatCycle each frame and wrapped at 1), exactly like spontPhase for
+  breaths. It only ever advances, so a changing HR retimes the beat smoothly
+  with no backward steps. On-screen beat spacing at steady HR is unchanged.
+  Verified with a faithful staircase-HR render sim: old formula = 22 backward
+  pr steps over the transition, new formula = 0.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.27  ("Eye-opening event auto-resolves on deepening")
   ---------------------------------------------------------------------------------
   Bug fix. The eye-opening awareness event had no self-limiting timer (unlike
@@ -5185,6 +5210,9 @@ let lastY = { ecg: 0, pleth: 0, art: 0, pressure: 0, flow: 0, co2: 0 };
 // v3.86: logical canvas size (CSS px) for DPR-correct rendering; wall-clock anchor
 // for time-based sweep; accumulated spontaneous breath phase (rate-change safe).
 let cssW = 0, cssH = 0, lastFrameMs = 0, spontPhase = 0;
+// v4.28: accumulated ECG/pleth/ART beat phase (0..1). Time-based like spontPhase
+// so a changing HR retimes the beat smoothly instead of jumping (see animate()).
+let ecgBeatPhase = 0;
 // v4.5: previous slow-sweep position, used for quadratic bezier midpoint smoothing
 // of pressure/flow/CO2 traces. Reset to 0 on sweep wrap.
 let prevXS = 0, prevSY = { pressure: 0, flow: 0, co2: 0 };
@@ -6768,8 +6796,20 @@ function animate() {
     // CHB: draw P waves on a separate timer at ~75/min
     let beatHR = state.hr;
     if (beatHR < 1) beatHR = 1;  // avoid division by zero for asystole/VF
-    let pxBeat = CONFIG.SWEEP_FAST / (beatHR / 60);
-    let pr = (xF % pxBeat) / pxBeat;
+    // v4.28: accumulate the beat phase from elapsed time (like spontPhase for
+    // breaths), rather than the old position-based (xF % pxBeat)/pxBeat.
+    // state.hr is refreshed by the 10 Hz physics tick, so the render sees it as
+    // a 100 ms staircase. With the position-based phase, each HR step changed
+    // pxBeat and nudged pr BACKWARD by a few % of a beat, so the whole PQRST/
+    // pleth/ART redrew slightly retrograde. During a fast, large HR change
+    // (esmolol on the ischaemia scenario drops HR ~102->58 in a few seconds -
+    // the sim's steepest) that happened ~20 times, reading as all traces
+    // jittering until HR settled. A time-accumulated phase only ever advances,
+    // so it retimes smoothly with no backward steps. At steady HR the on-screen
+    // spacing is unchanged (SWEEP_FAST * 60 / HR px per beat).
+    const _beatCycleS = 60 / beatHR;
+    ecgBeatPhase = (ecgBeatPhase + frameDt / _beatCycleS) % 1;
+    let pr = ecgBeatPhase;
 
     // AF: use a jittered-interval timer rather than fixed pxBeat
     if (state.rhythm === 'af') {
