@@ -1,0 +1,417 @@
+/* =============================================================================
+   PROBES  --  targeted regression checks for the July 2026 audit findings
+   -----------------------------------------------------------------------------
+   Where sweep.js/scan.js look for anomalies broadly, this file pins down one
+   specific behaviour per known finding and states what it should be once fixed.
+   Each probe isolates a single variable so the result is unambiguous.
+
+   Every probe currently reports FAIL -- they encode bugs that have not been
+   fixed yet. As each is addressed the corresponding probe should flip to PASS,
+   which makes this the checklist for the audit.
+
+       node tools/probes.js            # run all, always exits 0
+       node tools/probes.js F4         # run one probe
+       DL_STRICT=1 node tools/probes.js   # exit 1 if any probe fails (for CI)
+
+   Findings are numbered as in the audit report.
+   ============================================================================= */
+'use strict';
+
+const { boot, resolve, give } = require('./harness');
+
+/* -----------------------------------------------------------------------------
+   tiny check framework
+   -------------------------------------------------------------------------- */
+const results = [];
+let current = null;
+
+function probe(id, title, fn) {
+    const only = process.argv[2];
+    if (only && only.toUpperCase() !== id) return;
+    current = { id, title, checks: [] };
+    results.push(current);
+    console.log('\n' + '='.repeat(78));
+    console.log(`${id}  ${title}`);
+    console.log('='.repeat(78));
+    fn();
+}
+
+/** Record one assertion. `pass` true means the bug is fixed. */
+function expect(pass, label, measured, expected) {
+    current.checks.push({ pass, label });
+    console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${label}`);
+    console.log(`         measured: ${measured}`);
+    console.log(`         expected: ${expected}`);
+}
+
+/** Print a free-form evidence block. */
+const note = s => console.log(s.split('\n').map(l => '         ' + l).join('\n'));
+
+const mapOf = dl => dl.calcMAP(dl.state.sys, dl.state.dia, dl.state.hr);
+
+/* =============================================================================
+   F1  surgical stimulus decays because setups do not set nociceptionTarget
+   ========================================================================== */
+probe('F1', 'Scenario stimulus survives loading', () => {
+    const mismatched = [];
+    const keys = Object.keys(boot().dl.SCENARIOS);
+    for (const key of keys) {
+        const sim = boot();
+        sim.dl.loadScenario(key);
+        const noci = sim.dl.state.nociception;
+        const target = sim.dl.state.nociceptionTarget;
+        sim.advance(30000);
+        if (Math.abs(noci - target) > 0.01) {
+            mismatched.push({ key, noci, target, after: sim.dl.state.nociception });
+        }
+    }
+    expect(mismatched.length === 0,
+        'every scenario keeps the stimulus it sets',
+        `${mismatched.length}/${keys.length} scenarios lose it: ` +
+            mismatched.slice(0, 5).map(m => `${m.key}(${m.noci}->${m.after.toFixed(2)})`).join(', ') +
+            (mismatched.length > 5 ? ', ...' : ''),
+        'nociceptionTarget == nociception after setup(), in all scenarios');
+    if (mismatched.length) {
+        note('setups assign state.nociception but not state.nociceptionTarget;\n' +
+             'the tick eases toward the target (TAU_NOCI 2.5 s) which reset just zeroed.\n' +
+             'Fix once in loadScenario(): state.nociceptionTarget = state.nociception');
+    }
+});
+
+/* =============================================================================
+   F2  opioid cover swamps the whole 0-10 stimulus scale
+   ========================================================================== */
+probe('F2', 'Surgical stimulus produces a haemodynamic response', () => {
+    const rows = [];
+    [0, 2, 4, 6, 8, 10].forEach(n => {
+        const sim = boot();
+        sim.dl.loadScenario('maintenance');
+        sim.dl.setNoci(n);
+        sim.advance(180000);
+        rows.push({ n, cover: sim.dl.state.analgesiaCover, eff: sim.dl.state.effectiveStimulus,
+                    hr: sim.dl.state.hr, map: mapOf(sim.dl) });
+    });
+    note('maintenance scenario, sweeping the header Stimulus slider:\n' +
+         'noci  cover  effStim    HR   MAP\n' +
+         rows.map(r => `${String(r.n).padStart(4)}${r.cover.toFixed(2).padStart(7)}` +
+             `${r.eff.toFixed(2).padStart(9)}${r.hr.toFixed(0).padStart(6)}${r.map.toFixed(0).padStart(6)}`).join('\n'));
+
+    const dead = rows.filter(r => r.n > 0 && r.eff < 0.05).length;
+    expect(dead === 0,
+        'a routine opioid regimen does not null out the stimulus scale',
+        `${dead} of 5 non-zero slider positions produce zero effective stimulus ` +
+            `(cover ${rows[0].cover.toFixed(2)} on a 0-10 scale)`,
+        'every non-zero stimulus produces some effective stimulus');
+
+    /* Which scenarios stay masked even once F1 is fixed. */
+    const masked = [];
+    Object.keys(boot().dl.SCENARIOS).forEach(key => {
+        const sim = boot();
+        sim.dl.loadScenario(key);
+        const intended = sim.dl.state.nociception;
+        sim.dl.state.nociceptionTarget = intended;      // apply the F1 fix
+        sim.advance(120000);
+        if (intended > 0 && sim.dl.state.effectiveStimulus < 0.05) masked.push(key);
+    });
+    expect(masked.length === 0,
+        'no scenario is fully masked once F1 is fixed',
+        `${masked.length} still masked: ${masked.join(', ')}`,
+        'none');
+});
+
+/* =============================================================================
+   F3  the LAST scenario self-cancels before it can progress
+   ========================================================================== */
+probe('F3', 'LAST progresses to an arrest rhythm', () => {
+    const sim = boot();
+    const s = sim.dl.state;
+    sim.dl.loadScenario('last');
+    const seen = new Set([s.rhythm]);
+    const marks = [];
+    [10, 29, 30, 31, 60, 120, 300].forEach((t, i, arr) => {
+        sim.advance((t - (i ? arr[i - 1] : 0)) * 1000);
+        seen.add(s.rhythm);
+        marks.push(`${String(t).padStart(4)}s  events.last=${String(s.events.last).padEnd(5)} ` +
+                   `lastTimer=${s.lastTimer.toFixed(1).padStart(5)}  rhythm=${s.rhythm}`);
+    });
+    note(marks.join('\n'));
+
+    const arrested = seen.has('vtPulseless') || seen.has('vf');
+    expect(arrested,
+        'reaches pulseless VT (60 s) and VF (120 s) if untreated',
+        `rhythm only ever: ${[...seen].join(', ')}`,
+        'vtPulseless by 60 s, vf by 120 s');
+    if (!arrested) {
+        note('The ROSC check `rhythm === "sinus" && lastTimer > 30` runs before\n' +
+             'progression at 60 s, so it fires at t=30 s and clears events.last.\n' +
+             'Fix: gate resolution on an arrest having actually occurred.');
+    }
+});
+
+/* =============================================================================
+   F4  SpO2 does not respond to hypoventilation
+   ========================================================================== */
+probe('F4', 'SpO2 responds to hypoventilation', () => {
+    const rows = [];
+    [500, 300, 200, 150, 100, 60, 40, 20].forEach(vt => {
+        const sim = boot();
+        const s = sim.dl.state;
+        sim.dl.loadScenario('maintenance');
+        sim.dl.setAirway('ett');
+        sim.dl.setVentMode('VCV');
+        sim.dl.setVentParam('fio2', 0.21);
+        sim.dl.setVentParam('vt', vt);
+        sim.dl.setVentParam('rr', 12);
+        sim.advance(300000);
+        rows.push({ vt, mv: s.minuteVent, afio2: s.patient.alveolarFiO2, etco2: s.etco2, spo2: s.spo2 });
+    });
+    note('adult, ETT, VCV, FiO2 0.21, paralysed -- only Vt varied, 5 min each:\n' +
+         'Vt(mL)  minuteVent  alveolarFiO2  etCO2   SpO2\n' +
+         rows.map(r => `${String(r.vt).padStart(6)}${r.mv.toFixed(2).padStart(12)}` +
+             `${r.afio2.toFixed(3).padStart(14)}${r.etco2.toFixed(0).padStart(7)}${r.spo2.toFixed(1).padStart(7)}`).join('\n'));
+
+    // A patient on 1.2 L/min of minute ventilation should not read a full saturation.
+    const marginal = rows.find(r => r.vt === 100);
+    expect(marginal.spo2 < 95,
+        'severe hypoventilation (Vt 100 mL, MV 1.2 L/min) causes desaturation',
+        `SpO2 ${marginal.spo2.toFixed(1)}% with etCO2 ${marginal.etco2.toFixed(0)}`,
+        'SpO2 below 95%, falling progressively as Vt falls');
+
+    // The response should be graded, not a cliff between two adjacent points.
+    const biggestStep = rows.reduce((m, r, i) =>
+        i ? Math.max(m, Math.abs(rows[i - 1].spo2 - r.spo2)) : 0, 0);
+    expect(biggestStep < 15,
+        'the SpO2 response is graded rather than a step function',
+        `largest jump between adjacent Vt steps is ${biggestStep.toFixed(1)} points`,
+        'a smooth decline (no single step above ~15 points)');
+});
+
+/* =============================================================================
+   F5  SpO2 floors at 70 and hypoxia has no haemodynamic consequence
+   ========================================================================== */
+probe('F5', 'Prolonged hypoxia is survivable-to-fatal, not a plateau', () => {
+    const sim = boot();
+    const s = sim.dl.state;
+    sim.dl.loadScenario('maintenance');
+    sim.dl.setVentMode('MANUAL');
+    sim.dl.toggleEvent('apnoea');
+    sim.dl.setVentParam('fio2', 0.21);
+    sim.advance(1800000);   // 30 minutes of total apnoea on room air
+
+    note(`after 30 minutes of total apnoea on room air:\n` +
+         `SpO2 ${s.spo2.toFixed(1)}   HR ${s.hr.toFixed(0)}   MAP ${mapOf(sim.dl).toFixed(0)}   ` +
+         `rhythm ${s.rhythm}   alveolarFiO2 ${s.patient.alveolarFiO2.toFixed(3)}`);
+
+    const capMin = sim.dl.CONFIG.CAPS.SPO2_MIN;
+    expect(s.spo2 < 60,
+        'SpO2 can fall below its 70% plateau toward CAPS.SPO2_MIN',
+        `SpO2 plateaus at ${s.spo2.toFixed(1)}% (CAPS.SPO2_MIN is ${capMin}, unreachable)`,
+        `SpO2 falling toward ${capMin}`);
+    expect(s.rhythm !== 'sinus' || s.hr < 50,
+        'sustained hypoxia produces bradycardia or arrest',
+        `rhythm ${s.rhythm}, HR ${s.hr.toFixed(0)}, MAP ${mapOf(sim.dl).toFixed(0)} -- haemodynamically normal`,
+        'hypoxic bradycardia progressing to arrest');
+});
+
+/* =============================================================================
+   F6  pre-loaded autonomic tone is erased before the scenario can present
+   ========================================================================== */
+probe('F6', 'Hypertensive scenarios actually present as hypertensive', () => {
+    [['aneurysm', 'briefing states BP 200/110 (MAP ~140)'],
+     ['autonomicDysreflexia', 'briefing states explosive hypertension']].forEach(([key, brief]) => {
+        const sim = boot();
+        sim.dl.loadScenario(key);
+        let peak = 0;
+        for (let i = 0; i < 120; i++) { sim.advance(1000); peak = Math.max(peak, mapOf(sim.dl)); }
+        expect(peak > 110,
+            `${key} becomes hypertensive (${brief})`,
+            `peak MAP over the first 2 min is ${peak.toFixed(0)} mmHg`,
+            'peak MAP above 110 mmHg');
+    });
+
+    /* The dysreflexia mechanism is real but keyed to nociception, so show that
+       fixing F1 alone recovers most of it. */
+    const sim = boot();
+    sim.dl.loadScenario('autonomicDysreflexia');
+    sim.dl.state.nociceptionTarget = sim.dl.state.nociception;   // F1 fix
+    sim.advance(300000);
+    note(`with the F1 fix applied, autonomicDysreflexia reaches MAP ${mapOf(sim.dl).toFixed(0)} ` +
+         `(vs ${'65'} as shipped) -- the AD amplifier at index.html:5584 does work,\n` +
+         `it is just multiplying a nociception drive that has already decayed to zero.`);
+});
+
+/* =============================================================================
+   F7  malignant hyperthermia shows only one of three cardinal signs
+   ========================================================================== */
+probe('F7', 'MH presents with tachycardia and hyperthermia, not just rising etCO2', () => {
+    const sim = boot();
+    const s = sim.dl.state;
+    sim.dl.loadScenario('mh');
+    const hr0 = s.hr;
+    const marks = [];
+    [60, 120, 300, 600].forEach((t, i, arr) => {
+        sim.advance((t - (i ? arr[i - 1] : 0)) * 1000);
+        marks.push(`${String(t).padStart(4)}s  mhSeverity=${s.mhSeverity.toFixed(2)}  ` +
+                   `metabRate=${s.metabolicRate.toFixed(2)}  betaTone=${s.betaTone.toFixed(2)}  ` +
+                   `HR=${s.hr.toFixed(0)}  etCO2=${s.etco2.toFixed(0)}`);
+    });
+    note(marks.join('\n'));
+
+    expect(s.hr > 100,
+        'HR rises into the briefed range (75 -> 110)',
+        `HR ${hr0.toFixed(0)} -> ${s.hr.toFixed(0)} at full severity`,
+        'HR above 100 bpm');
+
+    const hasTemp = Object.keys(s).some(k => /temp/i.test(k)) ||
+                    Object.keys(s.patient).some(k => /temp/i.test(k));
+    expect(hasTemp,
+        'body temperature is modelled',
+        'no temperature field exists anywhere in state',
+        'a state.temperature integrator tracking mhSeverity');
+
+    expect(s.metabolicRate < sim.dl.CONFIG.METAB_MAX - 1e-6,
+        'metabolic rate still has headroom at full MH severity',
+        `metabolicRate saturates at METAB_MAX (${sim.dl.CONFIG.METAB_MAX}) by ~2 min`,
+        'severity above 0.9 continues to escalate the crisis');
+});
+
+/* =============================================================================
+   F8  three scenario setup lines are silent no-ops
+   ========================================================================== */
+probe('F8', 'Scenario setup lines actually take effect', () => {
+    ['ischaemia', 'pulmEmbolism'].forEach(key => {
+        const sim = boot();
+        sim.dl.loadScenario(key);
+        const rate = sim.dl.state.machine.pumps.remi;
+        expect(rate > 0,
+            `${key} starts its remifentanil infusion`,
+            `pumps.remi = ${JSON.stringify(rate)} (setup writes pumps.remi.rate = 0.08 onto a number)`,
+            'pumps.remi = 0.08, e.g. via setInf("remi", 0.08)');
+    });
+
+    const sim = boot();
+    sim.dl.loadScenario('mh');
+    sim.advance(2000);
+    expect(sim.dl.state.etco2 > 50,
+        'mh starts at the briefed etCO2 of 55',
+        `state.etco2 = ${sim.dl.state.etco2.toFixed(1)}, ` +
+            `state.etCO2 = ${sim.dl.state.etCO2} (wrong case, dead property)`,
+        'state.etco2 near 55');
+});
+
+/* =============================================================================
+   F10  scenario setups permanently mutate the shared PROFILES objects
+   ========================================================================== */
+probe('F10', 'PROFILES presets are not mutated by scenarios', () => {
+    const sim = boot();
+    const dl = sim.dl;
+    const pristine = { mapTarget: dl.PROFILES.adult.mapTarget,
+                       airwayReactivity: dl.PROFILES.adult.airwayReactivity };
+    const trail = [`pristine                  mapTarget ${pristine.mapTarget}  airwayReactivity ${pristine.airwayReactivity}`];
+    ['aneurysm', 'asthma', 'autonomicDysreflexia', 'maintenance'].forEach(k => {
+        dl.loadScenario(k);
+        trail.push(`after loading ${k.padEnd(22)} mapTarget ${dl.PROFILES.adult.mapTarget}  ` +
+                   `airwayReactivity ${dl.PROFILES.adult.airwayReactivity}`);
+    });
+    note(trail.join('\n'));
+
+    const clean = dl.PROFILES.adult.mapTarget === pristine.mapTarget &&
+                  dl.PROFILES.adult.airwayReactivity === pristine.airwayReactivity;
+    expect(clean,
+        'PROFILES.adult is unchanged after playing several scenarios',
+        `mapTarget ${pristine.mapTarget} -> ${dl.PROFILES.adult.mapTarget}, ` +
+            `airwayReactivity ${pristine.airwayReactivity} -> ${dl.PROFILES.adult.airwayReactivity}`,
+        'unchanged -- setProfile() should copy: state.profile = {...PROFILES[key]}');
+});
+
+/* =============================================================================
+   F11  scenarioReset() misses five drugs
+   ========================================================================== */
+probe('F11', 'scenarioReset() clears every drug in PK', () => {
+    const sim = boot();
+    const dl = sim.dl;
+    const p = dl.state.patient;
+
+    dl.loadScenario('bronchospasm');
+    give(dl, 'salb', 0.25);
+    give(dl, 'mag', 2.0);
+    give(dl, 'alf', 1.0);
+    give(dl, 'morph', 10);
+    give(dl, 'furo', 40);
+    sim.advance(30000);
+
+    dl.loadScenario('maintenance');
+    const leaked = Object.keys(dl.PK).filter(d => (p[d + 'Ce'] || 0) > 1e-9 || (p[d + 'Cp'] || 0) > 1e-9);
+    expect(leaked.length === 0,
+        'no drug survives a scenario change',
+        leaked.length ? `${leaked.length} leak: ${leaked.map(d => `${d}Ce=${p[d + 'Ce'].toFixed(5)}`).join(', ')}` : 'none',
+        'all cleared -- derive the list from Object.keys(PK)');
+});
+
+/* =============================================================================
+   F12  gauge ranges do not match the model limits behind them
+   ========================================================================== */
+probe('F12', 'Physiology gauge ranges match the values they display', () => {
+    const dl = boot().dl;
+    const gauges = {};
+    Object.keys(dl.PHYS_GROUPS).forEach(g => dl.PHYS_GROUPS[g].forEach(i => {
+        if (!i.section) gauges[i.key] = i;
+    }));
+
+    /* Hard clamps applied in the physiology tick (index.html:6007-6009). */
+    const CLAMP = { alpha: 1.4, beta: 1.4, parasymp: 1.0 };
+    Object.keys(CLAMP).forEach(k => {
+        const min = resolve(gauges[k].min), max = resolve(gauges[k].max);
+        const frac = (CLAMP[k] - min) / (max - min);
+        expect(frac >= 0.90,
+            `${gauges[k].label}: the bar can reach its danger threshold`,
+            `model clamps at ${CLAMP[k]} but the gauge spans ${min}-${max}, so the bar tops out at ` +
+                `${(frac * 100).toFixed(0)}% (warn at 75% ${frac >= 0.75 ? 'reachable' : 'UNREACHABLE'}, ` +
+                `danger at 90% ${frac >= 0.90 ? 'reachable' : 'UNREACHABLE'})`,
+            `gauge max resolved from the same constant the tick clamps against`);
+    });
+
+    /* Preload and contractility use global constants; profiles override them. */
+    const worst = [];
+    Object.keys(dl.PROFILES).forEach(pk => {
+        const prof = dl.PROFILES[pk];
+        const pc = prof.preloadCeiling !== undefined ? prof.preloadCeiling : 1.6;
+        const cc = prof.contractilityCeiling !== undefined ? prof.contractilityCeiling : dl.CONFIG.CONT_CEILING;
+        const pFrac = pc / resolve(gauges.preload.max);
+        const cFrac = (cc - dl.CONFIG.CONT_FLOOR) / (dl.CONFIG.CONT_CEILING - dl.CONFIG.CONT_FLOOR);
+        worst.push(`${pk.padEnd(9)} preload ceiling ${String(pc).padEnd(5)} -> bar max ${(pFrac * 100).toFixed(0)}%   ` +
+                   `contractility ceiling ${String(cc).padEnd(5)} -> bar max ${(cFrac * 100).toFixed(0)}%`);
+        if (pFrac < 0.9 || cFrac < 0.9) worst.dirty = true;
+    });
+    note(worst.join('\n'));
+    expect(!worst.dirty,
+        'preload and contractility gauges track the active profile ceilings',
+        'gauges use global CONFIG limits while profiles override them per patient',
+        'max resolved per profile, e.g. () => state.profile.preloadCeiling ?? 1.6');
+
+    /* Circulating volume must cover the paediatric patient. */
+    const cvMin = resolve(gauges.circVol.min);
+    expect(cvMin <= dl.PROFILES.paed.centralVol * 0.9,
+        'circulating-volume gauge covers a paediatric patient',
+        `gauge starts at ${cvMin} L but the paed profile's normal volume is ${dl.PROFILES.paed.centralVol} L`,
+        'a floor below the smallest profile volume, e.g. profile-relative');
+});
+
+/* -----------------------------------------------------------------------------
+   summary
+   -------------------------------------------------------------------------- */
+const all = results.flatMap(r => r.checks);
+const failed = all.filter(c => !c.pass);
+
+console.log('\n' + '='.repeat(78));
+console.log('SUMMARY');
+console.log('='.repeat(78));
+results.forEach(r => {
+    const bad = r.checks.filter(c => !c.pass).length;
+    console.log(`  ${r.id.padEnd(5)} ${bad === 0 ? 'FIXED  ' : 'open   '} ` +
+        `${r.checks.length - bad}/${r.checks.length} checks pass   ${r.title}`);
+});
+console.log(`\n${all.length - failed.length}/${all.length} checks pass across ${results.length} findings.`);
+if (failed.length) console.log('Probes reporting FAIL describe bugs that are still open.');
+
+if (process.env.DL_STRICT === '1' && failed.length) process.exit(1);
