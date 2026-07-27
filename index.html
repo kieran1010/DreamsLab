@@ -51,6 +51,21 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.27  ("Eye-opening event auto-resolves on deepening")
+  ---------------------------------------------------------------------------------
+  Bug fix. The eye-opening awareness event had no self-limiting timer (unlike
+  movement / breath-holding) AND nothing that cleared it when the patient was
+  deepened - so once fired, state.events.eyeOpening stayed true indefinitely.
+  Since v4.21 that stale flag also showed as a persistent "Eye opening" chip in
+  the header even at deep anaesthesia (e.g. BIS 50), which is what surfaced it.
+
+  Fix: the physiology tick now clears eyeOpening once the patient is no longer
+  light enough to open their eyes - consciousness back below the trigger
+  threshold (with a 5-point hysteresis to avoid boundary flicker) or paralysed.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.26  ("Reset zeroes the stimulus slider")
   ---------------------------------------------------------------------------------
   UI fix. scenarioReset() already zeroed state.nociception / nociceptionTarget,
@@ -6590,7 +6605,24 @@ setInterval(() => {
             if (btn) btn.classList.remove('active');
         }
     }
-    // Eye opening: no auto-resolve (user must deepen anaesthesia), just stays as log event
+    // Eye opening: no self-limiting timer (unlike movement/breath-holding). It
+    // is a SUSTAINED sign of light anaesthesia, so it persists while the patient
+    // is light and resolves once anaesthesia is deepened (consciousness falls
+    // back below the eye-opening threshold) or the patient is paralysed.
+    // v4.27: previously nothing cleared it, so the flag (and, since v4.21, its
+    // header chip) lingered indefinitely - even at deep anaesthesia (e.g. BIS
+    // 50). Clear it here with a small consciousness hysteresis to avoid flicker
+    // right at the trigger threshold.
+    if (state.events.eyeOpening) {
+        const stillLight = state.consciousness > (CONFIG.AWARENESS_EYEOPEN_CONSC - 5)
+                        && p.paralysis < CONFIG.AWARENESS_EYEOPEN_PARALYSIS_MAX;
+        if (!stillLight) {
+            state.events.eyeOpening = false;
+            const btn = document.getElementById('evt-eyes');
+            if (btn) btn.classList.remove('active');
+            log('AWARENESS: eyes closed (anaesthesia deepened)');
+        }
+    }
 
     /* --- FRC O2 reserve & SpO2 ---
        O2 consumption now scales with metabolicRate. */
