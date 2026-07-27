@@ -51,6 +51,17 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.26  ("Reset zeroes the stimulus slider")
+  ---------------------------------------------------------------------------------
+  UI fix. scenarioReset() already zeroed state.nociception / nociceptionTarget,
+  but only refreshed the old (now hidden) panel slider - so after a reset from
+  the scenario menu the new header Stimulus slider still displayed its previous
+  value while the model sat at zero. scenarioReset() now calls reflectNoci(0),
+  which syncs both the header and panel controls.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.25  ("Surgical-stimulus slider in the header")
   ---------------------------------------------------------------------------------
   UI only. Adds a compact "Stimulus" slider (0-10) to the brand bar so the user
@@ -9086,11 +9097,8 @@ function scenarioReset() {
     state.anaphExitPushdown = 0;
     state.analgesiaCover = 0;
     state.effectiveStimulus = 0;
-    // Sync noci slider UI
-    const nociSlider = document.getElementById('noci-slider');
-    if (nociSlider) nociSlider.value = 0;
-    const nociLabel = document.getElementById('v-noci');
-    if (nociLabel) nociLabel.innerText = '0';
+    // v4.26: sync surgical-stimulus UI (header + hidden panel sliders) to zero
+    reflectNoci(0);
 
     // Clear all events + their timers (resolveAllEvents handles this)
     resolveAllEvents();
