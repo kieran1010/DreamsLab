@@ -51,6 +51,86 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.29  ("Model audit: stimulus, oxygenation, and scenario fidelity")
+  ---------------------------------------------------------------------------------
+  Fixes from a full audit of the physiology model, in which all 22 Physiology-tab
+  parameters were traced through all 20 scenarios, untreated and with each
+  scenario's own recommended treatment applied. Tooling for that lives in tools/
+  and is re-runnable: `node tools/sweep.js && node tools/scan.js && node tools/probes.js`.
+
+  SURGICAL STIMULUS (affected 15 of 20 scenarios)
+  Scenario setups assign state.nociception but not state.nociceptionTarget. The
+  tick eases nociception toward the target (TAU_NOCI ~2.5 s) and scenarioReset()
+  had just zeroed it, so every scenario lost its surgical stimulus within about
+  ten seconds - while syncScenarioUI() went on showing the intended value on the
+  header Stimulus slider. loadScenario() now sets the target from whatever the
+  setup asked for, once, centrally.
+
+  ANALGESIA COVER
+  NOCI_ANALGESIA_*_WEIGHT rescaled x0.4. A routine remifentanil infusion alone
+  produced 7.5 units of cover on a 0-10 stimulus scale (a typical regimen over
+  10), so a fully anaesthetised patient could not respond to any stimulus: the
+  Stimulus slider did nothing between 0 and 6. Relative drug potencies preserved.
+
+  OXYGENATION
+  - FRC refill is continuous in minute ventilation instead of gated at
+    0.5 L/min, so oxygenation degrades progressively as ventilation fails.
+  - Added the alveolar gas equation: CO2 above 40 mmHg displaces alveolar O2.
+    Without it a patient at 1.2 L/min with etCO2 109 still read SpO2 99%.
+  - Added a V/Q shunt term driven by airway resistance and auto-PEEP, so severe
+    bronchospasm desaturates as its briefing has always claimed.
+  - SpO2 no longer floors at 70: the desaturation target runs to CAPS.SPO2_MIN,
+    and sustained hypoxaemia now causes vagal tone rise, falling contractility
+    and eventually asystole. Previously 30 minutes of apnoea left a patient at
+    SpO2 70 with a normal heart rate, blood pressure and rhythm.
+  - CAPS.ETCO2_MAX 80 -> 130; six scenarios pinned at the old cap.
+
+  SCENARIO FIDELITY
+  - Local anaesthetic toxicity self-cancelled at 30 s and could never reach VT
+    or VF: the ROSC check ran before the progression ladder and only tested
+    lastTimer > 30. It now requires an arrest to have occurred, and is
+    evaluated first so achieving ROSC does not immediately re-arrest.
+  - Aneurysm and autonomic dysreflexia never became hypertensive. Tone
+    assignments do not survive (TONE_DECAY_TAU is a per-tick blend, ~2 s), and
+    alphaTone clamps at 1.4 which through SVR_ALPHA_GAIN tops MAP out near 83.
+    Both now use sustained drives that also push svrTone directly.
+  - Malignant hyperthermia showed only rising etCO2. Its autonomic drives now
+    feed the tone TARGETS (HR reaches ~110 as briefed), core temperature is
+    modelled for the first time, and METAB_MAX 2.5 -> 3.5 so severity stays
+    meaningful across its range.
+  - Three setup lines were silent no-ops: pumps.remi.rate on a number in the
+    ischaemia and PE scenarios (both ran with no infusion), and state.etCO2 in
+    MH (wrong case, so it started at 38 against a briefed 55).
+
+  DRUG CALIBRATION
+  Esmolol: beta blockade was applied by multiplying betaTone every tick, which
+  compounded - a blockade fraction of 0.29 cut beta tone to 11% of target. It
+  now scales betaTarget, and ESMO_BLOCK_K 0.3 -> 2.8. One 30 mg bolus used to
+  take HR from 98 to 51 and MAP from 107 to 32; it now gives ~40% blockade,
+  HR 98 -> 87, wearing off appropriately.
+
+  STATE HYGIENE
+  - setProfile() copies the preset instead of aliasing it. Scenarios that wrote
+    to state.profile were editing PROFILES for the rest of the session - after
+    the asthma scenario every later adult patient had an asthmatic airway.
+  - scenarioReset() derives its drug list from PK rather than a hand-maintained
+    array that had missed alfentanil, morphine, furosemide, salbutamol and
+    magnesium since v3.51/v3.60.
+  - setBleed() guards an unrecognised severity, which used to put NaN through
+    the whole cardiovascular model.
+
+  PHYSIOLOGY GAUGES
+  Spans now resolve from the same constants the model clamps against, per
+  profile. The parasympathetic bar previously topped out at 67% and could never
+  reach its own warn or danger colour; a paediatric patient's circulating
+  volume sat below the gauge floor for an entire case; MAP, cardiac output and
+  heart rate clipped during haemorrhage and arrest. Core temperature and
+  metabolic rate are now shown (the MH objectives already told trainees to
+  watch the latter).
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.28  ("Fix waveform jitter when heart rate changes")
   ---------------------------------------------------------------------------------
   Bug fix. Giving esmolol to the intraoperative-MI patient (or any large HR
@@ -4128,6 +4208,14 @@ const CONFIG = {
     ALPHA_REST: 0.2,
     BETA_REST:  0.2,
     PARASYMP_REST: 0.3,
+    // v4.29: the hard clamps applied to the tones each tick, named so the
+    // Physiology gauges can span exactly the range the model can occupy.
+    // They were previously inline literals against gauges declaring 0-1.5,
+    // so the parasympathetic bar topped out at 67% and could never reach its
+    // own warn or danger colour no matter what the patient did.
+    ALPHA_CLAMP: 1.4,
+    BETA_CLAMP:  1.4,
+    PARASYMP_CLAMP: 1.0,
     TONE_DECAY_TAU: 0.05,
 
     // ===== Saturating physiology (v2.0) =====
@@ -4237,7 +4325,15 @@ const CONFIG = {
     ALPHA_PHEN_GAIN:   1200,   // v3.40: 200->1200 (100mcg phenylephrine now ~+10-15 MAP)
     ALPHA_NOR_GAIN:    1200,   // v3.47: 2000->1200, was overshooting at 15min steady state (MAP +30 instead of +15-20)
     BETA_NOR_GAIN:     200,    // v3.47: 400->200, paired with alpha reduction
-    ESMO_BLOCK_K:      0.3,    // v3.40: 1.0->0.3 (esmolol now sensitive at clinical Ce)
+    /* v4.29: 0.3 -> 2.8. The v3.40 change to 0.3 massively over-corrected.
+       A 30 mg bolus (the smallest button) puts esmoCe near 1.4, which through
+       `1 - exp(-Ce/0.3)` gave 99% beta blockade, still 87% ten minutes later -
+       from a drug with a 4-5 minute half-life. Following the ischaemia
+       scenario's own hint ("esmolol 25-50mg slow IV") therefore drove MAP from
+       107 to 32 and HR to 46. At 2.8 the three dose buttons give roughly
+       40% / 57% / 82% blockade for 30 / 50 / 100 mg, which is a credible
+       dose-response for a titratable beta-1 blocker. */
+    ESMO_BLOCK_K:      2.8,
     GTN_VENO_K:        0.0015, // v3.25: 0.05→0.0015 - PK Ce values are ~0.001-0.003 mcg/mL, old K never engaged
     GTN_MAX_VENO:      0.4,    // max 40% reduction in venous tone factor
 
@@ -4275,6 +4371,23 @@ const CONFIG = {
     SPO2_DESAT_THRESHOLD_FIO2: 0.13,
     SPO2_RECOVERY_GAIN: 0.5,
 
+    /* v4.29: V/Q mismatch from airway mechanics. Obstructed, gas-trapped lung
+       units stay perfused but are barely ventilated - a true shunt. Driven by
+       bronchResistance above baseline and by auto-PEEP. At full bronchospasm
+       this takes the SpO2 ceiling to about 81, so severe bronchospasm now
+       desaturates on air and is largely rescued by FiO2 1.0 plus a
+       bronchodilator, which is the teaching point of those scenarios. */
+    VQ_SHUNT_SPO2_DROP: 18,
+
+    /* v4.29: haemodynamic consequences of hypoxaemia. Without these SpO2 was
+       a number on a screen with no downstream effect - a patient could sit at
+       the SpO2 floor indefinitely with normal haemodynamics. */
+    HYPOXIA_THRESHOLD: 85,        // SpO2 below which myocardial effects begin
+    HYPOXIA_VAGAL_GAIN: 0.06,     // parasympathetic tone added per sec at full depth
+    HYPOXIA_CONTR_DROP: 0.05,     // contractility lost per sec at full depth
+    HYPOXIA_ARREST_SPO2: 50,      // sustained SpO2 at or below this arrests
+    HYPOXIA_ARREST_DELAY: 45,     // sec at/below that level before asystole
+
     PARALYSIS_CE_FOR_FULL: 5.0,        // Roc Ce (mcg/mL) for full paralysis. Bolus 50mg -> ~7 mcg/mL peak = overshoot (realistic)
     PARALYSIS_RESP_THRESHOLD: 0.3,
     SUGAMMADEX_CHELATE_RATE: 0.5,
@@ -4285,11 +4398,35 @@ const CONFIG = {
 
     PRELOAD_BASELINE: 1.1,
 
-    NOCI_ANALGESIA_REMI_WEIGHT: 1500, // per mcg/mL (so 0.005 mcg/mL = 7.5 units of analgesia)
-    NOCI_ANALGESIA_FENT_WEIGHT: 1500, // per mcg/mL
-    NOCI_ANALGESIA_ALF_WEIGHT:  220,  // v3.51: alfentanil per mcg/mL. 1mg dose -> alfCe peak ~0.018 -> cover ~4 units (matches fent 100mcg).
-    NOCI_ANALGESIA_MORPH_WEIGHT: 180, // v3.51: morphine per mcg/mL. 10mg dose -> morphCe peaks slowly to ~0.022 -> cover ~4 units.
-    NOCI_ANALGESIA_KET_WEIGHT: 4,     // per mcg/mL
+    /* Analgesia cover, in stimulus units (the stimulus scale runs 0-10).
+       effectiveStimulus = max(0, nociception - analgesiaCover).
+
+       v4.29 rescale, x0.4 across the board. The old weights put a routine
+       remifentanil infusion at 0.15 mcg/kg/min (remiCe 0.005) at 7.5 units of
+       cover on its own, and a typical maintenance regimen above 10 - more than
+       the whole scale. The consequence was that a fully anaesthetised patient
+       could not respond to any surgical stimulus at all: the header Stimulus
+       slider did nothing between 0 and 6, and nine scenarios were masked
+       outright. Every weight is scaled by the same factor so the relative
+       potencies calibrated in v3.51 are preserved.
+
+       Reference points on the new scale:
+         remi 0.15 mcg/kg/min steady (Ce 0.005) -> 3.0 units
+         fentanyl 100 mcg residual   (Ce 0.002) -> 1.2 units
+         the two together                       -> ~4.2 units, so a strong
+         surgical stimulus (6-8) still breaks through while light handling
+         (2-3) stays covered.
+
+       NB the linear subtraction has a knee: once cover exceeds the stimulus
+       the response is exactly zero. If that proves too abrupt in use, the
+       cleaner form is a saturating attenuation
+       (effective = noci * exp(-cover / K)), which always blunts
+       proportionally but never nulls out. */
+    NOCI_ANALGESIA_REMI_WEIGHT:  600, // per mcg/mL (so 0.005 mcg/mL = 3.0 units of analgesia)
+    NOCI_ANALGESIA_FENT_WEIGHT:  600, // per mcg/mL
+    NOCI_ANALGESIA_ALF_WEIGHT:    88, // v3.51: alfentanil per mcg/mL. 1mg dose -> alfCe peak ~0.018 -> cover ~1.6 units (matches fent 100mcg).
+    NOCI_ANALGESIA_MORPH_WEIGHT:  72, // v3.51: morphine per mcg/mL. 10mg dose -> morphCe peaks slowly to ~0.022 -> cover ~1.6 units.
+    NOCI_ANALGESIA_KET_WEIGHT:   1.6, // per mcg/mL
 
     BAG_INFLATE_RATE: 0.035,
     BAG_DEFLATE_RATE: 0.06,
@@ -4317,7 +4454,12 @@ const CONFIG = {
     METAB_ANAESTH_DROP: 0.2,    // up to 20% reduction at 1 MAC + full prop
     METAB_SYMP_GAIN: 0.5,       // sympTone of 1.0 (max stim) adds ~40% above rest
     METAB_MIN: 0.5,             // clamp floor (profound suppression)
-    METAB_MAX: 2.5,             // clamp ceiling (allows MH-like states)
+    // v4.29: 2.5 -> 3.5. MH adds up to 2.5x on its own, so with any baseline
+    // at all the total hit the old 2.5 ceiling at roughly mhSeverity 0.6 -
+    // about two minutes in. Past that the crisis stopped escalating on the one
+    // axis that was still working. A fulminant MH can more than treble resting
+    // metabolic rate, so 3.5 keeps the whole severity range meaningful.
+    METAB_MAX: 3.5,             // clamp ceiling (allows MH-like states)
     // CO2 production scaling: at metabolicRate=1.0 with adult MV=6 L/min, etCO2 ~ 38
     CO2_PRODUCTION_BASELINE: 38 * 6,  // mmHg * L/min = baseline product
 
@@ -4369,6 +4511,51 @@ const CONFIG = {
     // Arrest resuscitation
     ARREST_REVIVE_THRESHOLD: 3,      // adrenaline boluses needed to auto-revert
     ARREST_ADR_CREDIT_DOSE: 0.5,     // adrenaline mg that counts as 1 credit (500 mcg)
+
+    /* v4.29: subarachnoid-haemorrhage catecholamine surge.
+       Assigning alphaTone/betaTone directly in a scenario setup does not
+       survive: the tone relaxation below pulls them back to target within
+       about two seconds (TONE_DECAY_TAU is a per-tick blend, not a time
+       constant in seconds), so the aneurysm scenario's "massive sympathetic
+       surge" was gone before the briefing modal could be read - it presented
+       at MAP 60-67 against a briefing of 200/110.
+       A sustained pathological state needs a sustained DRIVE, so sahSurge
+       (0..1) feeds the alpha target each tick and decays over minutes.
+
+       The alpha target alone cannot produce hypertension here: alphaTone is
+       clamped at 1.4 and SVR_ALPHA_GAIN is only 0.2, so even a maxed-out alpha
+       tone lands MAP near 83. The surge therefore also pushes svrTone directly,
+       on the same pathway vasopressin and calcium use. The reflex bradycardia
+       is deliberately NOT driven - it falls out of the existing baroreflex
+       responding to the raised pressure, which is what happens clinically. */
+    SAH_SURGE_ALPHA: 1.25,           // added to alphaTarget at full surge
+    // Tuned so the scenario opens at ~170/105, MAP 125, HR 55 - clearly
+    // hypertensive with headroom above the 110 mmHg re-bleed threshold the
+    // scenario asks the trainee to get under. Raise it for a more extreme
+    // opening pressure; MAP scales roughly linearly with this value.
+    SAH_SURGE_SVR: 0.90,             // added to the SVR pushUp at full surge
+    SAH_SURGE_DECAY: 900,            // sec to fall from 1 to 0 (~15 min)
+
+    /* v4.29: autonomic dysreflexia. Same structural problem as the SAH surge -
+       the existing alpha amplifier (alphaNociMult 3.0) is real but cannot lift
+       MAP past ~83 through the alpha pathway alone, so the scenario never
+       showed the hypertension it exists to teach. This pushes svrTone directly,
+       scaled by effective stimulus so that stopping the stimulus resolves it. */
+    AD_SVR_GAIN: 0.75,               // added to the SVR pushUp at full stimulus
+
+    /* v4.29: malignant hyperthermia autonomic + thermal drives.
+       Like the SAH surge above, these feed the tone TARGETS rather than
+       pushing the tones per tick, so the relaxation converges on them instead
+       of erasing them. Tuned for HR ~110 at full severity, matching the
+       scenario briefing. */
+    MH_BETA_DRIVE:  0.62,            // added to betaTarget at severity 1.0
+    MH_ALPHA_DRIVE: 0.15,            // added to alphaTarget at severity 1.0
+    /* Core temperature. Normothermia is 37; a fulminant MH climbs about
+       1 degree every 5 min and is the sign the crisis is named for. Rewarming
+       and cooling both run through TEMP_TAU toward the driven target. */
+    TEMP_NORMAL: 37.0,               // degrees C
+    MH_TEMP_RISE: 5.0,               // degrees above normal at severity 1.0
+    TEMP_TAU: 240,                   // sec; first-order approach to target
 
     // Anaphylaxis progression (sim-sec into reaction)
     // v3.63: tightened to ~30s build to full CV collapse, matching real-world
@@ -4519,7 +4706,11 @@ const CONFIG = {
         SYS_MIN: 30, SYS_MAX: 230,
         DIA_MIN: 15, DIA_MAX: 140,
         SPO2_MIN: 40, SPO2_MAX: 100,
-        ETCO2_MIN: 0, ETCO2_MAX: 80,
+        // v4.29: 80 -> 130. Six of the twenty scenarios reached the old 80 mmHg
+        // cap within a ten-minute run, where the number stopped moving and the
+        // gauge sat pinned - the trainee lost the trend exactly when it mattered.
+        // Severe hypoventilation and untreated MH both routinely exceed 80.
+        ETCO2_MIN: 0, ETCO2_MAX: 130,
         MAC_MIN: 0, MAC_MAX: 5,
         BIS_MIN: 0, BIS_MAX: 100,
         PRESSURE_MIN: 0, PRESSURE_MAX: 1.2,  // normalised
@@ -4750,6 +4941,11 @@ const state = {
     // Anaphylaxis progression (sim-sec into the reaction; 0 if inactive)
     anaphylaxisTimer: 0,
 
+    // v4.29: subarachnoid-haemorrhage catecholamine surge (0..1). Feeds the
+    // alpha and parasympathetic tone TARGETS so it survives the tone
+    // relaxation, and decays over ~15 min. Set by the aneurysm scenario.
+    sahSurge: 0,
+
     // Surgical event timers (self-limiting events)
     tourniquetTimer: 0,  // sim-sec since tourniquet release; effects over 0-180s
     vagalTimer: 0,       // sim-sec since vagal event; resolves at ~30s
@@ -4789,6 +4985,10 @@ const state = {
     // null means "none". Used by the Scenarios modal to decide whether to
     // open the picker or the brief view.
     currentScenario: null,
+
+    // v4.29: seconds spent at or below CONFIG.HYPOXIA_ARREST_SPO2. Drives the
+    // hypoxic-arrest path; decays when saturation recovers.
+    hypoxiaArrestTimer: 0,
 
     // Awareness event tracking
     awarenessRisk: 0,         // accumulator (0-1); when crosses 1, fires event
@@ -4852,8 +5052,16 @@ const state = {
     // counters it
     mhSeverity: 0,            // 0 -> 1 over ~3 min while MH active
     dantroleneEffect: 0,      // 0 -> 1 from dantrolene Ce; reduces MH ramp + reverses
+    // v4.29: core temperature in degrees C. Previously not modelled at all,
+    // even though the MH briefing quotes a core temp of 38.5 and hyperthermia
+    // is the sign the syndrome is named for.
+    temperature: 37.0,
     // v3.27 LAST state: timer-driven progression (sec since LAST trigger)
     lastTimer: 0,
+    // v4.29: set once LAST has driven the rhythm into an arrest. The ROSC
+    // check requires it, so the scenario can no longer resolve itself before
+    // the arrest it exists to teach.
+    lastArrested: false,
 
     // --- Patient ---
     patient: {
@@ -5591,6 +5799,15 @@ setInterval(() => {
         // Reflex parasympathetic activation proportional to stimulus
         state.parasympTone += 0.03 * state.effectiveStimulus / 10 * dt;
     }
+    /* v4.29: the AD alpha amplifier above cannot on its own produce the
+       "explosive hypertension" the scenario is named for - alphaTone clamps at
+       1.4 and SVR_ALPHA_GAIN is only 0.2, which tops MAP out around 83. As
+       with the SAH surge, the unmodulated spinal reflex also pushes svrTone
+       directly. Scales with effective stimulus, so removing the stimulus (the
+       scenario's first-line treatment) resolves it. */
+    state.adSvrDrive = adFlag
+        ? CONFIG.AD_SVR_GAIN * clamp(state.effectiveStimulus / 6, 0, 1)
+        : 0;
     // v3.24: profile-level rest tones override CONFIG defaults. Sepsis sets
     // these to 0.55 to model sustained sympathetic activation; other profiles
     // fall back to the global rest values (0.4).
@@ -5598,11 +5815,25 @@ setInterval(() => {
         ? state.profile.alphaToneRest : CONFIG.ALPHA_REST;
     const betaRest  = state.profile.betaToneRest  !== undefined
         ? state.profile.betaToneRest  : CONFIG.BETA_REST;
-    const alphaTarget = alphaRest + alphaNociDrive;
-    const betaTarget  = betaRest  + betaNociDrive;
-    state.alphaTone    += (alphaTarget           - state.alphaTone)    * CONFIG.TONE_DECAY_TAU;
-    state.betaTone     += (betaTarget            - state.betaTone)     * CONFIG.TONE_DECAY_TAU;
-    state.parasympTone += (CONFIG.PARASYMP_REST  - state.parasympTone) * CONFIG.TONE_DECAY_TAU;
+    /* v4.29: SAH catecholamine surge - a sustained drive rather than a one-off
+       tone assignment, so it survives the relaxation below. Decays over ~15 min. */
+    if (state.sahSurge > 0) {
+        state.sahSurge = Math.max(0, state.sahSurge - dt / CONFIG.SAH_SURGE_DECAY);
+    }
+    const alphaTarget = alphaRest + alphaNociDrive
+                      + state.sahSurge  * CONFIG.SAH_SURGE_ALPHA
+                      + state.mhSeverity * CONFIG.MH_ALPHA_DRIVE;   // v4.29
+    /* Beta blockade scales the target rather than the tone (see the esmolol
+       note further down). bbBlockFraction is computed later in this same tick,
+       so this uses the previous tick's value - a 100 ms lag, immaterial here.
+       The 0.05 floor preserves the "never total beta loss" behaviour. */
+    const betaTarget  = Math.max(0.05,
+                        (betaRest + betaNociDrive
+                         + state.mhSeverity * CONFIG.MH_BETA_DRIVE)   // v4.29
+                        * (1 - (state.bbBlockFraction || 0)));
+    state.alphaTone    += (alphaTarget          - state.alphaTone)    * CONFIG.TONE_DECAY_TAU;
+    state.betaTone     += (betaTarget           - state.betaTone)     * CONFIG.TONE_DECAY_TAU;
+    state.parasympTone += (CONFIG.PARASYMP_REST - state.parasympTone) * CONFIG.TONE_DECAY_TAU;
 
     // Drug-driven transient pushes on alpha and beta tones. Transient because
     // the relaxation above pulls tone back toward target each tick.
@@ -5785,8 +6016,16 @@ setInterval(() => {
     // resting awake patient via blockade of resting catecholamine drive.
     // Now multiplicatively shrinks beta tone toward zero (with a small
     // floor to avoid total beta loss at extreme doses).
+    /* v4.29: the blockade is now applied to betaTARGET, in the tone-relaxation
+       block above, rather than multiplying betaTone here on every tick.
+       Multiplying per tick compounded: the relaxation only closes 5% of the
+       gap to target each tick, so a shrink of (1 - f) applied ten times a
+       second settled at 0.05*T*(1-f) / (0.05 + 0.95f) of target - meaning a
+       blockade fraction of 0.29 actually cut beta tone to 11% of target, and
+       even 0.05 cut it by half. That, not the dose-response curve alone, is
+       why one 30 mg esmolol bolus took HR from 98 to 51. Applying it to the
+       target makes the reduction genuinely proportional to the fraction. */
     state.bbBlockFraction = 1 - Math.exp(-p.esmoCe / CONFIG.ESMO_BLOCK_K);
-    state.betaTone = Math.max(0.05, state.betaTone * (1 - state.bbBlockFraction));
 
     /* --- Anaphylaxis progression ---
        Three-phase reaction over ~60-90 seconds:
@@ -5921,9 +6160,14 @@ setInterval(() => {
         state.mhSeverity = clamp(
             state.mhSeverity + (rampRate - decayRate) * dt,
             0, 1);
-        // Symp drives during MH: tachycardia + slight hypertension
-        state.betaTone  += 0.04 * state.mhSeverity * dt;
-        state.alphaTone += 0.02 * state.mhSeverity * dt;
+        /* Symp drives during MH: tachycardia + slight hypertension.
+           v4.29: these used to be per-tick pushes (+0.04 * severity * dt on
+           betaTone). The tone relaxation pulls back at TONE_DECAY_TAU (0.05
+           per tick), so the equilibrium offset was only about 0.08 - roughly
+           2 bpm. At full severity HR rose from 72 to 74 against a briefing of
+           "75 to 110", leaving rising etCO2 as the only cardinal sign on show.
+           The drive now goes into the TARGETS (see the tone block), which the
+           relaxation converges toward instead of erasing. */
         // Auto-resolve when MH severity essentially zero on dantrolene
         if (state.mhSeverity < 0.02 && state.dantroleneEffect > 0.3) {
             state.events.mh = false;
@@ -5936,6 +6180,15 @@ setInterval(() => {
     // Dantrolene effect tracks dantCe via simple saturation
     state.dantroleneEffect = 1 - Math.exp(-(state.patient.dantCe || 0) / 0.005);
 
+    /* v4.29: core temperature. Tracks a target set by MH severity, with a
+       ~4 min time constant in both directions - so it lags the metabolic rise
+       on the way up (as it does clinically) and falls back once dantrolene
+       and cooling take hold. */
+    {
+        const tempTarget = CONFIG.TEMP_NORMAL + state.mhSeverity * CONFIG.MH_TEMP_RISE;
+        state.temperature += (tempTarget - state.temperature) * (dt / CONFIG.TEMP_TAU);
+    }
+
     /* --- v3.27 Local anaesthetic systemic toxicity (LAST) ---
        Progression timer: triggers at scenario init.
          t=0    : seizure-like activity (BIS spike to ~70 briefly via flag)
@@ -5945,7 +6198,15 @@ setInterval(() => {
        mechanism. Lipid emulsion not modelled; user manages as cardiac arrest. */
     if (state.events.last) {
         state.lastTimer += dt;
-        if (state.lastTimer < 60) {
+        /* Resolution is checked BEFORE the progression ladder. Achieving ROSC
+           puts the rhythm back to sinus, which would otherwise match the
+           phase-2 condition below on the very next tick and immediately
+           re-arrest the patient - the user could never win. */
+        if (state.lastArrested && state.rhythm === 'sinus') {
+            state.events.last = false;
+            state.lastArrested = false;
+            log('LAST: ROSC - rhythm restored');
+        } else if (state.lastTimer < 60) {
             // Phase 1: seizure-like signs
             // Express via betaTone surge (seizure -> tachycardia, hypertension)
             state.betaTone  += 0.05 * dt;
@@ -5953,20 +6214,23 @@ setInterval(() => {
         } else if (state.lastTimer >= 60 && state.rhythm === 'sinus') {
             // Phase 2: VT pulseless
             setRhythm('vtPulseless');
+            state.lastArrested = true;
             log('LAST: progression -> VT pulseless');
         } else if (state.lastTimer >= 120 && state.rhythm === 'vtPulseless') {
             // Phase 3: VF
             setRhythm('vf');
+            state.lastArrested = true;
             log('LAST: progression -> VF');
         }
-        // Once user has pushed enough adrenaline (existing arrest-credit logic)
-        // and rhythm returns to sinus, mark resolved
-        if (state.rhythm === 'sinus' && state.lastTimer > 30) {
-            state.events.last = false;
-            log('LAST: ROSC - rhythm restored');
-        }
+        /* v4.29: resolution used to read `rhythm === 'sinus' && lastTimer > 30`
+           and sat AFTER this ladder. It fired at t=30s - a full 30 seconds
+           before phase 2 could move the rhythm off sinus - so the scenario
+           cancelled itself, logged a ROSC that never happened, and could never
+           reach VT or VF at all. It now requires an arrest to have actually
+           occurred, and is evaluated first (see above). */
     } else {
         state.lastTimer = 0;
+        state.lastArrested = false;
     }
 
     /* --- Baroreflex ---
@@ -6004,9 +6268,9 @@ setInterval(() => {
     const muscBlock = 1 - Math.exp(-(aE + 0.8 * gE) / CONFIG.PARA_BLOCK_K);
     state.parasympTone *= (1 - muscBlock);
 
-    state.alphaTone    = clamp(state.alphaTone,    0, 1.4);
-    state.betaTone     = clamp(state.betaTone,     0, 1.4);
-    state.parasympTone = clamp(state.parasympTone, 0, 1.0);
+    state.alphaTone    = clamp(state.alphaTone,    0, CONFIG.ALPHA_CLAMP);
+    state.betaTone     = clamp(state.betaTone,     0, CONFIG.BETA_CLAMP);
+    state.parasympTone = clamp(state.parasympTone, 0, CONFIG.PARASYMP_CLAMP);
 
     /* --- Hemodynamics (v2.0: saturating formulae) ---
        Each of contractility, SVR tone, and HR is computed from a pair of
@@ -6053,7 +6317,9 @@ setInterval(() => {
         const svrBase = state.profile.svrBase !== undefined ? state.profile.svrBase : 1.0;
         let pushUp   = state.alphaTone * CONFIG.SVR_ALPHA_GAIN
                      + p.vasoCe * CONFIG.SVR_VASO_GAIN          // v3.26 vasopressin (V1)
-                     + p.caCe   * CONFIG.SVR_CALCIUM_GAIN;      // v3.26 calcium chloride
+                     + p.caCe   * CONFIG.SVR_CALCIUM_GAIN       // v3.26 calcium chloride
+                     + state.sahSurge * CONFIG.SAH_SURGE_SVR    // v4.29 SAH catecholamine surge
+                     + (state.adSvrDrive || 0);                 // v4.29 autonomic dysreflexia
         let pushDown = state.parasympTone * CONFIG.SVR_PARASYMP_GAIN
                      + pE        * CONFIG.SVR_PROP_DROP
                      + midaE     * 0.1
@@ -6655,13 +6921,40 @@ setInterval(() => {
     /* --- FRC O2 reserve & SpO2 ---
        O2 consumption now scales with metabolicRate. */
     p.frcO2 -= state.profile.o2Consumption * state.metabolicRate * dt;
-    if (state.minuteVent > 0.5 && p.airway !== 'none' && !disconnected) {
+    /* v4.29: refill is now continuous in minute ventilation.
+       This used to be gated on `minuteVent > 0.5`, which made oxygenation a
+       step function: above the gate, alveolar O2 equilibrated comfortably and
+       SpO2 pinned to its ceiling; below it, refill stopped dead and alveolar
+       O2 collapsed. A patient ventilated at 0.72 L/min with etCO2 76 still
+       read SpO2 99%, and the whole decline from 99 to 70 happened between two
+       adjacent tidal volumes. Scaling the rate linearly out of zero, and
+       normalising against the patient's own resting minute ventilation rather
+       than a fixed 5 L/min, gives a graded response at any body size. */
+    if (p.airway !== 'none' && !disconnected && state.minuteVent > 0) {
         const target = state.profile.frc * p.fio2;
-        const refillRate = Math.min(1, state.minuteVent / 5) * 0.3;
+        // Resting MV for this profile, from basal O2 consumption (~5 mL O2 per
+        // mL/s of consumption gives 6 L/min for the 70 kg adult).
+        const restingMV = state.profile.o2Consumption * 1.5;
+        const ventFrac  = Math.min(1, state.minuteVent / restingMV);
+        const refillRate = ventFrac * 0.3;
         p.frcO2 += (target - p.frcO2) * refillRate * dt;
     }
     p.frcO2 = Math.max(0, p.frcO2);
     p.alveolarFiO2 = p.frcO2 / state.profile.frc;
+
+    /* v4.29: alveolar gas equation - CO2 displaces alveolar oxygen.
+       The FRC balance above tracks oxygen alone, so a hypoventilating patient
+       kept a near-normal alveolar O2 fraction no matter how high their CO2
+       climbed. That is why hypoventilation never desaturated: at 1.2 L/min of
+       minute ventilation with etCO2 109, alveolar O2 still read 0.183 and SpO2
+       sat at 99%. Alveolar gas is a fixed volume, so CO2 accumulating in it
+       must displace something.
+       Only the EXCESS above a normal 40 mmHg is applied, because the resting
+       alveolar O2 fraction the model calibrates against already accounts for
+       normocapnic CO2. Divided by 713 mmHg (dry barometric) and by a
+       respiratory quotient of 0.8, as in the standard equation. */
+    const co2Displacement = Math.max(0, state.etco2 - 40) / 713 / 0.8;
+    const effectiveAlveolarFiO2 = Math.max(0, p.alveolarFiO2 - co2Displacement);
 
     // v3.3: pulmonary oedema from volume overload reduces SpO2 ceiling.
     // V/Q mismatch reduces oxygenation even when alveolar FiO2 is adequate.
@@ -6681,13 +6974,33 @@ setInterval(() => {
     // = dead-space ventilation). At peShunt=0.6 (settling) the drop is ~7.2
     // mmHg points, landing ceiling at ~92.
     const peShuntDrop = state.peShunt * CONFIG.PE_SHUNT_SPO2_DROP;
-    const spo2Ceiling = 99 - oedemaFrac * CONFIG.OEDEMA_SPO2_MAX_DROP - aspirShuntDrop - peShuntDrop;
+    /* v4.29: V/Q mismatch from airway mechanics.
+       Until now the only routes to desaturation were the three shunt terms
+       above plus near-total apnoea, so severe bronchospasm - Vt 140 mL, PIP 28,
+       etCO2 at its cap - sat at SpO2 99 throughout, directly contradicting the
+       bronchospasm, asthma and paediatric briefings, which all promise a
+       falling saturation. Obstructed, gas-trapped lung units are poorly
+       ventilated but still perfused, which is a true shunt. Driven by the two
+       mechanics the model already tracks: airway resistance above baseline,
+       and gas trapping expressed as auto-PEEP. */
+    const resistFrac = clamp((p.bronchResistance - 5) / (CONFIG.BRONCH_RESISTANCE - 5), 0, 1);
+    const trapFrac   = clamp(p.autoPEEP / 10, 0, 1);
+    const vqShuntDrop = CONFIG.VQ_SHUNT_SPO2_DROP * clamp(resistFrac * 0.75 + trapFrac * 0.25, 0, 1);
+    const spo2Ceiling = 99 - oedemaFrac * CONFIG.OEDEMA_SPO2_MAX_DROP
+                      - aspirShuntDrop - peShuntDrop - vqShuntDrop;
 
-    if (p.alveolarFiO2 >= CONFIG.SPO2_DESAT_THRESHOLD_FIO2) {
+    if (effectiveAlveolarFiO2 >= CONFIG.SPO2_DESAT_THRESHOLD_FIO2) {
         state.spo2 += (spo2Ceiling - state.spo2) * CONFIG.SPO2_RECOVERY_GAIN * dt;
     } else {
-        // Hypoxic desaturation target. Oedema reduces even this (additional V/Q hit).
-        const baseTarget = 70 + (p.alveolarFiO2 / CONFIG.SPO2_DESAT_THRESHOLD_FIO2) * 29;
+        /* Hypoxic desaturation target. Oedema and the shunt terms reduce even this.
+           v4.29: the floor used to be a literal 70 - `70 + (frac) * 29` - so a
+           patient with no alveolar oxygen left asymptoted at exactly 70% and
+           stopped. Thirty minutes of total apnoea on room air ended with SpO2
+           70, HR 68, MAP 79 and a sinus rhythm: CAPS.SPO2_MIN (40) was
+           unreachable and nobody could come to harm from hypoxia. The target
+           now runs down to the cap. */
+        const floor = CONFIG.CAPS.SPO2_MIN;
+        const baseTarget = floor + (effectiveAlveolarFiO2 / CONFIG.SPO2_DESAT_THRESHOLD_FIO2) * (99 - floor);
         const target = Math.min(baseTarget, spo2Ceiling);
         state.spo2 += (target - state.spo2) * 0.3 * dt;
     }
@@ -6697,6 +7010,36 @@ setInterval(() => {
         state.spo2 -= CONFIG.CO2_EMBOLISM_SPO2_DROP_RATE * dt;
     }
     state.spo2 = clamp(state.spo2, CONFIG.CAPS.SPO2_MIN, CONFIG.CAPS.SPO2_MAX);
+
+    /* --- v4.29: haemodynamic consequences of hypoxaemia ---
+       Previously there were none: SpO2 could sit at its floor indefinitely
+       with a normal heart rate, blood pressure and rhythm, so the sim could
+       not teach the endpoint every airway emergency is ultimately about.
+       Below HYPOXIA_THRESHOLD the myocardium starts to fail - vagal tone
+       rises and contractility falls, both scaling with the depth of hypoxia -
+       and below HYPOXIA_ARREST_SPO2, sustained, the rhythm degenerates. */
+    if (state.spo2 < CONFIG.HYPOXIA_THRESHOLD && hasPulse()) {
+        const depth = clamp(
+            (CONFIG.HYPOXIA_THRESHOLD - state.spo2) /
+            (CONFIG.HYPOXIA_THRESHOLD - CONFIG.CAPS.SPO2_MIN), 0, 1);
+        state.parasympTone += CONFIG.HYPOXIA_VAGAL_GAIN * depth * dt;
+        p.contractility = Math.max(
+            CONFIG.CONT_FLOOR,
+            p.contractility - CONFIG.HYPOXIA_CONTR_DROP * depth * dt
+        );
+        if (state.spo2 <= CONFIG.HYPOXIA_ARREST_SPO2) {
+            state.hypoxiaArrestTimer += dt;
+            if (state.hypoxiaArrestTimer >= CONFIG.HYPOXIA_ARREST_DELAY) {
+                setRhythm('asystole');
+                state.hypoxiaArrestTimer = 0;
+                log('ARREST: hypoxic cardiac arrest');
+            }
+        } else {
+            state.hypoxiaArrestTimer = Math.max(0, state.hypoxiaArrestTimer - dt);
+        }
+    } else {
+        state.hypoxiaArrestTimer = Math.max(0, state.hypoxiaArrestTimer - dt);
+    }
 
     /* --- etCO2 ---
        Body stores ~120 L of CO2 dissolved/buffered (70kg adult). Acute changes in
@@ -6727,9 +7070,22 @@ setInterval(() => {
             targetCO2 += CONFIG.TOURNIQUET_CO2_PEAK_RISE * envelope;
         }
         // Slow equilibration: tau ~= 2 min
-        state.etco2 += (Math.min(80, targetCO2) - state.etco2) * 0.008 * dt;
+        // v4.29: the hard Math.min(80, ...) here duplicated CAPS.ETCO2_MAX and
+        // silently re-imposed the old 80 mmHg ceiling. Use the cap constant so
+        // there is one place to change it.
+        state.etco2 += (Math.min(CONFIG.CAPS.ETCO2_MAX, targetCO2) - state.etco2) * 0.008 * dt;
     }
     state.etco2 = clamp(state.etco2, CONFIG.CAPS.ETCO2_MIN, CONFIG.CAPS.ETCO2_MAX);
+
+    /* v4.29: final tone clamp. Several blocks that run after the main clamp
+       above still push the tones - cough and movement surges, and the hypoxia
+       response - so between ticks the stored value could sit slightly outside
+       the range the Physiology gauges are drawn against, and the bar clipped.
+       Re-clamping here means state never holds an out-of-range tone when
+       anything reads it. */
+    state.alphaTone    = clamp(state.alphaTone,    0, CONFIG.ALPHA_CLAMP);
+    state.betaTone     = clamp(state.betaTone,     0, CONFIG.BETA_CLAMP);
+    state.parasympTone = clamp(state.parasympTone, 0, CONFIG.PARASYMP_CLAMP);
 
     /* --- Alarm evaluation ---
        Evaluate all monitored vitals against thresholds, set alarmStates,
@@ -7159,7 +7515,12 @@ function setTimeScale(n) {
 }
 
 function setProfile(key) {
-    state.profile = PROFILES[key];
+    // v4.29: copy rather than alias. This used to be `state.profile =
+    // PROFILES[key]`, so any scenario that tweaked state.profile edited the
+    // shared preset for the rest of the session - the asthma scenario left
+    // PROFILES.adult.airwayReactivity at 1.6 and the aneurysm scenario left
+    // mapTarget at 95, silently changing every later "adult" case.
+    state.profile = Object.assign({}, PROFILES[key]);
     // Buttons select by id prefix pr-*. v3.26: pr-sepsis no longer rendered
     // but the sepsis profile is still selectable via the scenario; guard the
     // dom lookup against a missing element.
@@ -7955,9 +8316,11 @@ const SCENARIOS = {
             p.midaCp = 0;     p.midaCe = 0;
             p.ketCp = 0;      p.ketCe = 0;
             p.paralysis = 0;
-            // All infusions off
-            state.machine.pumps.remi.rate = 0;
-            state.machine.pumps.prop.rate = 0;
+            // All infusions off (v4.29: was `pumps.<d>.rate = 0`, a no-op on a
+            // number - harmless here only because scenarioReset() already
+            // zeroes every pump, but corrected so it means what it says)
+            state.machine.pumps.remi = 0;
+            state.machine.pumps.prop = 0;
             // No surgical stimulus (patient is in the anaesthetic room, not
             // yet draped or being operated on)
             state.nociception = 0;
@@ -8696,8 +9059,8 @@ const SCENARIOS = {
 
     aneurysm: {
         name: 'Cerebral aneurysm rupture',
-        briefing: 'Sudden severe headache during induction. Likely SAH with aneurysm rupture. BP 200/110, HR 65. Aim: control BP without crashing into ischaemic territory.',
-        description: 'A 55-year-old, previously well, has just suffered a sudden severe ("thunderclap") headache mid-induction. CT confirms subarachnoid haemorrhage from a ruptured anterior communicating aneurysm. Massive sympathetic surge has driven BP to 200/110 with reflex bradycardia. Surgical aim is now emergent clipping/coiling. Tight BP control is essential - MAP < 110 to reduce re-bleed risk, but MAP > 80 to maintain cerebral perfusion in the face of vasospasm.',
+        briefing: 'Sudden severe headache during induction. Likely SAH with aneurysm rupture. BP around 170/105 with a reflex bradycardia. Aim: control BP without crashing into ischaemic territory.',
+        description: 'A 55-year-old, previously well, has just suffered a sudden severe ("thunderclap") headache mid-induction. CT confirms subarachnoid haemorrhage from a ruptured anterior communicating aneurysm. A catecholamine surge has driven BP to around 170/105 with reflex bradycardia. Surgical aim is now emergent clipping/coiling. Tight BP control is essential - MAP < 110 to reduce re-bleed risk, but MAP > 80 to maintain cerebral perfusion in the face of vasospasm.',
         objectives: [
             'Recognise the haemodynamic profile of acute SAH (severe HTN, reflex brady)',
             'Titrate fast-on/fast-off antihypertensives (esmolol, GTN) without overshoot',
@@ -8728,7 +9091,12 @@ const SCENARIOS = {
             p.rocCp = 4.5;
             p.rocCe = 4.5;
             p.paralysis = 0.88;
-            // Massive sympathetic surge from SAH
+            // Massive sympathetic surge from SAH.
+            // v4.29: driven by state.sahSurge, which feeds the alpha and
+            // parasympathetic TARGETS each tick and decays over ~15 min.
+            // Assigning the tones directly (as this used to) did nothing -
+            // the tone relaxation erased them within a couple of seconds.
+            state.sahSurge = 1.0;
             state.alphaTone = 0.85;
             state.betaTone  = 0.30;   // beta blunted by reflex bradycardia
             state.parasympTone = 0.55;
@@ -8895,8 +9263,13 @@ const SCENARIOS = {
             p.propCp = 0;
             p.propCe = 0;
             // Light remi maintenance - present but insufficient for the
-            // rising surgical stimulus
-            state.machine.pumps.remi.rate = 0.08;
+            // rising surgical stimulus.
+            // v4.29: was `pumps.remi.rate = 0.08` - pumps.remi is a number, so
+            // that assignment was silently discarded and the scenario ran with
+            // no infusion at all.
+            state.machine.pumps.remi = 0.08;
+            p.remiCp = 0.0027;
+            p.remiCe = 0.0027;
             // Mid-case fentanyl on board, partially worn off
             p.fentCp = 0.0010;
             p.fentCe = 0.0010;
@@ -8969,7 +9342,12 @@ const SCENARIOS = {
             // Maintenance drugs - very light, end-of-case
             p.propCp = 0;
             p.propCe = 0;
-            state.machine.pumps.remi.rate = 0.08;
+            // v4.29: was `pumps.remi.rate = 0.08` - a no-op (pumps.remi is a
+            // number), so this scenario ran with no infusion. Cp/Ce seeded to
+            // the steady state for 0.08 mcg/kg/min (0.15 -> 0.005, so 0.08 -> ~0.0027).
+            state.machine.pumps.remi = 0.08;
+            p.remiCp = 0.0027;
+            p.remiCe = 0.0027;
             p.fentCp = 0.0008;
             p.fentCe = 0.0008;
             // Rocuronium worn off - end of case
@@ -8994,8 +9372,9 @@ const SCENARIOS = {
         description: 'A 30-year-old healthy patient was having a brachial plexus block placed under sedation prior to elbow ORIF. The injection of bupivacaine has been followed by acute confusion, perioral tingling, then twitching. Concerning for systemic absorption. Over the next 1-2 minutes the patient is likely to progress to seizure-like activity (brief BIS spike), then ventricular tachycardia (pulseless), then VF if untreated. Treatment is the LIPID rescue protocol (intralipid 20% bolus 1.5 mL/kg then infusion) plus standard ACLS with adrenaline. NOTE: lipid emulsion is not modelled in this sim - manage as standard cardiac arrest with adrenaline boluses for now.',
         objectives: [
             'Recognise progressive LAST: CNS signs precede CVS collapse',
+            'Secure the airway and ventilate with oxygen. The patient was sedated for a block and is breathing room air through an unprotected airway - they are already desaturating before the arrhythmia arrives. Adrenaline will not hold a rhythm in a hypoxic myocardium, so ROSC without oxygenation is temporary',
             'Initiate ACLS rapidly when arrhythmia develops',
-            'Adrenaline boluses (100mcg-1mg) for ROSC via existing arrest mechanism',
+            'Adrenaline boluses of 500mcg or more for ROSC (smaller doses do not count toward the arrest rescue in this sim)',
             'In real practice: lipid emulsion 20% IV is the specific antidote',
             'After ROSC, address ongoing risk - LAST can recur'
         ],
@@ -9069,8 +9448,11 @@ const SCENARIOS = {
             // MH already partially developed
             state.events.mh = true;
             state.mhSeverity = 0.3;   // pre-loaded
-            // Boost initial ETCO2 by directly tweaking the gas state
-            state.etCO2 = 55;
+            state.temperature = 38.5; // v4.29: matches the briefing's core temp
+            // Boost initial ETCO2 by directly tweaking the gas state.
+            // v4.29: was `state.etCO2` - wrong case, so this created a dead
+            // property and the patient started at 38 while the briefing said 55.
+            state.etco2 = 55;
             // Tachycardia from MH
             state.betaTone = 0.45;
             state.nociception = 3;
@@ -9130,13 +9512,14 @@ function syncScenarioUI() {
 function scenarioReset() {
     const p = state.patient;
 
-    // Clear all drug Cp/Ce values
-    const drugs = ['prop','remi','fent','mida','dex','metar','ephed','atrop',
-                   'glyco','adr','ket','roc','sug','neo',
-                   'phen','nor','esmo','gtn',          // v3.16
-                   'dobut','vaso','ca',                // v3.26
-                   'dant'];                            // v3.27
-    drugs.forEach(d => {
+    // Clear all drug Cp/Ce values.
+    // v4.29: derived from PK instead of a hand-maintained list. The old list
+    // was written before the v3.51 opioids and v3.60 bronchodilators were
+    // added, so alfentanil, morphine, furosemide, salbutamol and magnesium
+    // survived a scenario change - give salbutamol, reload, and the next
+    // patient started part-bronchodilated. Deriving it means any drug added
+    // to PK in future is cleared by construction.
+    Object.keys(PK).forEach(d => {
         p[d + 'Cp'] = 0;
         p[d + 'Ce'] = 0;
     });
@@ -9144,12 +9527,13 @@ function scenarioReset() {
     // v3.27: clear emergency-scenario state
     state.mhSeverity = 0;
     state.dantroleneEffect = 0;
+    state.temperature = CONFIG.TEMP_NORMAL;
     state.lastTimer = 0;
-    // Reset profile-mutation flags (autonomic dysreflexia attaches a flag to
-    // the live profile object; clear it so it doesn't leak to next scenario).
-    if (state.profile && state.profile.autonomicDysreflexia) {
-        delete state.profile.autonomicDysreflexia;
-    }
+    state.lastArrested = false;
+    state.sahSurge = 0;
+    // (v4.29: the autonomicDysreflexia flag no longer needs clearing here -
+    // setProfile() now hands out a copy, so scenario tweaks cannot outlive
+    // the scenario that made them.)
 
     // Zero all infusion pumps and update their UI sliders
     Object.keys(state.machine.pumps).forEach(d => {
@@ -9194,6 +9578,7 @@ function scenarioReset() {
     p.reactivityRisk = 0;
     p.lastReaction = '';
     state.awarenessRisk = 0;
+    state.hypoxiaArrestTimer = 0;
 
     // Visual log separator so the user can see where the reset happened
     log('--- scenario reset ---');
@@ -9258,6 +9643,20 @@ function loadScenario(key) {
     if (!key || !SCENARIOS[key]) return;
     scenarioReset();
     SCENARIOS[key].setup();
+
+    /* v4.29: hold the surgical stimulus a scenario asked for.
+       Setups assign state.nociception to establish the surgical context, but
+       the physiology tick continuously eases nociception toward
+       nociceptionTarget (TAU_NOCI, ~2.5 s) and scenarioReset() has just set
+       that target to 0. Fifteen of the twenty scenarios therefore lost their
+       stimulus within about ten seconds - while syncScenarioUI() went on
+       showing the intended value on the header Stimulus slider, so the
+       control read 5 while the model ran at 0.
+       Doing this here rather than in each setup() means a scenario author
+       only has to set nociception, and the two can never drift apart again. */
+    state.nociceptionTarget = state.nociception;
+    reflectNoci(state.nociception);
+
     // v3.26: do NOT reset the dropdown - the previous behaviour blanked it back
     // to "-- pick one --" right after loading. Now the user-visible label
     // persists showing the active scenario. To re-fire the same scenario,
@@ -9382,7 +9781,10 @@ function setBleed(severity) {
     } else {
         state.events.bleed = true;
         state.bleedSeverity = severity;
-        state.patient.bleedRate = rates[severity];
+        // v4.29: `?? 0` guard. An unrecognised severity used to put `undefined`
+        // into bleedRate, which propagated NaN through centralVolume ->
+        // preload -> the whole cardiovascular model within a few ticks.
+        state.patient.bleedRate = rates[severity] ?? 0;
         const label = { slow:'Slow (2 mL/s)', moderate:'Moderate (10 mL/s)', severe:'Severe (25 mL/s)' }[severity];
         log(`Haemorrhage: ${label}`);
     }
@@ -10282,20 +10684,35 @@ function physCardiacOutput() {
 const PHYS_GROUPS = {
     cv: [
         { section: 'Determinants' },
-        { key:'circVol',  label:'Circulating volume', unit:'L',   min:2,   max:8,
+        // v4.29: gauge spans are resolved from the same values the model
+        // clamps against, per profile. They used to be fixed numbers, so the
+        // bar fill and its warn/danger thresholds were miscalibrated: a 20 kg
+        // child's normal 1.6 L sat below a hardcoded 2 L floor (bar pinned at
+        // zero for a whole case), and a septic patient's preload ceiling of
+        // 1.2 against a 1.8 span meant the bar could never pass 67%.
+        { key:'circVol',  label:'Circulating volume', unit:'L',
+          min:0, max:()=>state.profile.centralVol * 1.7,
           base:()=>state.profile.centralVol, get:()=>state.patient.centralVolume, fmt:v=>v.toFixed(2), colour:'none' },
-        { key:'preload',  label:'Preload',            unit:'',    min:0,   max:1.8,
+        { key:'preload',  label:'Preload',            unit:'',    min:0,
+          max:()=>state.profile.preloadCeiling || 1.6,
           base:()=>CONFIG.PRELOAD_BASELINE,  get:()=>state.patient.preload,       fmt:v=>v.toFixed(2), colour:'ceiling' },
-        { key:'contract', label:'Contractility',      unit:'',    min:()=>CONFIG.CONT_FLOOR, max:()=>CONFIG.CONT_CEILING,
+        { key:'contract', label:'Contractility',      unit:'',    min:()=>CONFIG.CONT_FLOOR,
+          max:()=>state.profile.contractilityCeiling || CONFIG.CONT_CEILING,
           base:()=>1.0,                      get:()=>state.patient.contractility, fmt:v=>v.toFixed(2), colour:'ceiling' },
         { key:'svr',      label:'SVR tone',           unit:'',    min:()=>CONFIG.SVR_FLOOR,  max:()=>CONFIG.SVR_CEILING,
           base:()=>1.0,                      get:()=>state.patient.svrTone,       fmt:v=>v.toFixed(2), colour:'ceiling' },
-        { key:'hr',       label:'Heart rate',         unit:'bpm', min:()=>CONFIG.HR_FLOOR,   max:()=>CONFIG.HR_CEILING,
+        // v4.29: floor at 0, not HR_FLOOR. HR_FLOOR (25) is the floor for a
+        // PERFUSING rhythm; in asystole or pulseless VT the displayed rate is
+        // 0, which clipped off the bottom of the gauge during every arrest.
+        { key:'hr',       label:'Heart rate',         unit:'bpm', min:0,   max:()=>CONFIG.HR_CEILING,
           base:()=>state.profile.hrBase,     get:()=>state.hr,                    fmt:v=>Math.round(v), colour:'alarm', alarm:'hr' },
         { section: 'Outputs' },
-        { key:'map',      label:'MAP',                unit:'mmHg', min:30,  max:160,
+        // v4.29: widened. Real runs clipped both ends - haemorrhage reaches
+        // MAP 21 and a resuscitated arrest reaches 180, against a 30-160 span.
+        { key:'map',      label:'MAP',                unit:'mmHg', min:0,   max:200,
           base:()=>state.profile.mapTarget,  get:()=>calcMAP(state.sys, state.dia, state.hr), fmt:v=>Math.round(v), colour:'alarm', alarm:'map' },
-        { key:'co',       label:'Cardiac output',     unit:'L/min', min:0,  max:12,
+        // v4.29: 12 -> 20. Adrenaline during a resuscitation reaches ~18 L/min.
+        { key:'co',       label:'Cardiac output',     unit:'L/min', min:0,  max:20,
           base:()=>5.0,                      get:()=>physCardiacOutput(),         fmt:v=>v.toFixed(1), colour:'none' },
     ],
     resp: [
@@ -10313,7 +10730,7 @@ const PHYS_GROUPS = {
         { section: 'Outputs' },
         { key:'spo2',      label:'SpO₂',              unit:'%',   min:40,  max:100,
           base:()=>98,                       get:()=>state.spo2,                  fmt:v=>Math.round(v), colour:'alarm', alarm:'spo2' },
-        { key:'etco2',     label:'End-tidal CO₂',     unit:'mmHg', min:0,  max:80,
+        { key:'etco2',     label:'End-tidal CO₂',     unit:'mmHg', min:0,  max:()=>CONFIG.CAPS.ETCO2_MAX,
           base:()=>38,                       get:()=>state.etco2,                 fmt:v=>Math.round(v), colour:'alarm', alarm:'etco2' },
         { key:'vt',        label:'Tidal volume',      unit:'mL',  min:0,   max:800,
           base:()=>500,                      get:()=>state.tidalVolume,           fmt:v=>Math.round(v), colour:'alarm', alarm:'vt' },
@@ -10329,14 +10746,23 @@ const PHYS_GROUPS = {
         { key:'paralysis', label:'Paralysis',         unit:'',    min:0,   max:1,
           base:()=>0,                        get:()=>state.patient.paralysis,     fmt:v=>v.toFixed(2), colour:'none' },
         { section: 'Autonomic tone' },
-        { key:'alpha',     label:'Alpha tone',        unit:'',    min:0,   max:1.5,
+        // v4.29: spans resolved from the tick's own clamps (see CONFIG.*_CLAMP)
+        { key:'alpha',     label:'Alpha tone',        unit:'',    min:0,   max:()=>CONFIG.ALPHA_CLAMP,
           base:()=>CONFIG.ALPHA_REST,        get:()=>state.alphaTone,             fmt:v=>v.toFixed(2), colour:'ceiling' },
-        { key:'beta',      label:'Beta tone',         unit:'',    min:0,   max:1.5,
+        { key:'beta',      label:'Beta tone',         unit:'',    min:0,   max:()=>CONFIG.BETA_CLAMP,
           base:()=>CONFIG.BETA_REST,         get:()=>state.betaTone,              fmt:v=>v.toFixed(2), colour:'ceiling' },
-        { key:'parasymp',  label:'Parasympathetic tone', unit:'', min:0,   max:1.5,
+        { key:'parasymp',  label:'Parasympathetic tone', unit:'', min:0,   max:()=>CONFIG.PARASYMP_CLAMP,
           base:()=>CONFIG.PARASYMP_REST,     get:()=>state.parasympTone,          fmt:v=>v.toFixed(2), colour:'ceiling' },
         { key:'bbBlock',   label:'β-blockade fraction', unit:'',  min:0,   max:1,
           base:()=>0,                        get:()=>state.bbBlockFraction,       fmt:v=>v.toFixed(2), colour:'none' },
+        // v4.29: metabolic state. Core temperature is now modelled (it drives,
+        // and is driven by, malignant hyperthermia), and metabolic rate is the
+        // variable the MH scenario's own objectives tell the trainee to watch.
+        { section: 'Metabolic' },
+        { key:'temp',      label:'Core temperature',  unit:'°C', min:34,  max:43,
+          base:()=>CONFIG.TEMP_NORMAL,       get:()=>state.temperature,           fmt:v=>v.toFixed(1), colour:'ceiling' },
+        { key:'metab',     label:'Metabolic rate',    unit:'x',  min:()=>CONFIG.METAB_MIN, max:()=>CONFIG.METAB_MAX,
+          base:()=>1.0,                      get:()=>state.metabolicRate,         fmt:v=>v.toFixed(2), colour:'ceiling' },
     ],
 };
 

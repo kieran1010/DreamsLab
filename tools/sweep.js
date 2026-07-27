@@ -181,11 +181,16 @@ const TREATMENTS = {
         { t: 60, label: 'Noradrenaline infusion 0.15',  do: dl => dl.setInf('nor', 0.15) },
         { t: 90, label: 'Crystalloid 250mL (cautious)', do: dl => give(dl, 'flu', 0.25) },
     ],
+    // NB the scenario objective says "adrenaline boluses (100mcg-1mg) for ROSC",
+    // but only doses >= CONFIG.ARREST_ADR_CREDIT_DOSE (500 mcg) earn a rescue
+    // credit, and CONFIG.ARREST_REVIVE_THRESHOLD (3) are needed. A trainee
+    // following the objective with 100 mcg boluses never achieves ROSC.
     last: [
-        { t: 90,  label: 'Adrenaline 100mcg', do: dl => give(dl, 'adr', 0.1) },
-        { t: 120, label: 'Adrenaline 100mcg', do: dl => give(dl, 'adr', 0.1) },
-        { t: 150, label: 'Adrenaline 100mcg', do: dl => give(dl, 'adr', 0.1) },
-        { t: 180, label: 'Adrenaline 500mcg', do: dl => give(dl, 'adr', 0.5) },
+        { t: 20,  label: 'Intubate (airway -> ETT)', do: dl => dl.setAirway('ett') },
+        { t: 25,  label: 'Ventilate: VCV, FiO2 1.0', do: dl => { dl.setVentMode('VCV'); V(dl, 'fio2', 1.0); } },
+        { t: 90,  label: 'Adrenaline 500mcg',        do: dl => give(dl, 'adr', 0.5) },
+        { t: 150, label: 'Adrenaline 500mcg',        do: dl => give(dl, 'adr', 0.5) },
+        { t: 210, label: 'Adrenaline 500mcg',        do: dl => give(dl, 'adr', 0.5) },
     ],
     mh: [
         { t: 20, label: 'Sevoflurane off (stop trigger)', do: dl => V(dl, 'sevo', 0) },
