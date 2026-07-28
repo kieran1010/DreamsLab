@@ -51,6 +51,32 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.32  ("Stimulus slider moves to the left of the brand bar")
+  ---------------------------------------------------------------------------------
+  UI only. The Stimulus slider (added to the header in v4.25) moves from the
+  right-hand button group to the left side of the brand bar, next to the
+  Hypnos/Synapse lockup, so the right side is buttons only. No behaviour
+  change - same #brand-noci element, same setNoci()/logNoci() wiring; the
+  delivery tray's flex-grow keeps absorbing the middle, so the slider sits
+  flush left and the button group flush right as before.
+==================================================================================
+-->
+<!--
+==================================================================================
+  DREAMS LAB  v4.31  ("Offline-copy notice")
+  ---------------------------------------------------------------------------------
+  UI only. Companion to the v4.30 Download link: a saved copy of the sim runs
+  forever and silently goes stale, so the app now tells the user when they are
+  running one. At load, if location.protocol is file:// (the signature of a
+  copy saved via the Download link or "Save page as"), a slim dismissible
+  strip appears at the top of the screen pointing at the live version at
+  https://synapse.hypnos.one. Nothing is blocked - offline use is a feature,
+  the strip is informational and closes with one click. The check is
+  typeof-guarded because the headless harness (tools/) has no location object.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.30  ("Download link in the Start-here footer")
   ---------------------------------------------------------------------------------
   UI only. The whole app is a single HTML file by design, so a teacher can keep
@@ -2579,12 +2605,15 @@ input[type=range] {
 /* v4.20: PHYSIOLOGY button lights up accent-blue while its modal is open */
 #brand-phys-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #brand-phys-btn.active:hover { filter: brightness(1.15); }
-/* v4.25: compact surgical-stimulus slider in the brand bar */
+/* v4.25: compact surgical-stimulus slider in the brand bar
+   v4.32: now sits on the left, beside the brand lockup - margin-left gives it
+   breathing room from the wordmark */
 #brand-noci {
     display: inline-flex;
     align-items: center;
     gap: 7px;
     align-self: center;
+    margin-left: 14px;
     padding: 3px 9px;
     border: 1px solid #555;
     border-radius: 3px;
@@ -2706,6 +2735,26 @@ input[type=range] {
     text-decoration: underline; font-size: 0.72rem; cursor: pointer;
 }
 #sh-foot #sh-about-link:hover, #sh-foot #sh-download-link:hover { color: #aaa; }
+/* v4.31: offline-copy notice. Shown at load only when the sim is running from
+   file:// (a copy saved via the Download link or "Save page as"). A slim
+   dismissible strip; sits above the modals (they are z-index 10000-10001) so
+   it stays readable whatever is open. Hidden by default - the [INIT] protocol
+   check flips it to flex. */
+#local-copy-note {
+    display: none; position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+    z-index: 10500; max-width: min(92vw, 640px);
+    align-items: center; gap: 12px;
+    padding: 8px 12px; border-radius: 5px;
+    background: rgba(20, 24, 30, 0.97); border: 1px solid #8a6d1a;
+    color: #e8d9a0; font-size: 0.74rem; line-height: 1.4;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.6);
+}
+#local-copy-note a { color: #ffd45e; font-weight: bold; text-decoration: underline; }
+#local-copy-note button {
+    background: none; border: none; color: #b09b55; font-size: 1rem;
+    cursor: pointer; padding: 0 2px; line-height: 1;
+}
+#local-copy-note button:hover { color: #ffd45e; }
 /* brand bar button - subtly highlighted so newcomers notice it */
 #brand-starthere-btn {
     padding: 4px 10px; font-size: 0.6rem;
@@ -3443,6 +3492,16 @@ input[type=range] {
         <span class="brand-divider"></span>
         <span class="brand-product">Synapse</span>
     </a>
+    <!-- v4.25: surgical-stimulus slider (moved from the retired Panel)
+         v4.32: moved from the right-hand button group to the left, next to
+         the brand lockup, so the right side is buttons only -->
+    <div id="brand-noci" title="Surgical stimulus level (0-10)">
+        <span class="bn-label">Stimulus</span>
+        <input id="brand-noci-slider" type="range" min="0" max="10" step="0.1" value="0"
+               oninput="setNoci(this.value)" onchange="logNoci(this.value)"
+               aria-label="Surgical stimulus">
+        <span class="bn-val" id="brand-noci-val">0.0</span>
+    </div>
     <!-- v4.21: active-event chips (scenario-driven; click to disable) -->
     <div id="event-tray"></div>
     <!-- v4.18: bolus delivery chips (drug name + progress bar) appear here -->
@@ -3451,14 +3510,8 @@ input[type=range] {
          "Dr Kieran Gillick" text baseline-aligns with "Dreams Lab" rather
          than appearing optically high due to the font-size mismatch. -->
     <div style="display:flex; align-items:baseline; gap:10px;">
-        <!-- v4.25: surgical-stimulus slider (moved from the retired Panel) -->
-        <div id="brand-noci" title="Surgical stimulus level (0-10)">
-            <span class="bn-label">Stimulus</span>
-            <input id="brand-noci-slider" type="range" min="0" max="10" step="0.1" value="0"
-                   oninput="setNoci(this.value)" onchange="logNoci(this.value)"
-                   aria-label="Surgical stimulus">
-            <span class="bn-val" id="brand-noci-val">0.0</span>
-        </div>
+        <!-- v4.32: Stimulus slider moved out of this group to the left of the
+             bar, beside the brand lockup - see #brand-noci above -->
         <!-- v3.83: START HERE button - opens the novice orientation modal -->
         <button id="brand-starthere-btn" onclick="toggleStartHere()" title="New here? A guided orientation to the monitor and controls">START HERE</button>
         <!-- v3.64: SCENARIOS button - opens scenario picker modal -->
@@ -3563,6 +3616,14 @@ input[type=range] {
 
         <button id="about-modal-close" onclick="toggleAboutModal()">Close</button>
     </div>
+</div>
+
+<!-- v4.31: offline-copy notice - hidden by default, unhidden by the [INIT]
+     protocol check when the sim is running from file:// -->
+<div id="local-copy-note">
+  <span>You are running a saved offline copy of Synapse. For the latest scenarios and fixes, use the live version at
+  <a href="https://synapse.hypnos.one" target="_blank" rel="noopener">synapse.hypnos.one</a>.</span>
+  <button onclick="this.parentElement.style.display='none'" title="Dismiss" aria-label="Dismiss">&times;</button>
 </div>
 
 <!-- v3.83: "Start here" orientation modal. Opens via the START HERE button.
@@ -11329,6 +11390,14 @@ buildVariableGraph();
 {
     const btn = document.getElementById('brand-silence-btn');
     if (btn) btn.classList.add('audio-on');
+}
+// v4.31: offline-copy notice. A copy saved via the Start-here Download link
+// (or "Save page as") runs from file:// - flag it and point at the live site,
+// since a saved copy silently goes stale. typeof-guard: the headless test
+// harness (tools/) has no location object.
+if (typeof location !== 'undefined' && location.protocol === 'file:') {
+    const note = document.getElementById('local-copy-note');
+    if (note) note.style.display = 'flex';
 }
 
 /* =============================================================================
