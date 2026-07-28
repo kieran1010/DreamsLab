@@ -51,6 +51,31 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.33  ("Vouchers: Pro scenarios behind time-limited access codes")
+  ---------------------------------------------------------------------------------
+  First slice of monetisation: an entitlement system that locks a configurable
+  set of scenarios ("Pro") behind voucher codes. Codes are created in admin.html,
+  validated by a Supabase Edge Function (supabase/), and can be single-use,
+  seat-limited (classroom) or unlimited, with a redemption deadline and a
+  time-limited access grant. Redemption returns an ECDSA-signed token the sim
+  stores in localStorage and verifies OFFLINE with WebCrypto, so after one
+  online activation the file keeps working offline, as ever.
+
+  Deliberate properties:
+    - Ships DORMANT. ENT_CONFIG is empty in the repo, isScenarioLocked() is
+      then always false, and the voucher UI stays hidden - deploying this
+      version changes nothing until keys/URL are pasted in (supabase/README.md).
+    - The gate lives in pickScenario() (the UI), NOT loadScenario(), so the
+      headless harness in tools/ can still drive every scenario, and the gate
+      is honesty-level only - the content necessarily ships in this file.
+    - New [ENTITLEMENTS] section holds all of it; PREMIUM_SCENARIOS is the
+      content decision and is meant to be edited freely.
+  Tested by tools/voucher-probe.js (sign with a throwaway key, verify in the
+  sandbox, check tampered/expired tokens are rejected and gating flips).
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.32  ("Stimulus slider moves to the left of the brand bar")
   ---------------------------------------------------------------------------------
   UI only. The Stimulus slider (added to the header in v4.25) moves from the
@@ -2908,6 +2933,60 @@ input[type=range] {
     font-style: italic;
     border-style: dashed;
 }
+/* v4.33: voucher-gated Pro scenarios. Locked buttons stay in the list (it
+   doubles as the shop window) but read as unavailable; the voucher entry
+   area sits under the list and is hidden entirely when ENT_CONFIG is empty. */
+#scenarios-list .scenario-btn.locked {
+    color: #778;
+    background: #1b1b1f;
+}
+#scenarios-list .scenario-btn.locked:hover {
+    border-color: #c93;
+    background: #221f1a;
+}
+#scenarios-list .scenario-btn .pro-badge {
+    float: right;
+    color: #c93;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    font-style: normal;
+}
+#voucher-area {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border: 1px dashed #444;
+    border-radius: 3px;
+    transition: border-color 0.3s;
+}
+#voucher-area.attention { border-color: #c93; }
+#voucher-status { font-size: 0.75rem; color: #9ab; margin-bottom: 6px; }
+#voucher-row { display: flex; gap: 6px; }
+#voucher-input {
+    flex: 1;
+    background: #161616;
+    border: 1px solid #444;
+    color: #ddd;
+    padding: 6px 8px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+}
+#voucher-input:focus { outline: none; border-color: #6cf; }
+#voucher-apply {
+    background: #235;
+    color: #def;
+    border: 1px solid #6cf;
+    border-radius: 3px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.8rem;
+}
+#voucher-apply:hover { background: #346; }
+#voucher-msg { font-size: 0.75rem; min-height: 1em; margin-top: 6px; color: #9ab; }
+#voucher-msg.err { color: #e66; }
+#voucher-msg.ok  { color: #6d9; }
 #scenarios-modal-close {
     background: transparent;
     color: #888;
@@ -3755,6 +3834,19 @@ input[type=range] {
             <p class="hint">Pick a scenario to start. Sim continues running underneath; loading a scenario applies its setup.</p>
             <div id="scenarios-list">
                 <!-- populated on init -->
+            </div>
+            <!-- v4.33: voucher / Pro entitlement area. display:none until
+                 entRenderUI() decides the voucher system is configured, so a
+                 build with empty ENT_CONFIG looks exactly like v4.29. -->
+            <div id="voucher-area" style="display:none">
+                <div id="voucher-status"></div>
+                <div id="voucher-row">
+                    <input id="voucher-input" placeholder="Voucher code, e.g. ABCD-EFGH-JKLM"
+                           spellcheck="false" autocomplete="off"
+                           onkeydown="if (event.key === 'Enter') applyVoucher()">
+                    <button id="voucher-apply" onclick="applyVoucher()">Apply</button>
+                </div>
+                <div id="voucher-msg"></div>
             </div>
             <button id="scenarios-modal-close" onclick="toggleScenariosModal()">Close</button>
         </div>
@@ -8242,6 +8334,23 @@ function escapeHtml(s) {
    v3.72: now also tracks state.currentScenario and switches to the brief view
    (rather than closing the modal entirely) so the user sees the new brief. */
 function pickScenario(key) {
+    // v4.33: Pro gating happens HERE, at the UI, not inside loadScenario() -
+    // the headless harness (and the console) can still drive every scenario.
+    if (key && isScenarioLocked(key)) {
+        const area = document.getElementById('voucher-area');
+        const msg  = document.getElementById('voucher-msg');
+        if (msg) {
+            msg.className = 'err';
+            msg.textContent = (SCENARIOS[key] ? SCENARIOS[key].name : 'This scenario') +
+                ' is a Pro scenario — enter a voucher code to unlock it.';
+        }
+        if (area) {
+            area.classList.add('attention');
+            setTimeout(() => area.classList.remove('attention'), 1600);
+        }
+        document.getElementById('voucher-input')?.focus();
+        return;
+    }
     if (!key) {
         // Reset only - no scenario setup
         scenarioReset();
@@ -11331,6 +11440,190 @@ function resize() {
 }
 
 /* =============================================================================
+   [ENTITLEMENTS]  -  v4.33 voucher-gated Pro scenarios
+   -----------------------------------------------------------------------------
+   Scenarios listed in PREMIUM_SCENARIOS need a valid entitlement token. Tokens
+   come from the Supabase `redeem` Edge Function (supabase/functions/redeem) in
+   exchange for a voucher code, and are verified OFFLINE here with WebCrypto
+   against the public key below - so after one online activation the sim keeps
+   working offline. Token format: base64url(JSON payload).base64url(ECDSA sig),
+   P-256 / SHA-256, signature over the raw payload bytes.
+
+   With ENT_CONFIG left empty this whole section is inert: nothing is locked,
+   the voucher UI stays hidden. That is the shipped state of the repo; filling
+   in the two values below is what turns the system on (supabase/README.md).
+
+   This is honesty-level gating by design. The scenario content necessarily
+   ships in this file and the gate sits in pickScenario(), not loadScenario(),
+   so tools/ can still drive every scenario headlessly.
+   ============================================================================= */
+
+const ENT_CONFIG = {
+    // URL of the deployed redeem function, e.g.
+    // 'https://abcdefgh.supabase.co/functions/v1/redeem'
+    redeemUrl: '',
+    // Public half of the signing keypair. Generate both halves with
+    // `node tools/make-voucher-keys.js` and paste the JWK it prints here.
+    publicKeyJwk: null,
+};
+
+/* The content decision: which scenarios are Pro. Edit freely - everything
+   else follows. Keys absent from VERIFIED_SCENARIOS are unaffected (hidden
+   from the menu anyway). Starting split: the four bread-and-butter scenarios
+   stay free as the taster; crisis management is the paid product. */
+const PREMIUM_SCENARIOS = ['tiva', 'sepsis', 'haemorrhage', 'bronchospasm',
+    'anaphylaxis', 'aspiration', 'ischaemia', 'pulmEmbolism'];
+
+const ENT_STORE_KEY = 'dl_entitlement';
+let entitlement = null;   // verified token payload {tier, exp, iat, label}, or null
+
+function entConfigured() {
+    return !!(ENT_CONFIG.redeemUrl && ENT_CONFIG.publicKeyJwk);
+}
+
+function hasPro() {
+    return !!(entitlement && entitlement.exp > Date.now());
+}
+
+function isScenarioLocked(key) {
+    /* Unconfigured deployment => nothing locked. This is what makes shipping
+       this file with an empty ENT_CONFIG a behavioural no-op. */
+    return entConfigured() && !hasPro() && PREMIUM_SCENARIOS.includes(key);
+}
+
+/* base64url -> bytes. */
+function entB64uToBytes(s) {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/') +
+        '='.repeat((4 - s.length % 4) % 4);
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+}
+
+/* Verify a token: signature first, then expiry. Returns the payload or null;
+   never throws. crypto.subtle needs a secure context (https, localhost or
+   file://) and is absent from the headless sandbox unless the harness
+   supplies it - hence the typeof guard. */
+async function entVerifyToken(token) {
+    try {
+        if (!entConfigured()) return null;
+        if (typeof crypto === 'undefined' || !crypto.subtle) return null;
+        const dot = token.indexOf('.');
+        if (dot < 0) return null;
+        const payloadBytes = entB64uToBytes(token.slice(0, dot));
+        const sig = entB64uToBytes(token.slice(dot + 1));
+        const key = await crypto.subtle.importKey('jwk', ENT_CONFIG.publicKeyJwk,
+            { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+        const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' },
+            key, sig, payloadBytes);
+        if (!ok) return null;
+        const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
+        if (typeof payload.exp !== 'number' || payload.exp <= Date.now()) return null;
+        return payload;
+    } catch (e) {
+        return null;
+    }
+}
+
+/* Random per-browser id sent with redemptions so the backend can spot one
+   classroom code turning up in 500 different browsers. Not identifying. */
+function entClientId() {
+    try {
+        let id = localStorage.getItem('dl_client_id');
+        if (!id) {
+            id = Array.from(crypto.getRandomValues(new Uint8Array(8)),
+                b => b.toString(16).padStart(2, '0')).join('');
+            localStorage.setItem('dl_client_id', id);
+        }
+        return id;
+    } catch (e) { return null; }
+}
+
+/* Load + verify any stored token, then paint the UI. Called once from [INIT];
+   async, but resolves in milliseconds and nothing downstream awaits it. */
+async function entInit() {
+    if (entConfigured()) {
+        let token = null;
+        try { token = localStorage.getItem(ENT_STORE_KEY); } catch (e) {}
+        if (token) {
+            entitlement = await entVerifyToken(token);
+            if (!entitlement) {
+                try { localStorage.removeItem(ENT_STORE_KEY); } catch (e) {}
+            }
+        }
+    }
+    entRenderUI();
+}
+
+/* Redeem a code. The token that comes back is verified locally before being
+   trusted or stored - the server is not in the trust base for entitlements,
+   only the signing key is. */
+async function applyVoucher() {
+    const input = document.getElementById('voucher-input');
+    const msg = document.getElementById('voucher-msg');
+    const code = ((input && input.value) || '').trim();
+    if (!code) return;
+    if (msg) { msg.className = ''; msg.textContent = 'Checking code…'; }
+    try {
+        const res = await fetch(ENT_CONFIG.redeemUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code, clientId: entClientId() }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error((data && data.error) || 'That code could not be applied.');
+        const payload = await entVerifyToken(data.token);
+        if (!payload) throw new Error('The server response failed verification — please try again.');
+        entitlement = payload;
+        try { localStorage.setItem(ENT_STORE_KEY, data.token); } catch (e) {}
+        if (input) input.value = '';
+        if (msg) {
+            msg.className = 'ok';
+            msg.textContent = 'Code accepted — Pro access active until ' +
+                new Date(payload.exp).toLocaleDateString() + '.';
+        }
+        entRenderUI();
+        log('Voucher accepted: Pro scenarios unlocked');
+    } catch (e) {
+        if (msg) {
+            msg.className = 'err';
+            /* fetch rejects with TypeError on network failure */
+            msg.textContent = (e instanceof TypeError)
+                ? 'Could not reach the server. Activating a voucher needs an internet connection (access works offline afterwards).'
+                : e.message;
+        }
+    }
+}
+
+/* Paint the voucher area and the lock badges to match current entitlement. */
+function entRenderUI() {
+    const area = document.getElementById('voucher-area');
+    if (area) area.style.display = entConfigured() ? '' : 'none';
+    const status = document.getElementById('voucher-status');
+    if (status) {
+        status.textContent = hasPro()
+            ? 'PRO access active until ' + new Date(entitlement.exp).toLocaleDateString() +
+              (entitlement.label ? ' — ' + entitlement.label : '')
+            : 'Scenarios marked PRO need a voucher code:';
+    }
+    const row = document.getElementById('voucher-row');
+    if (row) row.style.display = hasPro() ? 'none' : '';
+    document.querySelectorAll('#scenarios-list .scenario-btn').forEach(b => {
+        const key = b.dataset.key;
+        if (!key || !SCENARIOS[key]) return;
+        const locked = isScenarioLocked(key);
+        b.classList.toggle('locked', locked);
+        if (locked) {
+            b.innerHTML = escapeHtml(SCENARIOS[key].name) +
+                '<span class="pro-badge">PRO &#128274;</span>';
+        } else {
+            b.textContent = SCENARIOS[key].name;
+        }
+    });
+}
+
+/* =============================================================================
    [INIT]
    ============================================================================= */
 window.addEventListener('resize', resize);
@@ -11380,6 +11673,9 @@ buildVariableGraph();
         });
     }
 }
+// v4.33: verify any stored entitlement token and paint Pro locks on the
+// scenario buttons just created above. Async; nothing downstream awaits it.
+entInit();
 // v3.28: monitors are all on by default - hide their "INIT" overlays so the
 // trace area is unobstructed on first paint.
 ['ov-ecg', 'ov-spo2', 'ov-art', 'ov-bis'].forEach(id => {

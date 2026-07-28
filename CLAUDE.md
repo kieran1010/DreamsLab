@@ -15,8 +15,10 @@ dependencies, no framework. Open the file in a browser and it runs.
 
 This is deliberate — the whole app is one artefact a teacher can save, email or
 open offline. Do not introduce a build step, split the script into modules, or
-add a dependency without asking. `tools/` is the only exception, and it never
-ships to the browser.
+add a dependency without asking. The exceptions: `tools/` (test harness) and
+`supabase/` (voucher backend) never ship to the browser; `admin.html` is a
+second self-contained page (voucher administration) that deploys alongside the
+sim but is not part of it.
 
 ## Where things are in index.html
 
@@ -38,6 +40,12 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `scenarioReset()` | 9512 | Clears state between scenarios |
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
+| `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating: `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
+
+The voucher system (v4.33) **ships dormant**: with `ENT_CONFIG` empty nothing
+is locked and its UI is hidden. Its gate lives in `pickScenario()` (UI), never
+`loadScenario()`, so the harness can always drive every scenario. Backend setup
+lives in `supabase/README.md`; keys come from `tools/make-voucher-keys.js`.
 
 The tick is one long function, ordered: PK → bronchospasm → volume/preload →
 autonomic tone → drug pushes → event blocks → baroreflex → tone clamps →
@@ -54,11 +62,14 @@ the actual `CONFIG`, `PK`, `SCENARIOS` and tick execute as they do in a browser.
 node tools/sweep.js     # all 20 scenarios, untreated + treated  (~2 min)
 node tools/scan.js      # flag anomalies in what sweep recorded
 node tools/probes.js    # one targeted check per known bug
+node tools/voucher-probe.js         # entitlement sign/verify/gating, offline
 node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
-Run all three after any model change. Current baseline: **probes 24/24, scan 0
-BUG-level findings, 0 runtime errors.** `tools/README.md` has the detail.
+Run sweep/scan/probes after any model change; run voucher-probe too if you
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 24/24,
+voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
+`tools/README.md` has the detail.
 
 Two things to know before extending the harness:
 

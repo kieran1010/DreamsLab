@@ -118,6 +118,26 @@ Current state, from the July 2026 audit:
 | F11 | `scenarioReset()` misses five drugs, which carry over | 0/1 |
 | F12 | gauge ranges don't match the model limits behind them | 2/5 |
 
+### `voucher-probe.js` — the v4.33 entitlement system, end to end
+
+Signs entitlement tokens with a throwaway ECDSA P-256 key exactly the way the
+Supabase redeem function does, then drives the sim's real verification and
+gating code in the sandbox: shipped-dormant behaviour, lock/unlock flips,
+`pickScenario()` refusal, and rejection of expired / tampered / wrong-key /
+garbage tokens. 15 checks; only `applyVoucher()`'s network fetch is out of
+scope (the sandbox has no `fetch`, deliberately).
+
+```bash
+node tools/voucher-probe.js               # always exits 0
+DL_STRICT=1 node tools/voucher-probe.js   # exit 1 on failure (for CI)
+```
+
+### `make-voucher-keys.js` — one-time key generation
+
+Prints the voucher signing keypair (public JWK for `ENT_CONFIG` in
+`index.html`, private PKCS8 for the `VOUCHER_SIGNING_KEY` Supabase secret) and
+writes nothing to disk. See `supabase/README.md` for the full setup.
+
 ---
 
 ## Determinism

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Synapse — voucher admin</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
+<!--
+==================================================================================
+  Synapse voucher admin.
+  One self-contained file, same ethos as index.html: no build, no dependencies.
+  Talks to Supabase directly (auth password grant + PostgREST). All data access
+  is protected by Supabase Auth + row-level security -- this page being public
+  HTML exposes nothing but the anon key, which is public by design.
+
+  Setup: fill in SB_URL and SB_ANON below (see supabase/README.md).
+==================================================================================
+-->
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e14; color: #d7e1ee; font: 14px/1.5 system-ui, 'Segoe UI', sans-serif; padding: 24px; }
+h1 { font-size: 18px; letter-spacing: 0.06em; margin-bottom: 2px; }
+h1 .brand { color: #3fa9f5; }
+.sub { color: #7d8da3; font-size: 12px; margin-bottom: 20px; }
+.card { background: #121926; border: 1px solid #263349; border-radius: 10px; padding: 18px; margin-bottom: 18px; max-width: 1100px; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #9fb2c8; margin-bottom: 12px; }
+label { display: block; font-size: 11px; color: #7d8da3; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+input, select, textarea {
+    width: 100%; background: #0d1420; border: 1px solid #263349; color: #d7e1ee;
+    border-radius: 6px; padding: 7px 9px; font: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: #3fa9f5; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.row > div { flex: 1; min-width: 140px; }
+button {
+    background: #1d3a5f; border: 1px solid #2f5a8f; color: #d7e1ee;
+    border-radius: 6px; padding: 8px 16px; font: inherit; cursor: pointer;
+}
+button:hover { background: #24486f; }
+button.primary { background: #2563a8; border-color: #3fa9f5; font-weight: 600; }
+button.small { padding: 3px 10px; font-size: 12px; }
+button.danger { border-color: #7a3030; background: #3a1a1a; }
+button.danger:hover { background: #4a2020; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: #7d8da3; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px; border-bottom: 1px solid #263349; }
+td { padding: 7px 8px; border-bottom: 1px solid #1a2436; vertical-align: top; }
+tr:hover td { background: #16203180; }
+.code { font-family: 'Cascadia Code', Consolas, monospace; letter-spacing: 0.08em; white-space: nowrap; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.chip.active  { background: #123a2a; color: #37c98b; }
+.chip.revoked { background: #3a1a1a; color: #e05252; }
+.chip.expired { background: #33290f; color: #e7b93c; }
+.chip.full    { background: #222b3a; color: #9fb2c8; }
+.msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+.msg.err { color: #e05252; }
+.msg.ok  { color: #37c98b; }
+.newcode {
+    display: none; margin-top: 14px; padding: 14px; border-radius: 8px;
+    background: #0d2136; border: 1px solid #2f5a8f; text-align: center;
+}
+.newcode .code { font-size: 22px; color: #3fa9f5; font-weight: 700; }
+.newcode .hint { color: #7d8da3; font-size: 12px; margin-top: 4px; }
+.dim { color: #7d8da3; }
+.topbar { display: flex; justify-content: space-between; align-items: baseline; max-width: 1100px; }
+#view-app { display: none; }
+.unconfigured { color: #e7b93c; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <div>
+        <h1><span class="brand">SYNAPSE</span> voucher admin</h1>
+        <div class="sub">Create, monitor and revoke access codes</div>
+    </div>
+    <div><button id="logout-btn" class="small" style="display:none" onclick="logout()">Sign out</button></div>
+</div>
+
+<!-- LOGIN -->
+<div id="view-login" class="card" style="max-width:420px">
+    <h2>Sign in</h2>
+    <div id="config-warning" class="msg err" style="display:none">
+        SB_URL / SB_ANON are not filled in yet — edit the script block at the
+        bottom of this file first (see supabase/README.md).
+    </div>
+    <div class="row"><div><label>Email</label><input id="login-email" type="email" autocomplete="username"></div></div>
+    <div class="row"><div><label>Password</label><input id="login-pass" type="password" autocomplete="current-password"></div></div>
+    <button class="primary" onclick="login()">Sign in</button>
+    <div id="login-msg" class="msg"></div>
+</div>
+
+<!-- APP -->
+<div id="view-app">
+    <div class="card">
+        <h2>New voucher</h2>
+        <div class="row">
+            <div style="flex:2"><label>Label (who / what it's for)</label>
+                <input id="f-label" placeholder="e.g. St Elsewhere FRCA course, Sept 2026"></div>
+            <div><label>Seats</label>
+                <select id="f-seats">
+                    <option value="1">Single use (1)</option>
+                    <option value="10">10</option>
+                    <option value="30">Classroom (30)</option>
+                    <option value="100">100</option>
+                    <option value="">Unlimited</option>
+                </select></div>
+        </div>
+        <div class="row">
+            <div><label>Access length (days from redemption)</label>
+                <input id="f-days" type="number" min="1" value="365" placeholder="blank = until fixed date only"></div>
+            <div><label>Access ends no later than (optional)</label>
+                <input id="f-until" type="date"></div>
+            <div><label>Redeemable until (optional)</label>
+                <input id="f-redeemby" type="date"></div>
+        </div>
+        <div class="row"><div><label>Notes (optional, internal)</label><input id="f-notes"></div></div>
+        <button class="primary" onclick="createVoucher()">Create voucher</button>
+        <div id="create-msg" class="msg"></div>
+        <div id="newcode" class="newcode">
+            <div class="code" id="newcode-code"></div>
+            <div class="hint">Copy this now and send it to the customer — it is shown dashed for readability; dashes and case don't matter on entry.</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Vouchers <button class="small" style="float:right" onclick="refresh()">Refresh</button></h2>
+        <table>
+            <thead><tr>
+                <th>Code</th><th>Label</th><th>Status</th><th>Used</th>
+                <th>Access</th><th>Redeem by</th><th>Created</th><th>Last used</th><th></th>
+            </tr></thead>
+            <tbody id="voucher-rows"><tr><td colspan="9" class="dim">Loading…</td></tr></tbody>
+        </table>
+        <div id="list-msg" class="msg"></div>
+    </div>
+</div>
+
+<script>
+'use strict';
+/* ===== CONFIG — fill these in (Supabase dashboard > Settings > API) ===== */
+const SB_URL  = '';   // e.g. 'https://abcdefgh.supabase.co'
+const SB_ANON = '';   // the anon/public key (safe to publish; RLS protects data)
+/* ======================================================================== */
+
+const REST = () => SB_URL + '/rest/v1';
+let session = null;   // { access_token, ... }
+
+function el(id) { return document.getElementById(id); }
+function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* ---- auth ------------------------------------------------------------- */
+function authHeaders() {
+    return { apikey: SB_ANON, Authorization: 'Bearer ' + session.access_token,
+             'Content-Type': 'application/json' };
+}
+async function login() {
+    const msg = el('login-msg'); msg.className = 'msg'; msg.textContent = 'Signing in…';
+    try {
+        const r = await fetch(SB_URL + '/auth/v1/token?grant_type=password', {
+            method: 'POST',
+            headers: { apikey: SB_ANON, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: el('login-email').value.trim(), password: el('login-pass').value }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error_description || data.msg || 'Sign-in failed');
+        session = data;
+        sessionStorage.setItem('dl_admin_session', JSON.stringify(data));
+        showApp();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+function logout() {
+    session = null;
+    sessionStorage.removeItem('dl_admin_session');
+    el('view-app').style.display = 'none';
+    el('view-login').style.display = '';
+    el('logout-btn').style.display = 'none';
+}
+function showApp() {
+    el('view-login').style.display = 'none';
+    el('view-app').style.display = '';
+    el('logout-btn').style.display = '';
+    refresh();
+}
+
+/* ---- code generation --------------------------------------------------
+   12 chars from an alphabet with no 0/O/1/I ambiguity = 60 bits of entropy;
+   unguessable in practice. Stored undashed; displayed XXXX-XXXX-XXXX. */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function generateCode() {
+    const buf = new Uint8Array(12);
+    crypto.getRandomValues(buf);
+    let out = '';
+    for (const b of buf) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
+    return out;
+}
+function dashed(code) { return code.replace(/(.{4})(?=.)/g, '$1-'); }
+
+/* ---- create ----------------------------------------------------------- */
+async function createVoucher() {
+    const msg = el('create-msg'); msg.className = 'msg'; msg.textContent = '';
+    el('newcode').style.display = 'none';
+    const days   = el('f-days').value ? parseInt(el('f-days').value, 10) : null;
+    const until  = el('f-until').value ? el('f-until').value + 'T23:59:59Z' : null;
+    if (!days && !until) {
+        msg.className = 'msg err';
+        msg.textContent = 'Set an access length in days, a fixed end date, or both.';
+        return;
+    }
+    const body = {
+        code: generateCode(),
+        label: el('f-label').value.trim() || null,
+        tier: 'pro',
+        max_redemptions: el('f-seats').value ? parseInt(el('f-seats').value, 10) : null,
+        access_days: days,
+        access_until: until,
+        redeem_by: el('f-redeemby').value ? el('f-redeemby').value + 'T23:59:59Z' : null,
+        notes: el('f-notes').value.trim() || null,
+    };
+    try {
+        const r = await fetch(REST() + '/vouchers', {
+            method: 'POST',
+            headers: { ...authHeaders(), Prefer: 'return=representation' },
+            body: JSON.stringify(body),
+        });
+        if (r.status === 401) return sessionExpired();
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || 'Create failed');
+        el('newcode-code').textContent = dashed(data[0].code);
+        el('newcode').style.display = '';
+        refresh();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+
+/* ---- list / revoke ---------------------------------------------------- */
+function statusOf(v) {
+    if (v.revoked) return ['revoked', 'Revoked'];
+    if (v.redeem_by && new Date(v.redeem_by) < new Date()) return ['expired', 'Closed'];
+    if (v.max_redemptions !== null && v.redemption_count >= v.max_redemptions) return ['full', 'Fully used'];
+    return ['active', 'Active'];
+}
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : '—'; }
+function accessText(v) {
+    const bits = [];
+    if (v.access_days)  bits.push(v.access_days + ' d from redemption');
+    if (v.access_until) bits.push('until ' + fmtDate(v.access_until));
+    return bits.join(', ');
+}
+async function refresh() {
+    const msg = el('list-msg'); msg.className = 'msg'; msg.textContent = '';
+    try {
+        const r = await fetch(REST() + '/voucher_stats?select=*&order=created_at.desc', { headers: authHeaders() });
+        if (r.status === 401) return sessionExpired();
+        const rows = await r.json();
+        if (!r.ok) throw new Error(rows.message || 'Load failed');
+        const tb = el('voucher-rows');
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="9" class="dim">No vouchers yet.</td></tr>'; return; }
+        tb.innerHTML = rows.map(v => {
+            const [cls, txt] = statusOf(v);
+            const used = v.redemption_count + (v.max_redemptions !== null ? ' / ' + v.max_redemptions : ' / ∞');
+            return '<tr>'
+                + '<td class="code">' + esc(dashed(v.code)) + ' <button class="small" onclick="copyCode(\'' + esc(v.code) + '\')">copy</button></td>'
+                + '<td>' + esc(v.label || '') + (v.notes ? '<br><span class="dim">' + esc(v.notes) + '</span>' : '') + '</td>'
+                + '<td><span class="chip ' + cls + '">' + txt + '</span></td>'
+                + '<td>' + used + '</td>'
+                + '<td>' + esc(accessText(v)) + '</td>'
+                + '<td>' + fmtDate(v.redeem_by) + '</td>'
+                + '<td>' + fmtDate(v.created_at) + '</td>'
+                + '<td>' + fmtDate(v.last_redeemed_at) + '</td>'
+                + '<td>' + (v.revoked
+                    ? '<button class="small" onclick="setRevoked(\'' + v.id + '\', false)">Restore</button>'
+                    : '<button class="small danger" onclick="setRevoked(\'' + v.id + '\', true)">Revoke</button>')
+                + '</td></tr>';
+        }).join('');
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+async function setRevoked(id, revoked) {
+    if (revoked && !confirm('Revoke this voucher? It stops working for NEW redemptions immediately. Tokens already issued keep working until they expire.')) return;
+    try {
+        const r = await fetch(REST() + '/vouchers?id=eq.' + id, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ revoked }),
+        });
+        if (r.status === 401) return sessionExpired();
+        if (!r.ok) throw new Error('Update failed');
+        refresh();
+    } catch (e) { const m = el('list-msg'); m.className = 'msg err'; m.textContent = e.message; }
+}
+function copyCode(code) { navigator.clipboard?.writeText(dashed(code)); }
+function sessionExpired() {
+    logout();
+    const m = el('login-msg'); m.className = 'msg err';
+    m.textContent = 'Session expired — sign in again.';
+}
+
+/* ---- boot ------------------------------------------------------------- */
+if (!SB_URL || !SB_ANON) {
+    el('config-warning').style.display = '';
+} else {
+    const saved = sessionStorage.getItem('dl_admin_session');
+    if (saved) { session = JSON.parse(saved); showApp(); }
+}
+</script>
+</body>
+</html>

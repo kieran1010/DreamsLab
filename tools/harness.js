@@ -239,6 +239,17 @@ function boot(opts = {}) {
         clear() { this._d = {}; },
     };
 
+    /* v4.33: the [ENTITLEMENTS] section verifies voucher tokens with WebCrypto.
+       Host implementations are passed in so voucher-probe.js can exercise the
+       real verify path (Node's webcrypto accepts the sandbox realm's typed
+       arrays). fetch is deliberately absent: applyVoucher()'s network path is
+       not headlessly testable and must fail loudly if something tries. */
+    sandbox.crypto = require('node:crypto').webcrypto;
+    sandbox.TextEncoder = TextEncoder;
+    sandbox.TextDecoder = TextDecoder;
+    sandbox.atob = atob;
+    sandbox.btoa = btoa;
+
     /* Web Audio stub -- alarms and the SpO2 beeper build node graphs at load. */
     function audioNode() {
         const ramp = {
@@ -275,7 +286,9 @@ function boot(opts = {}) {
     loadScenario, scenarioReset, giveBolus, setInf, setVentParam, setVentMode,
     setAirway, setNoci, toggleEvent, setBleed, setRhythm, calcMAP,
     physCardiacOutput, suctionAirway, setProfile, resolveAllEvents, setTimeScale,
-    saturate, clamp, hasPulse
+    saturate, clamp, hasPulse,
+    ENT_CONFIG, PREMIUM_SCENARIOS, entConfigured, hasPro, isScenarioLocked,
+    entVerifyToken, entInit, entRenderUI, pickScenario
 };
 `;
 
