@@ -51,6 +51,21 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.30  ("Download link in the Start-here footer")
+  ---------------------------------------------------------------------------------
+  UI only. The whole app is a single HTML file by design, so a teacher can keep
+  and run it offline - but until now getting a copy meant knowing about
+  "Save page as". Adds a "Download" text link to the START HERE modal footer
+  (next to "About & licence") that saves the simulator's own source as
+  synapse.html. Implementation: shDownload() fetches location.href and hands the
+  response to a blob download, which captures the pristine source rather than
+  the live (JS-mutated) DOM. If fetch fails - e.g. the sim is already running
+  from file://, where fetch is blocked - it falls back to a plain
+  <a download> click on the page URL.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.29  ("Model audit: stimulus, oxygenation, and scenario fidelity")
   ---------------------------------------------------------------------------------
   Fixes from a full audit of the physiology model, in which all 22 Physiology-tab
@@ -2683,13 +2698,14 @@ input[type=range] {
 #sh-foot button.primary { background: #2a8060; border-color: #3aa777; color: #eafff5; font-weight: bold; }
 #sh-foot button:disabled { opacity: 0.3; cursor: default; }
 #sh-skip { background: none; border: none; color: #777; padding-left: 0; }
-/* v4.23: left-side footer group + About link (subtle text, styled like Skip) */
+/* v4.23: left-side footer group + About link (subtle text, styled like Skip)
+   v4.30: same treatment for the Download link */
 #sh-foot .sh-foot-left { display: flex; align-items: center; gap: 16px; }
-#sh-foot #sh-about-link {
+#sh-foot #sh-about-link, #sh-foot #sh-download-link {
     background: none; border: none; color: #777; padding: 0;
     text-decoration: underline; font-size: 0.72rem; cursor: pointer;
 }
-#sh-foot #sh-about-link:hover { color: #aaa; }
+#sh-foot #sh-about-link:hover, #sh-foot #sh-download-link:hover { color: #aaa; }
 /* brand bar button - subtly highlighted so newcomers notice it */
 #brand-starthere-btn {
     padding: 4px 10px; font-size: 0.6rem;
@@ -3654,6 +3670,8 @@ input[type=range] {
         <button id="sh-skip" onclick="toggleStartHere()">Skip for now</button>
         <!-- v4.23: About moved here from the brand bar -->
         <button id="sh-about-link" onclick="shOpenAbout()">About &amp; licence</button>
+        <!-- v4.30: save the simulator itself as a single offline HTML file -->
+        <button id="sh-download-link" onclick="shDownload()" title="Save the simulator as a single HTML file you can keep and run offline">Download</button>
       </div>
       <div class="sh-nav-right">
         <button id="sh-back" onclick="shBack()">Back</button>
@@ -8038,6 +8056,32 @@ function shOpenAbout() {
     const sh = document.getElementById('sh-overlay');
     if (sh) sh.classList.remove('open');
     toggleAboutModal();
+}
+/* v4.30: Download link in the Start-here footer. The app is a single HTML
+   file by design, so "download the simulator" means saving this page's own
+   source. fetch(location.href) returns the pristine source (serialising the
+   DOM would capture the JS-mutated runtime state instead); the blob dance is
+   needed because a bare <a download> is ignored cross-origin. If fetch fails
+   - notably on file://, where it is blocked and the user already has the
+   file - fall back to a plain <a download> click on the page URL. */
+function shDownload() {
+    const url = window.location.href.split('#')[0].split('?')[0];
+    const save = (href) => {
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = 'synapse.html';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
+    fetch(url)
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+        .then(blob => {
+            const objUrl = URL.createObjectURL(blob);
+            save(objUrl);
+            setTimeout(() => URL.revokeObjectURL(objUrl), 10000);
+        })
+        .catch(() => save(url));
 }
 function shBack() { shGoto(shStep - 1); }
 
