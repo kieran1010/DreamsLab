@@ -118,6 +118,15 @@ Current state, from the July 2026 audit:
 | F11 | `scenarioReset()` misses five drugs, which carry over | 0/1 |
 | F12 | gauge ranges don't match the model limits behind them | 2/5 |
 | F13 | gauges don't colour when the value falls dangerously low | 0/4 |
+| F14 | opioid vagal drive pins parasympathetic tone at its clamp | 0/4 |
+
+F14 is the v4.36 finding. The opioid vagal effect was a per-tick push on
+`parasympTone`, which (against the `TONE_DECAY_TAU` blend) settles at 20× the
+step and pinned the tone at its 1.0 clamp for any remifentanil above ~0.2
+mcg/kg/min — a flat dose-response and a gauge stuck at danger. The probe checks
+the dose-response climbs monotonically 0.2→0.5, a routine infusion leaves
+headroom below the clamp, the opioid still causes sensible bradycardia, and a
+vagal event still moves the tone on top of an opioid.
 
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
