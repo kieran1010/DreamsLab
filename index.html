@@ -51,6 +51,39 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.35  ("SILENT is silent: eye opening no longer forces a beep")
+  ---------------------------------------------------------------------------------
+  Reported: a noise still plays when a new event fires (eye opening given as the
+  example) with audio set to SILENT.
+
+  triggerAwareness('eyeOpening') called playAlarmBurst('high') directly, and the
+  comment on it said "forces audio" - which it did, in every mode. It also beeped
+  in ECG ONLY, where alarms are meant to be suppressed.
+
+  The cause is where the gate lived. Both sound producers are gated, but only
+  beepAtSpO2() checks audioMode inside itself; for alarm bursts the check sat at
+  the call site in checkAlarms(), so honouring the setting was something every
+  new caller had to remember. playAlarmBurst() now checks audioMode itself and
+  sounds in 'on' or 'alarmsOnly' only, exactly as documented for the audio cycle.
+  The checkAlarms() check stays - it also drives the burst-interval timers, and
+  removing it would change when a burst re-fires after you turn audio back on.
+
+  These are the only two functions in the file that create an oscillator, so with
+  both self-gating no code path can now make a sound the setting forbids.
+  Verified in a browser by counting oscillator creations per mode:
+
+                   eye opening   alarm burst   ECG beep
+      SILENT         0 (was 5)     0 (was 5)     0
+      AUDIO ON       5             5             1
+      ALARMS ONLY    5             5             0
+      ECG ONLY       0 (was 5)     0 (was 5)     1
+
+  Unchanged: eye opening still fires a high-priority alarm burst, still logs, and
+  still shows its event chip. Only the audio-mode override is gone.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.34  ("Physiology gauges colour when the patient is in trouble")
   ---------------------------------------------------------------------------------
   Reported: Physiology tab gauges do not change colour when a value falls
@@ -8535,7 +8568,9 @@ function triggerAwareness(kind) {
     if (btn) btn.classList.add('active');
     const labels = { movement:'PATIENT MOVEMENT', breathHolding:'BREATH HOLDING', eyeOpening:'EYE OPENING' };
     log(`AWARENESS: ${labels[kind]}`);
-    // Eye opening: fire a high-priority alarm burst (forces audio)
+    // Eye opening: fire a high-priority alarm burst. v4.35: this used to be
+    // commented "forces audio" and did - playAlarmBurst() now honours audioMode
+    // itself, so SILENT and ECG ONLY suppress this like any other alarm.
     if (kind === 'eyeOpening') {
         playAlarmBurst('high');
     }
@@ -10541,6 +10576,13 @@ function evaluateAlarms(dt) {
 /* Play a burst of N beeps at given pitch, scheduled into the AudioContext */
 function playAlarmBurst(level) {
     if (!audioCtx) return;
+    // v4.35: the audioMode gate lives HERE, not only at the call site. It used to
+    // sit solely in checkAlarms() (still there, since it also drives the burst
+    // interval timers), which left it as something each new caller had to
+    // remember - and triggerAwareness() did not, so eye opening beeped in SILENT
+    // and in ECG ONLY. beepAtSpO2() has always gated itself internally; this
+    // matches it, so no future caller can bypass the setting.
+    if (state.audioMode !== 'on' && state.audioMode !== 'alarmsOnly') return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const isHigh = level === 'high';
     const freq    = isHigh ? CONFIG.ALARM_HIGH_BEEP_FREQ : CONFIG.ALARM_MED_BEEP_FREQ;
