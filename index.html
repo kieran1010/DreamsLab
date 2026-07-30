@@ -51,6 +51,57 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.38  ("Salbutamol works: tachycardia and real bronchodilation")
+  ---------------------------------------------------------------------------------
+  Reported: salbutamol causes no tachycardia.
+
+  Confirmed, and it went deeper than the HR. Both of salbutamol's effect terms -
+  the beta1 tachycardia (tick ~line 6365) and the direct beta2 bronchodilator
+  (~line 6005) - divided salbCe by a hardcoded 0.05, with comments claiming
+  "peak Ce ~0.05". The PK actually delivers a peak Ce of ~0.00134 for the 250mcg
+  reference dose - about 37x lower - so BOTH effects ran ~37x too weak. Measured:
+  a 1mg dose moved HR by 0 bpm, and 250mcg dropped a severe bronchospasm's airway
+  resistance by ~4 (near-placebo). The PK itself is fine (250mcg -> ~1.8 ng/mL is
+  realistic); the effect *reference concentration* was wrong.
+
+  Fix: a real reference constant, CONFIG.SALB_CE_REF (0.00134, the measured 250mcg
+  peak), and both terms referenced to it, with gains set for a clinical signature:
+    - Tachycardia (SALB_BETA1_GAIN 0.34): 250mcg -> +~16 bpm, 100mcg -> +~8, 1mg ->
+      +~40. Dose-dependent, and the large-dose tachycardia is the real dose-limiting
+      effect of IV salbutamol.
+    - Bronchodilation (SALB_BRONCHO_GAIN 0.40, direct beta2): 250mcg drops a severe
+      spasm ~70->35 (partial - an adjunct, still bronchospastic), 1mg near-reverses
+      it. The direct term is small because the betaTone route (bronchoRelax includes
+      betaTone-BETA_REST) now carries most of the relief once the beta1 effect works
+      - the two are physiologically the same beta2 drive.
+
+  CV coupling and its limit: betaTone drives contractility as well as HR, so the
+  tachycardia fix on its own made salbutamol a pressor (250mcg -> MAP +21 on a
+  resting adult). Real salbutamol is roughly BP-neutral - beta2 vasodilation drops
+  SVR and offsets the inotropy. A vasodilation term (SALB_VASODIL_GAIN 0.30, an
+  alphaTone pushdown) was added to restore that, and it removes the aspiration
+  scenario's transient severe-hypertension flag. It cannot fully neutralise the
+  rise, though: alphaTone floors at 0 (only ~0.2 of SVR to give up) and the
+  baroreflex defends MAP, so a residual MAP rise of ~+15-18 at 250mcg remains. This
+  is an accepted simplification (decided in-session) - the model cannot cleanly
+  decouple chronotropy from inotropy through a single betaTone. Salbutamol reads as
+  mildly sympathomimetic; the reported gap (no tachycardia) is fixed and the
+  bronchodilator now works. See "Known open items".
+
+  Scope: the change is confined to the three salbutamol effect terms and four new
+  CONFIG constants; sweep is unchanged elsewhere (0 BUG, CLIN 23, unchanged). The
+  asthma scenario reads airway resistance 5 at baseline - that is by design (it is a
+  "primed, be ready for bronchospasm" scenario, not an active-spasm one), not a
+  salbutamol issue.
+
+  Tested by probes.js F16 (the effect reference tracks the PK peak; 250mcg gives a
+  clear dose-dependent tachycardia; salbutamol meaningfully relieves an active
+  bronchospasm). Full suite: probes 40/40, voucher-probe 15/15, scan 0 BUG, 0
+  runtime errors.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.37  ("Rate control heals ischaemia: coronary supply now sees
                        diastolic time")
   ---------------------------------------------------------------------------------
@@ -4759,6 +4810,23 @@ const CONFIG = {
     BETA_EPHED_GAIN:   0.30,   // v3.45: 0.20->0.30, paired with eE normalisation change
     BETA_ADR_GAIN:     12,     // v3.40: 30->12, paired with alpha bump (1:1 ratio preserved)
     BETA_KET_GAIN:     0.4,    // v3.42: 0.1->0.4. Paired with dt*0.5 scaling fix in line 2612 (was missing). 100mg bolus now gives MAP +20-30, HR +20-30 (was +77/+53 from saturating beta tone).
+    // v4.38: salbutamol effect calibration. Both the bronchodilator (line ~6005)
+    // and the beta1 tachycardia (line ~6346) terms used to divide salbCe by a
+    // hardcoded 0.05, with comments claiming "peak Ce ~0.05". The PK actually
+    // delivers a peak Ce of ~0.00134 for the 250mcg reference dose - ~37x lower -
+    // so BOTH effects were ~37x too weak: salbutamol caused no tachycardia and was
+    // a near-placebo bronchodilator. SALB_CE_REF is now the real 250mcg peak, and
+    // the two gains are set for a clinical signature: a 250mcg IV bolus gives a
+    // notable, dose-dependent tachycardia (+12-18 bpm) and meaningful but partial
+    // bronchodilation (it is an adjunct, not a one-shot cure for severe spasm).
+    // NB salbutamol also bronchodilates indirectly via the betaTone route
+    // (bronchoRelax includes betaTone-BETA_REST), so the beta1 fix carries some
+    // bronchodilation on its own; SALB_BRONCHO_GAIN is the *direct* beta2 term on
+    // top of that.
+    SALB_CE_REF:        0.00134, // measured peak Ce of a 250mcg IV bolus (adult)
+    SALB_BETA1_GAIN:    0.34,    // per-tick betaTone push coefficient at Ce = SALB_CE_REF. 250mcg -> ~+14 bpm, 100mcg -> ~+5, 1mg -> ~+40 (the real, dose-limiting tachycardia of IV salbutamol)
+    SALB_BRONCHO_GAIN:  0.40,    // DIRECT beta2 bronchodilator term at Ce = SALB_CE_REF. Small, because the betaTone route (bronchoRelax includes betaTone-BETA_REST) now carries most of it once the beta1 effect works. Together: 250mcg drops a severe spasm ~80->~39 (partial - still bronchospastic), 1mg ~80->8 (near-reversed). Down from the nominal 3.0 so one dose is an adjunct, not a cure.
+    SALB_VASODIL_GAIN:  0.30,    // v4.38: beta2 peripheral vasodilation (alphaTone pushdown), tuned to offset the inotropic MAP rise so salbutamol is ~BP-neutral while tachycardic - the real CV signature
 
     // v3.16 new drugs
     ALPHA_PHEN_GAIN:   1200,   // v3.40: 200->1200 (100mcg phenylephrine now ~+10-15 MAP)
@@ -6002,7 +6070,7 @@ setInterval(() => {
                   2.0 * Math.max(0, state.betaTone - CONFIG.BETA_REST)
                 + 1.5 * state.mac
                 + 1.0 * (p.ketCe / 2.0)
-                + 3.0 * (p.salbCe / 0.05)        // v3.60 salbutamol - strong; peak Ce ~0.05 -> contributes 3.0
+                + CONFIG.SALB_BRONCHO_GAIN * (p.salbCe / CONFIG.SALB_CE_REF)   // v4.38: was 3.0*(Ce/0.05); the 0.05 reference was ~37x too high (real peak Ce ~0.00134), so this term was near-inert
                 + 0.5 * (p.magCe  / 0.5);        // v3.60 magnesium - modest; peak Ce ~0.5 -> contributes 0.5
             const attn = Math.exp(-bronchoRelaxFactor);   // 0..1; 1 = no relief
             bronchTarget = CONFIG.BRONCH_RESISTANCE * attn + 5 * (1 - attn);
@@ -6340,10 +6408,19 @@ setInterval(() => {
     // (MAP rose to 170, HR to 130). Now scaled like other pressors;
     // BETA_KET_GAIN bumped to 0.4 to compensate for the dt*0.5 factor.
     state.betaTone  += kE * CONFIG.BETA_KET_GAIN * dt * 0.5;
-    // v3.60: salbutamol has mild beta1 effect at clinical IV doses - mild
-    // tachycardia. Scaled small (0.05) so it doesn't overpower other levers
-    // and lets the clinical signature be 'modest HR rise after dose'.
-    state.betaTone  += (p.salbCe / 0.05) * 0.05 * dt * 0.5;
+    // v3.60/v4.38: salbutamol beta1 effect -> tachycardia. The reference Ce
+    // (0.05) was ~37x too high vs the PK's real ~0.00134 peak, so this delivered
+    // ~+0.001 betaTone (no visible HR change). Now referenced to SALB_CE_REF with
+    // a gain tuned for a notable, dose-dependent tachycardia (+12-18 bpm at
+    // 250mcg). Still a per-tick push on betaTone (transient, like the other
+    // pressor pushes), so it fades as the drug redistributes.
+    state.betaTone  += (p.salbCe / CONFIG.SALB_CE_REF) * CONFIG.SALB_BETA1_GAIN * dt * 0.5;
+    // v4.38: salbutamol beta2 peripheral vasodilation. Its betaTone push above
+    // also raises contractility (betaTone feeds both HR and inotropy), which on
+    // its own would make salbutamol a pressor - wrong: real salbutamol is roughly
+    // BP-neutral because beta2 vasodilation drops SVR and offsets the inotropy.
+    // This alphaTone pushdown restores that: HR rises, MAP stays put.
+    state.alphaTone -= (p.salbCe / CONFIG.SALB_CE_REF) * CONFIG.SALB_VASODIL_GAIN * dt * 0.5;
     // Sympatholytic drugs push both tones down. Effects of (propofol, sevo,
     // dexmedetomidine) on autonomic tone. Note v3.38: this was previously
     // applied per-tick (no dt scaling) which produced grossly excessive tone

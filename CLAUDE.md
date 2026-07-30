@@ -67,7 +67,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 36/36,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 40/40,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -193,3 +193,9 @@ thresholds for anything where the resting value is not near an end.
   than red on its own; it takes a second vasodilator (tourniquet release, CO₂
   embolism) to reach the danger threshold. Same family as the aneurysm item — the
   vasodilatory pushdowns are modest, not the gauge.
+- Salbutamol (v4.38) raises MAP ~+15-18 at 250mcg where real salbutamol is
+  roughly BP-neutral. `betaTone` drives contractility as well as HR, so creating
+  the tachycardia unavoidably adds inotropy; the beta2 vasodilation term
+  (`SALB_VASODIL_GAIN`) only partially offsets it because `alphaTone` floors at 0
+  and the baroreflex defends MAP. Accepted simplification — the model can't
+  decouple chronotropy from inotropy through a single tone.
