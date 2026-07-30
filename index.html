@@ -51,6 +51,60 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.39  ("Drug audit fixes: neostigmine, dexmedetomidine, magnesium")
+  ---------------------------------------------------------------------------------
+  A sweep of all 27 drugs for the same bug class as salbutamol (v4.38) - an effect
+  term scaled against a concentration far from what the PK actually delivers -
+  turned up three more, fixed here. (Full audit: 18 drugs cleared as fine; the
+  milder finds - midazolam, morphine, alfentanil, vasopressin, adrenaline - are
+  noted for a later look.)
+
+  1. NEOSTIGMINE reversal was non-functional (~200x too weak). neoEffect =
+     neoCe * NEO_REVERSAL_RATE(0.05), subtracted from paralysis. Peak neoCe after
+     2.5mg is ~0.073, so the effect maxed at 0.0037 - neostigmine reversed nothing,
+     any block, any depth. Only sugammadex worked. NEO_REVERSAL_RATE 0.05 -> 10.
+     The subtract-then-clamp structure then does the right thing on its own: a
+     partial/waned block (rocCe/REF <= ~0.7) reverses, a DENSE block (rocCe/REF >>
+     1) stays clamped - clinically correct, neostigmine cannot reverse deep block,
+     which is what sugammadex is for. Rocuronium itself was fine (duration
+     ~30-45 min); only the reversal was broken.
+
+  2. DEXMEDETOMIDINE was inert AND had no UI. The PK k10 was 0.30/min - a ~2 min
+     half-life, wrong by ~50x for a drug with a ~2 h half-life - which starved the
+     effect site, so an infusion produced no bradycardia or sedation. k10 0.30 ->
+     0.05 (t1/2 ~14 min; a maintenance infusion reaches effect over ~20-40 min,
+     realistic with no loading dose). With the drug now reaching the effect site,
+     two gains were rebalanced so the CV picture is right: the bradycardia was
+     being masked because dex drops MAP and the baroreflex then defends HR, so
+     HR_DEX_BRADY_GAIN 25 -> 65 (bradycardia shows: 0.7 mcg/kg/hr -> HR -12), and
+     SVR_DEX_DROP 0.3 -> 0.15 so the hypotension stays moderate (dex is
+     bradycardia-led, not hypotension-led). BIS_DEX_GAIN 0.5 -> 0.8 for real,
+     arousable sedation (BIS ~72). And the back-end - present but "RESERVED" since
+     v3.26 - is now wired to a UI infusion slider (mcg/kg/hr), grouped with the
+     other CNS-depressant infusions. All the plumbing (setInf, INF_META, rate
+     conversion, God-mode Ce, reset/sync) already handled dex generically; only the
+     slider was missing.
+
+  3. MAGNESIUM bronchodilator was ~6x too weak. 0.5*(magCe/0.5) with a comment
+     claiming "peak Ce ~0.5", but a 2g dose peaks at magCe ~0.088, so it
+     contributed 0.088 not 0.5. Now MAG_BRONCHO_GAIN * (magCe/MAG_CE_REF) with
+     MAG_CE_REF the real 2g peak: 2g contributes the intended 0.5 (2g drops a
+     severe spasm ~70->53, 1g ~70->65) - a modest adjunct, correctly weaker than
+     salbutamol (which reaches ~35). Magnesium's only modelled effect is
+     bronchodilation, so nothing else is touched.
+
+  Scope: neostigmine and magnesium are single-constant/reference fixes; dex is a
+  PK + gain recalibration plus one UI slider. Sweep unchanged (0 BUG, CLIN 23) -
+  no scenario seeds dex, and the neostigmine/magnesium changes only surface when
+  those drugs are given. Tested by probes.js F17 (neostigmine reverses a partial
+  but not a dense block, sugammadex reverses dense; a dex infusion via setInf()
+  causes bradycardia + sedation; magnesium gives modest bronchodilation weaker
+  than salbutamol). Full suite: probes 45/45, voucher-probe 15/15, scan 0 BUG, 0
+  runtime errors.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.38  ("Salbutamol works: tachycardia and real bronchodilation")
   ---------------------------------------------------------------------------------
   Reported: salbutamol causes no tachycardia.
@@ -4577,6 +4631,11 @@ input[type=range] {
                 <div class="label-pair"><span>Remifentanil (mcg/kg/min)</span><span class="val" id="v-remi">0</span></div>
                 <input id="pump-remi" type="range" min="0" max="0.5" step="0.01" value="0" oninput="setInf('remi', this.value)" onchange="logInf('remi', this.value)">
             </div>
+            <!-- v4.39: dexmedetomidine infusion (alpha2 agonist: sedation + bradycardia). Back-end existed since v3.26 but had no slider until now. -->
+            <div class="slider-row slider-full">
+                <div class="label-pair"><span>Dexmedetomidine (mcg/kg/hr)</span><span class="val" id="v-dex">0</span></div>
+                <input id="pump-dex" type="range" min="0" max="1.5" step="0.05" value="0" oninput="setInf('dex', this.value)" onchange="logInf('dex', this.value)">
+            </div>
             <div class="slider-row slider-full">
                 <div class="label-pair"><span>Metaraminol (mg/hr)</span><span class="val" id="v-metar">0</span></div>
                 <input id="pump-metar" type="range" min="0" max="10" step="0.1" value="0" oninput="setInf('metar', this.value)" onchange="logInf('metar', this.value)">
@@ -4789,13 +4848,13 @@ const CONFIG = {
 
     HR_BETA_GAIN:      90,    // v3.0: replaces HR_SYMP_GAIN (same magnitude)
     HR_PARASYMP_GAIN:  70,
-    HR_DEX_BRADY_GAIN: 25,
+    HR_DEX_BRADY_GAIN: 65,   // v4.39: 25->65. With the k10 fix dexmedetomidine now reaches effect, but its bradycardia was masked: dex drops SVR/MAP, the baroreflex answers with sympathetic tone, and that defends HR. 65 lets the direct alpha2 bradycardia show through (0.7 mcg/kg/hr -> HR -12), which is the drug's signature effect.
 
     SVR_ALPHA_GAIN:    0.2,   // v3.37: 0.9->0.2 to land resting svrTone near 1.0 with alpha=0.2 (CONFIG.REST). Drug-driven alpha pushes still work but with less per-unit effect.
     SVR_PARASYMP_GAIN: 0.1,
     SVR_PROP_DROP:     0.15,
     SVR_SEVO_DROP:     0.1,
-    SVR_DEX_DROP:      0.3,
+    SVR_DEX_DROP:      0.15,  // v4.39: 0.3->0.15. Paired with the k10 fix and the stronger brady gain: at full strength the old 0.3 dropped MAP too far (dex causes only mild-moderate hypotension), and the deeper the MAP fell the harder the baroreflex fought the bradycardia. 0.15 keeps the CV picture bradycardia-led with a moderate MAP drop.
 
     CONT_BETA_GAIN:    0.3,   // v3.0: betaTone drives contractility (replaces direct ephed/ket gains)
     CONT_SEVO_DROP:    0.2,
@@ -4827,6 +4886,15 @@ const CONFIG = {
     SALB_BETA1_GAIN:    0.34,    // per-tick betaTone push coefficient at Ce = SALB_CE_REF. 250mcg -> ~+14 bpm, 100mcg -> ~+5, 1mg -> ~+40 (the real, dose-limiting tachycardia of IV salbutamol)
     SALB_BRONCHO_GAIN:  0.40,    // DIRECT beta2 bronchodilator term at Ce = SALB_CE_REF. Small, because the betaTone route (bronchoRelax includes betaTone-BETA_REST) now carries most of it once the beta1 effect works. Together: 250mcg drops a severe spasm ~80->~39 (partial - still bronchospastic), 1mg ~80->8 (near-reversed). Down from the nominal 3.0 so one dose is an adjunct, not a cure.
     SALB_VASODIL_GAIN:  0.30,    // v4.38: beta2 peripheral vasodilation (alphaTone pushdown), tuned to offset the inotropic MAP rise so salbutamol is ~BP-neutral while tachycardic - the real CV signature
+    // v4.39: magnesium bronchodilator, same class of fix as salbutamol. The term
+    // was 0.5*(magCe/0.5) with a comment claiming "peak Ce ~0.5", but a 2g dose
+    // peaks at magCe ~0.088 - ~6x lower - so it contributed 0.088 not 0.5 and was
+    // a near-placebo. MAG_CE_REF is the real 2g peak; MAG_BRONCHO_GAIN keeps the
+    // intended "modest" contribution (2g -> 0.5, 1g -> 0.25). Magnesium is a
+    // smooth-muscle calcium antagonist adjunct - weaker than salbutamol, no
+    // tachycardia - so this stays a supporting agent, not a primary reliever.
+    MAG_CE_REF:         0.088,   // measured peak Ce of a 2g IV magnesium dose (adult)
+    MAG_BRONCHO_GAIN:   0.50,    // bronchoRelax contribution at Ce = MAG_CE_REF (modest)
 
     // v3.16 new drugs
     ALPHA_PHEN_GAIN:   1200,   // v3.40: 200->1200 (100mcg phenylephrine now ~+10-15 MAP)
@@ -4867,7 +4935,7 @@ const CONFIG = {
 
     BIS_BASE: 98,
     BIS_GAIN: 1.5,    // v3.39: 80->1.5. Was grossly oversaturating - MAC 0.1 already crashed BIS to ~0. Now calibrated to standard MAC->BIS curve: MAC 0.5 -> BIS ~60, MAC 1.0 -> BIS ~45, MAC 1.5 -> BIS ~30.
-    BIS_DEX_GAIN: 0.5,    // v3.39: 15->0.5, scaled to match new BIS_GAIN
+    BIS_DEX_GAIN: 0.8,    // v3.39: 15->0.5, scaled to match new BIS_GAIN. v4.39: 0.5->0.8 so a clinical infusion produces real (arousable) sedation once the k10 fix lets dex reach effect - 0.7 mcg/kg/hr -> BIS ~72 by 40 min.
     // v3.2: consciousness vs BIS dissociation
     KET_CONSC_GAIN:   0.75,  // ketamine pushDown on consciousness per mcg/mL
     BIS_KET_BUMP_GAIN: 10,   // ketamine offset on BIS display per mcg/mL (paradoxical arousal)
@@ -4898,7 +4966,7 @@ const CONFIG = {
     PARALYSIS_CE_FOR_FULL: 5.0,        // Roc Ce (mcg/mL) for full paralysis. Bolus 50mg -> ~7 mcg/mL peak = overshoot (realistic)
     PARALYSIS_RESP_THRESHOLD: 0.3,
     SUGAMMADEX_CHELATE_RATE: 0.5,
-    NEO_REVERSAL_RATE: 0.05,
+    NEO_REVERSAL_RATE: 10,   // v4.39: 0.05->10. neoEffect = neoCe * this, subtracted from paralysis (rocCe/PARALYSIS_CE_FOR_FULL). Peak neoCe after 2.5mg is ~0.073, so 0.05 gave a max effect of 0.0037 - neostigmine reversed nothing, even a light block. Same class as the salbutamol bug: the coefficient assumed a neoCe ~200x higher than the PK delivers. At 10, peak neoEffect ~0.73 fully reverses a partial/moderate block (rocCe/REF <= ~0.7) but leaves a DENSE block clamped at 1.0 (rocCe/REF >> 1) - clinically correct: neostigmine can't reverse deep block, that is what sugammadex is for.
 
     BRONCH_RESISTANCE: 80,
 
@@ -5408,7 +5476,7 @@ const PK = {
     metar: { vd: 0.1,  k10: 0.40, ke0: 0.50 },
     adr:   { vd: 0.2,  k10: 0.60, ke0: 0.80 },   // very fast on and off
     ket:   { vd: 0.25, k10: 0.20, ke0: 0.30 },
-    dex:   { vd: 0.3,  k10: 0.30, ke0: 0.10 },   // RESERVED: dexmedetomidine PK back-end exists but no UI to dose. Wire up bolus/infusion in drugDb when ready.
+    dex:   { vd: 0.3,  k10: 0.05, ke0: 0.10 },   // v4.39: k10 0.30->0.05. A k10 of 0.30/min is a ~2 min half-life - grossly wrong for dexmedetomidine (real t1/2 ~2 h) and it starved the effect-site level, so a clinical infusion produced no bradycardia or sedation. 0.05 (t1/2 ~14 min) lets a maintenance infusion reach effect over ~20-40 min (realistic without a loading dose), and the effect reference (dexCe/0.001) then lands right. vd kept at 0.3 (the effect calibration is matched to it). Now wired to a UI infusion slider.
     // v3.16 new drugs
     phen:  { vd: 0.4,  k10: 0.50, ke0: 0.40 },   // phenylephrine: short, fast onset
     nor:   { vd: 0.2,  k10: 0.70, ke0: 0.40 },   // noradrenaline: fast clearance
@@ -6071,7 +6139,7 @@ setInterval(() => {
                 + 1.5 * state.mac
                 + 1.0 * (p.ketCe / 2.0)
                 + CONFIG.SALB_BRONCHO_GAIN * (p.salbCe / CONFIG.SALB_CE_REF)   // v4.38: was 3.0*(Ce/0.05); the 0.05 reference was ~37x too high (real peak Ce ~0.00134), so this term was near-inert
-                + 0.5 * (p.magCe  / 0.5);        // v3.60 magnesium - modest; peak Ce ~0.5 -> contributes 0.5
+                + CONFIG.MAG_BRONCHO_GAIN * (p.magCe / CONFIG.MAG_CE_REF);   // v4.38/v4.39 magnesium - modest adjunct; was 0.5*(Ce/0.5) but real peak Ce ~0.088 (not 0.5), so it contributed ~0.088 and was near-inert
             const attn = Math.exp(-bronchoRelaxFactor);   // 0..1; 1 = no relief
             bronchTarget = CONFIG.BRONCH_RESISTANCE * attn + 5 * (1 - attn);
         } else {
@@ -8486,7 +8554,7 @@ function showDelivery(drug, dose, btn) {
 const INF_META = {
     prop:  { name: 'Propofol',        unit: 'mg/kg/hr'   },
     remi:  { name: 'Remifentanil',    unit: 'mcg/kg/min' },
-    dex:   { name: 'Dexmedetomidine', unit: 'mcg/kg/hr'  },  // reserved: PK exists, no UI slider yet
+    dex:   { name: 'Dexmedetomidine', unit: 'mcg/kg/hr'  },  // v4.39: now wired to a UI infusion slider
     metar: { name: 'Metaraminol',     unit: 'mg/hr'      },
     nor:   { name: 'Noradrenaline',   unit: 'mcg/kg/min' },
     dobut: { name: 'Dobutamine',      unit: 'mcg/kg/min' },

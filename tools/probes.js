@@ -757,6 +757,81 @@ probe('F16', 'Salbutamol causes tachycardia and bronchodilates', () => {
         'a clear drop in airway resistance, not the near-placebo the /0.05 reference gave');
 });
 
+/* =============================================================================
+   F17  salbutamol-class drug fixes from the drug audit (v4.39)
+   -----------------------------------------------------------------------------
+   The salbutamol audit found three more drugs whose effect scaling was
+   mismatched to the PK-delivered Ce, so the drug was too weak or inert:
+     - neostigmine: NEO_REVERSAL_RATE 0.05 gave a max reversal effect of 0.003
+       vs the ~0.6 needed, so it reversed nothing;
+     - dexmedetomidine: k10 0.3 (a ~2 min half-life) starved the effect site, so
+       an infusion produced no bradycardia or sedation - and it had no UI;
+     - magnesium: 0.5*(magCe/0.5) with a real peak Ce of ~0.088 contributed 0.088
+       not 0.5, a near-placebo bronchodilator.
+   ========================================================================== */
+probe('F17', 'Neostigmine, dexmedetomidine and magnesium work', () => {
+    /* Neostigmine reverses a PARTIAL block (roc waned) but not a DENSE one; a
+       dense block is sugammadex's job. */
+    function rocThenReverse(waneMin, revType, revDose) {
+        const sim = boot(); const dl = sim.dl; dl.setProfile('adult');
+        give(dl, 'roc', 50); sim.advance(waneMin * 60000);
+        const p0 = dl.state.patient.paralysis;
+        give(dl, revType, revDose); sim.advance(600000);
+        return { p0, p1: dl.state.patient.paralysis };
+    }
+    const partial = rocThenReverse(45, 'neoglyco', 2.5);   // ~partial block at 45 min
+    note(`neostigmine on a partial block: paralysis ${partial.p0.toFixed(2)} -> ${partial.p1.toFixed(2)}`);
+    expect(partial.p0 > 0.3 && partial.p1 < 0.15,
+        'neostigmine reverses a partial (waned) rocuronium block',
+        `paralysis ${partial.p0.toFixed(2)} -> ${partial.p1.toFixed(2)} after neostigmine`,
+        'a working reversal, not the 0.00 the old 0.05 rate gave');
+
+    const dense = rocThenReverse(5, 'neoglyco', 2.5);      // dense block at 5 min
+    expect(dense.p1 > 0.9,
+        'neostigmine does NOT reverse a dense block (that is sugammadex\'s role)',
+        `dense paralysis ${dense.p0.toFixed(2)} -> ${dense.p1.toFixed(2)} after neostigmine`,
+        'a dense block stays clamped - clinically neostigmine cannot reverse deep block');
+    const denseSug = rocThenReverse(5, 'sug', 400);
+    expect(denseSug.p1 < 0.15,
+        'sugammadex DOES reverse a dense block',
+        `dense paralysis ${denseSug.p0.toFixed(2)} -> ${denseSug.p1.toFixed(2)} after sugammadex`,
+        'sugammadex chelates rocuronium directly, at any depth');
+
+    /* Dexmedetomidine, driven through the real setInf() UI path, produces
+       bradycardia and sedation. */
+    {
+        const sim = boot(); const dl = sim.dl; dl.setProfile('adult'); dl.setNoci(0);
+        sim.advance(60000);
+        const hr0 = dl.state.hr, bis0 = dl.state.bis;
+        dl.setInf('dex', 0.7);              // the slider's entry point
+        sim.advance(40 * 60000);
+        note(`dex 0.7 mcg/kg/hr @40min: HR ${hr0.toFixed(0)}->${dl.state.hr.toFixed(0)}, BIS ${bis0.toFixed(0)}->${dl.state.bis.toFixed(0)}`);
+        expect(dl.state.hr < hr0 - 6 && dl.state.bis < bis0 - 15,
+            'a dexmedetomidine infusion causes bradycardia and sedation',
+            `HR ${hr0.toFixed(0)}->${dl.state.hr.toFixed(0)}, BIS ${bis0.toFixed(0)}->${dl.state.bis.toFixed(0)}`,
+            'a clinical infusion is no longer inert (k10 fix + rebalanced gains)');
+    }
+
+    /* Magnesium is a modest bronchodilator adjunct - real relief, but weaker
+       than salbutamol. */
+    function resistAfter(treat) {
+        const sim = boot(); const dl = sim.dl; dl.setProfile('adult'); dl.toggleEvent('bronchospasm');
+        sim.advance(30000);
+        if (treat) treat(dl);
+        let rMin = dl.state.patient.bronchResistance;
+        for (let i = 0; i < 2400; i++) { sim.advance(100); rMin = Math.min(rMin, dl.state.patient.bronchResistance); }
+        return rMin;
+    }
+    const rNone = resistAfter(null);
+    const rMag = resistAfter(dl => give(dl, 'mag', 2));
+    const rSalb = resistAfter(dl => give(dl, 'salb', 0.25));
+    note(`bronchospasm resistance: untreated ${rNone.toFixed(0)}, +2g mag ${rMag.toFixed(0)}, +250mcg salb ${rSalb.toFixed(0)}`);
+    expect(rMag < rNone - 8 && rMag > rSalb,
+        'magnesium gives modest bronchodilation, weaker than salbutamol',
+        `resistance untreated ${rNone.toFixed(0)}, mag ${rMag.toFixed(0)}, salb ${rSalb.toFixed(0)}`,
+        'a real adjunct effect (was near-placebo), but less than the primary reliever');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
