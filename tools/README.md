@@ -128,6 +128,16 @@ the dose-response climbs monotonically 0.2→0.5, a routine infusion leaves
 headroom below the clamp, the opioid still causes sensible bradycardia, and a
 vagal event still moves the tone on top of an opioid.
 
+| F15 | myocardial ischaemia cannot be healed by any treatment | 0/4 |
+
+F15 is the v4.37 finding. Coronary supply was diastolic pressure alone, so HR
+only touched the demand side; slowing the heart cut demand and supply together
+and imbalance never went negative, so the scenario's own recommended treatments
+were inert. The fix adds a diastolic-time factor (`HR_REF/HR`) to supply. The
+probe checks untreated builds and holds, sustained rate control heals and holds,
+analgesia that leaves the heart fast does *not* heal, and — as a mechanism
+check — that supply rises as HR falls at fixed DBP.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

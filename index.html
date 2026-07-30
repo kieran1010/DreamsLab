@@ -51,6 +51,65 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.37  ("Rate control heals ischaemia: coronary supply now sees
+                       diastolic time")
+  ---------------------------------------------------------------------------------
+  Follow-on from the v4.36 parasympathetic work, which raised the ischaemia
+  scenario's HR (99 -> 104) and prompted a closer look at the ischaemia model.
+
+  Finding: the ischaemia scenario could not actually be healed. Coronary supply was
+  modelled as diastolic pressure alone -
+
+     demandIdx = (HR * SBP) / RPP_REF        <- HR raises demand
+     supplyIdx =  DBP        / DBP_REF        <- HR absent from supply
+
+  so HR only ever appeared on the demand side. Slowing the heart cut SBP (less
+  demand) but cut DBP too (less supply), so the demand/supply ratio barely moved
+  and the imbalance never went negative. Measured: even full management (esmolol +
+  remifentanil, HR 82) left imbalance at +0.17 - the accumulator stayed pinned near
+  1.0. Every treatment the scenario's own hints recommend was physiologically inert
+  against its own model.
+
+  Fix: coronary filling is a DIASTOLIC event, and diastole shortens as the heart
+  speeds up, so a fast heart cuts supply as well as raising demand. The supply term
+  now carries a diastolic-time factor -
+
+     supplyIdx = (DBP / DBP_REF) * (ISCHAEMIA_HR_REF / HR)     // clamped 0.4..1.8
+
+  New CONFIG.ISCHAEMIA_HR_REF (84) is the neutral HR: the factor rewards supply
+  below it and penalises above. 84 rather than the resting 72 is a calibration
+  choice - it places the demand/supply cross-over where clinically good management
+  lands, so:
+    - untreated (HR ~105) builds to 1.0 and holds, as before;
+    - deep analgesia alone that leaves HR ~90 does NOT heal - the teaching point is
+      that rate control specifically is the lever, not just depth;
+    - sustained rate control into the low 70s with an adequate DBP (remifentanil +
+      esmolol) drives imbalance negative and heals in ~4-5 min, then holds;
+    - over-treatment to HR ~54 heals too, but at a DBP in the low 40s - the sim
+      shows you can overshoot into a low-perfusion state.
+  The amplifier and build/heal taus are unchanged; the single new factor does the
+  work. The clamp (0.4..1.8) keeps an extreme bradycardia - or the transient HR 0
+  of an arrest - from blowing the term up.
+
+  The factor is computed every tick but only accumulates when state.events.ischaemia
+  is set (the coronary-disease flag), so no other scenario is affected - confirmed
+  by the sweep (0 BUG, CLIN unchanged at 23) and 32/32 -> now the pre-existing
+  probes plus F15.
+
+  Scenario text: the first hint said "supply by DBP", which the fix makes
+  incomplete; it now explains that supply depends on diastolic pressure AND
+  diastolic time, and that slowing the heart improves both sides at once. The
+  objectives already told the trainee to slow the heart and raise diastolic
+  pressure - the model now rewards exactly that.
+
+  Tested by probes.js F15 (untreated builds and holds; sustained rate control heals
+  and holds; analgesia that leaves the heart fast does not heal; and a mechanism
+  check that supply rises as HR falls at fixed DBP). Full suite: probes 36/36,
+  voucher-probe 15/15, scan 0 BUG, 0 runtime errors.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.36  ("Opioid vagal drive stops pinning parasympathetic tone")
   ---------------------------------------------------------------------------------
   Reported: parasympathetic tone often runs higher than expected - the myocardial
@@ -4992,14 +5051,25 @@ const CONFIG = {
     // v3.76: myocardial ischaemia model.
     // Demand-supply imbalance accumulator. Imbalance defined as:
     //   demandIdx = (HR * SBP) / ISCHAEMIA_RPP_REF
-    //   supplyIdx = DBP / ISCHAEMIA_DBP_REF
+    //   supplyIdx = (DBP / ISCHAEMIA_DBP_REF) * (ISCHAEMIA_HR_REF / HR)   // v4.37
     //   imbalance = demandIdx - supplyIdx
     // Tuned so a normal awake patient (HR 72, SBP 120, DBP 80) has demandIdx
     // ~1.0 and supplyIdx ~1.0 -> imbalance 0. With an ischaemia event active,
     // an extra DEMAND multiplier is applied (representing coronary disease
     // amplifying the imbalance for any given workload).
+    //
+    // v4.37: the supply term now carries a DIASTOLIC-TIME factor (HR_REF / HR).
+    // Coronary perfusion happens in diastole, and diastole shortens as the heart
+    // speeds up, so a fast heart cuts supply as well as raising demand. Without
+    // this, HR only appeared on the demand side: slowing the heart dropped SBP
+    // (less demand) but dropped DBP too (less supply), so the ratio barely moved
+    // and NO amount of management could push imbalance negative - the scenario
+    // could never actually be healed. With the factor, bradycardia lengthens
+    // diastole and rewards supply, so slowing the heart is the lever that works -
+    // exactly what the scenario's own hints tell the trainee to do.
     ISCHAEMIA_RPP_REF: 8640,          // 72 * 120 reference
     ISCHAEMIA_DBP_REF: 80,            // normal DBP
+    ISCHAEMIA_HR_REF: 84,             // v4.37: neutral HR for the diastolic-time factor. HR_REF/HR = 1 here, <1 (supply penalised) above, >1 (rewarded) below. Calibrated - not the resting 72 - so the demand/supply cross-over lands where clinically good management does: sustained rate control into the low 70s with an adequate DBP heals in ~4-5 min, while analgesia alone (HR still ~90) or a single esmolol dose does not. A lower value makes ischaemia essentially unhealable; a higher one lets a barely-slowed heart heal.
     ISCHAEMIA_BUILD_TAU: 30,          // sec to build to 1.0 under imbalance=1
     ISCHAEMIA_HEAL_TAU:  60,          // sec to heal toward 0 under imbalance=-1 (heals slower than it builds)
     ISCHAEMIA_CONTR_DROP: 0.20,       // contractility drops up to 20% at full ischaemia
@@ -6385,7 +6455,13 @@ setInterval(() => {
         const sbp = state.sys || 120;
         const dbp = state.dia || 80;
         const demandIdx = (state.hr * sbp) / CONFIG.ISCHAEMIA_RPP_REF;
-        const supplyIdx = dbp / CONFIG.ISCHAEMIA_DBP_REF;
+        // v4.37: supply carries a diastolic-time factor. Coronary filling is a
+        // diastolic event and diastole shortens as HR rises, so a fast heart is
+        // penalised twice (more demand, less filling time) and a slow heart is
+        // rewarded on supply. HR_REF/HR is clamped to a sane band so an extreme
+        // bradycardia (or the transient HR 0 of an arrest) can't blow the term up.
+        const diastolicFactor = clamp(CONFIG.ISCHAEMIA_HR_REF / Math.max(state.hr, 1), 0.4, 1.8);
+        const supplyIdx = (dbp / CONFIG.ISCHAEMIA_DBP_REF) * diastolicFactor;
         let imbalance = demandIdx - supplyIdx;
         // v3.76: ischaemia tracker ONLY builds when the event flag is set
         // (i.e. a scenario or user toggle has flagged the patient as having
@@ -9680,7 +9756,7 @@ const SCENARIOS = {
             'Recognise that simply giving fluid or pressors without addressing demand will worsen things'
         ],
         hints: [
-            'Ischaemia = O2 demand > O2 supply. Demand is driven by HR x SBP (rate-pressure product), supply by DBP',
+            'Ischaemia = O2 demand > O2 supply. Demand is driven by HR x SBP (rate-pressure product); supply by diastolic pressure AND diastolic TIME - a slow heart spends more of each beat in diastole, when the coronaries fill. So slowing the heart cuts demand and improves supply at once, which is why rate control is the lever that actually resolves it',
             'First step: reduce demand. Deepen anaesthesia (more sevo) and increase opioid (remifentanil up, or fentanyl bolus)',
             'If HR remains high, esmolol 25-50mg slow IV to slow the heart',
             'GTN can help if SBP is high but watch the diastolic - too much reduces coronary supply',
