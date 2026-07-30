@@ -617,6 +617,79 @@ probe('F14', 'Opioid vagal drive does not pin parasympathetic tone', () => {
         'the opioid no longer consumes all the headroom to the clamp');
 });
 
+/* =============================================================================
+   F15  the ischaemia scenario cannot actually be healed
+   -----------------------------------------------------------------------------
+   Coronary supply was modelled as diastolic pressure alone (supplyIdx = DBP/ref),
+   with HR only on the demand side. Slowing the heart cut SBP (demand) but cut DBP
+   (supply) too, so the demand/supply ratio barely moved and imbalance never went
+   negative - no amount of management could push the accumulator down. The
+   scenario's own hints tell the trainee to slow the heart to fix it, but the
+   model made that impossible.
+
+   v4.37 adds a diastolic-time factor (HR_REF/HR) to supply: coronary filling is a
+   diastolic event and diastole shortens with rate, so a slow heart is rewarded on
+   supply, not just spared demand. Rate control now heals - the property this probe
+   pins down.
+   ========================================================================== */
+probe('F15', 'Rate control heals myocardial ischaemia; tachycardia does not', () => {
+    /* Run the ischaemia scenario under a treatment, sampling the accumulator. */
+    function run(treat, secs) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('ischaemia');
+        if (treat) treat(dl, sim);
+        let peak = 0;
+        const series = [];
+        for (let t = 0; t <= secs; t += 5) {
+            sim.advance(5000);
+            peak = Math.max(peak, dl.state.ischaemia);
+            series.push({ t, isch: dl.state.ischaemia, hr: dl.state.hr });
+        }
+        const s = dl.state;
+        return { peak, isch: s.ischaemia, hr: s.hr, sys: s.sys, dia: s.dia, series };
+    }
+
+    /* 1. Untreated, the tachycardic patient builds and stays ischaemic. */
+    const untreated = run(null, 420);
+    expect(untreated.isch > 0.8,
+        'untreated ischaemia builds and stays high',
+        `ischaemia settles at ${untreated.isch.toFixed(2)} (HR ${untreated.hr.toFixed(0)})`,
+        'a demand/supply imbalance the tachycardia sustains');
+
+    /* 2. Rate control to the low 70s with an adequate DBP heals within a few
+       minutes and holds - the clinical target the scenario teaches. Delivered
+       here with the tools the hints name: analgesia (remi) plus a beta-blocker. */
+    const managed = run(dl => { dl.state.machine.pumps.remi = 0.5; give(dl, 'esmo', 50); give(dl, 'esmo', 50); }, 600);
+    const healedBy = managed.series.find(x => x.t >= 60 && x.isch < 0.2);
+    const heldLow = managed.series.slice(-6).every(x => x.isch < 0.25);
+    note(`managed (HR ${managed.hr.toFixed(0)}, ${managed.sys.toFixed(0)}/${managed.dia.toFixed(0)}): peak ${managed.peak.toFixed(2)} -> ` +
+         `${managed.isch.toFixed(2)}${healedBy ? `, first <0.2 at ${healedBy.t}s` : ', never <0.2'}`);
+    expect(managed.peak > 0.4 && managed.isch < 0.2 && heldLow,
+        'sustained rate control heals the ischaemia and holds it down',
+        `peak ${managed.peak.toFixed(2)}, final ${managed.isch.toFixed(2)} at HR ${managed.hr.toFixed(0)}`,
+        'a slow heart with adequate diastolic pressure drives imbalance negative');
+
+    /* 3. Analgesia alone that does NOT slow the heart enough must NOT heal it -
+       the teaching point is that rate control specifically is the lever. */
+    const analgesiaOnly = run(dl => { dl.state.machine.pumps.remi = 0.4; }, 420);
+    expect(analgesiaOnly.hr > 82 && analgesiaOnly.isch > 0.7,
+        'deep analgesia that leaves the heart fast does not heal ischaemia',
+        `remi 0.4 -> HR ${analgesiaOnly.hr.toFixed(0)}, ischaemia ${analgesiaOnly.isch.toFixed(2)}`,
+        'still-tachycardic supply penalty keeps imbalance positive');
+
+    /* 4. Mechanism unit-check: for the same diastolic pressure, a slower heart
+       must produce a higher supply index than a fast one. */
+    const dl = boot().dl;
+    const supplyAt = hr => (70 / dl.CONFIG.ISCHAEMIA_DBP_REF) *
+        Math.max(0.4, Math.min(1.8, dl.CONFIG.ISCHAEMIA_HR_REF / Math.max(hr, 1)));
+    const slow = supplyAt(60), fast = supplyAt(110);
+    note(`supply index at DBP 70: HR 60 -> ${slow.toFixed(3)}, HR 110 -> ${fast.toFixed(3)}`);
+    expect(slow > fast + 0.15,
+        'the diastolic-time factor rewards a slow heart on supply',
+        `supply(HR60) ${slow.toFixed(3)} vs supply(HR110) ${fast.toFixed(3)} at the same DBP`,
+        'supply rises as HR falls, because diastole lengthens');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
