@@ -147,6 +147,16 @@ tachycardia and the bronchodilation ran ~37× too weak. The fix references both 
 guard — that `SALB_CE_REF` tracks the PK-delivered peak — plus a dose-dependent
 tachycardia and a real drop in airway resistance.
 
+| F17 | neostigmine / dexmedetomidine / magnesium too weak or inert | 0/5 |
+
+F17 is the v4.39 batch from the salbutamol-class drug audit. Neostigmine
+reversed nothing (coefficient ~200× too weak), dexmedetomidine was inert (a
+2-min PK half-life starved the effect site) and had no UI slider, and magnesium
+was a ~6× too weak bronchodilator. The probe checks neostigmine reverses a
+partial but not a dense block (sugammadex reverses dense), a dex infusion via
+`setInf()` causes bradycardia + sedation, and magnesium gives modest
+bronchodilation weaker than salbutamol.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed
