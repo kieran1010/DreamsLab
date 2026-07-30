@@ -117,6 +117,13 @@ Current state, from the July 2026 audit:
 | F10 | scenario setups permanently mutate the shared `PROFILES` objects | 0/1 |
 | F11 | `scenarioReset()` misses five drugs, which carry over | 0/1 |
 | F12 | gauge ranges don't match the model limits behind them | 2/5 |
+| F13 | gauges don't colour when the value falls dangerously low | 0/4 |
+
+F13 is the v4.34 finding rather than an audit one. Its second check is the
+interesting half: a threshold that fires on a sick patient is easy, but it must
+also stay silent on a **well** patient of every profile, and a resting paed
+cardiac output (3.2 L/min) or obese SVR tone (0.61) is far enough from the 70 kg
+adult's that any hardcoded threshold flags one of them permanently.
 
 ### `voucher-probe.js` — the v4.33 entitlement system, end to end
 
@@ -184,8 +191,11 @@ more.
 Two things to know about the sandbox:
 
 - **Top-level `const`/`let` in `index.html` are not properties of the vm
-  global.** To reach something not already exposed, add it to the `EPILOGUE`
-  list in `harness.js`.
+  global.** To reach something not already exposed, add it to the `PUBLISH`
+  list in `harness.js`. Each name goes through a `typeof` guard, so a name a
+  given revision doesn't have is simply absent from `dl` — that matters because
+  `DL_HTML` is meant to work against older copies, and publishing as one object
+  literal made adding a binding throw a `ReferenceError` on every one of them.
 - **`requestAnimationFrame` is a no-op**, so the waveform render loop never
   runs. Anything that only exists inside `animate()` won't be exercised here.
 

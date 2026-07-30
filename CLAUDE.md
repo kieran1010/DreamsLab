@@ -67,7 +67,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 24/24,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 28/28,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -130,10 +130,24 @@ scenario represents a steady state), or call `setInf()`.
 copies, so a scenario may safely tweak `state.profile`. Do not reintroduce the
 alias.
 
-**8. Gauge ranges must resolve from the constant the model clamps against.**
-`PHYS_GROUPS` `min`/`max` accept functions for exactly this. Hardcoding a number
-that disagrees with the clamp miscalibrates the bar fill and can make a gauge's
-warn/danger colours literally unreachable.
+**8. Gauge ranges and thresholds must resolve from the constants the model uses.**
+`PHYS_GROUPS` `min`/`max`/`base` and the v4.34 `warnLow`/`dangerLow`/`warnHigh`/
+`dangerHigh` all accept functions for exactly this. Hardcoding a number that
+disagrees miscalibrates the bar fill, can make a colour literally unreachable,
+and — the v4.34 finding — can make it permanently *reached* for a patient whose
+normal is not the 70 kg adult's. A threshold has to pass both halves: fire on a
+sick patient, stay silent on a well 20 kg child *and* a well 130 kg adult. Probe
+F13 checks both halves for every profile.
+
+**9. A fraction-of-span colour rule assumes the resting value sits at one end.**
+`'ceiling'` and `'floor'` are shorthands for "dangerous at the top/bottom of the
+bar". They are wrong for any variable whose danger sits mid-span (circulating
+volume, cardiac output — hence `'band'` plus explicit thresholds), and they break
+silently when a per-profile `max` is pulled down close to `base`: the elderly and
+sepsis `preloadCeiling`s put the 75% mark *below* the baseline, so a euvolaemic
+patient's gauge read amber. `physStatus()` now re-measures the ceiling rule
+against the headroom above `base` when that happens, but prefer explicit
+thresholds for anything where the resting value is not near an end.
 
 ## Conventions
 
@@ -162,3 +176,10 @@ warn/danger colours literally unreachable.
 - The aneurysm scenario opens at ~170/105 rather than a textbook 200/110.
   Reaching 200 systolic would need `SVR_ALPHA_GAIN` raised globally, shifting
   every pressor in the sim; `SAH_SURGE_SVR` scales it locally if wanted.
+- The Respiratory drive gauge (`'floor'`) reads danger for most of every case: a
+  paralysed ventilated patient legitimately has no drive. Literally true,
+  arguably noise. Left as-is in v4.34.
+- Anaphylaxis only pushes SVR tone to ~0.72 of baseline, so it reads amber rather
+  than red on its own; it takes a second vasodilator (tourniquet release, CO₂
+  embolism) to reach the danger threshold. Same family as the aneurysm item — the
+  vasodilatory pushdowns are modest, not the gauge.

@@ -51,6 +51,102 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.34  ("Physiology gauges colour when the patient is in trouble")
+  ---------------------------------------------------------------------------------
+  Reported: Physiology tab gauges do not change colour when a value falls
+  dangerously low - circulating volume named as the example. Confirmed and fixed,
+  and the same defect turned out to exist at the top of the range too.
+
+  The cause is that the colour modes could only say "dangerous at the END of the
+  bar". 'ceiling' watched the top 25% of the span, 'floor' the bottom 25%, and
+  'none' watched nothing. But the circulatory variables span from zero to well
+  above normal, so their danger sits in the MIDDLE of the bar: with min 0 and max
+  1.7x normal, a 'floor' rule would not have called circulating volume dangerous
+  until it reached 17% of the patient's blood volume. So the four variables that
+  matter most in a crash were all silent on the way down - untreated haemorrhage
+  took circulating volume 5.0 -> 0.5 L, preload 1.10 -> 0.10 and cardiac output
+  5.9 -> 0.9 L/min with every bar still accent-blue.
+
+  physStatus() now works from four optional thresholds - warnLow, dangerLow,
+  warnHigh, dangerHigh - which any gauge may state as a number or a function,
+  resolved live like min/max/base. 'ceiling' and 'floor' fill in their old
+  fraction-of-span values for whichever side they describe, so a gauge that
+  states nothing behaves exactly as before; verified by replaying the sweep
+  through both versions, where 19 of the 24 gauges come out bit-identical.
+
+  Thresholds are anchored to whatever the model itself treats as normal for THIS
+  patient, never to a number that happens to suit a 70 kg adult (the same
+  reasoning as the v4.29 min/max functions - structural trap 8):
+    - circVol   0.85 / 0.70 of profile.centralVol down (~15% and ~30% blood
+                loss); up, the two constants the model already acts on,
+                FLUID_OVERLOAD_THRESHOLD and _CEILING.
+    - preload   0.80 / 0.65 of PRELOAD_BASELINE. Not 0.85 - preload dips to
+                ~0.90 under routine maintenance, which must not read amber.
+    - contract  absolute 0.80 / 0.65; every profile's contractility saturates
+                around a baseline of exactly 1.0, only the ceiling differs.
+    - svr       0.80 / 0.68 of profile.svrBase, and the baseline TICK moves from
+                a hardcoded 1.0 to svrBase. Both matter: a septic patient rests
+                at 0.55 and an obese one at 0.61, so the old tick sat far right
+                of where either patient lives, and an absolute threshold would
+                have painted both permanently red at a normal MAP.
+    - co        0.70 / 0.55 of this patient's resting CO, and base 5.0 / max 20
+                (both hardcoded) become 1x and 3.4x it. 3.4x reproduces the
+                v4.29 adult span; the old fixed numbers put a perfectly well
+                20 kg child at 16% of the bar with the baseline tick a third of
+                the way past their actual normal.
+
+  Same defect at the top of the range, found by the new probe rather than
+  reported: the 'ceiling' rule measured 75%/90% of the whole span, which assumes
+  the resting value sits near the bottom of it. Three per-profile ceilings added
+  since have broken that assumption by pulling max down toward base -
+  preloadCeiling 1.4 (elderly, v3.48) and 1.2 (sepsis, v4.3) against a baseline
+  of 1.1, and contractilityCeiling 1.0 (sepsis, v3.56) against a baseline of
+  exactly 1.0. The 75%/90% marks then landed at or below the baseline, so a
+  EUVOLAEMIC elderly patient's preload gauge read amber, and a septic patient
+  read danger on preload the moment you resuscitated them correctly and on
+  contractility from the very first tick. The rule now measures the headroom
+  above the resting value, which is what "maxed out" always meant; where there
+  is no headroom at all (sepsis contractility, ceiling IS baseline) it does not
+  colour, and the permanently full bar carries the message instead.
+
+  Also: the status colour is mirrored onto the numeric readout. A gauge in
+  trouble at the BOTTOM of its range has almost no bar left to colour, and a
+  6%-wide red sliver is easy to miss - which is most of why low-side danger read
+  as "not changing colour" even where a floor threshold did exist.
+
+  Nociception gauge now shows state.effectiveStimulus (nociception minus
+  analgesiaCover) instead of raw state.nociception, and is labelled
+  "Nociception (effective)". The raw value is the surgeon's knife, not the
+  patient: it is exactly what the header Surgical stimulus slider already sets,
+  so repeating it here told the trainee nothing about their own analgesia and the
+  bar sat pinned high through a fully covered case. Effective stimulus is what
+  the tick actually feeds to alphaTarget/betaTarget, so it is the number that
+  predicts the HR and BP response - autonomic dysreflexia now reads 5.5 untreated
+  against 0.3 treated, where both used to read 6.0. The Pathways tab has always
+  plotted effectiveStimulus under the label "Nociception"; the two tabs now
+  agree. loadScenario() seeds effectiveStimulus so the gauge does not read 0.0
+  for the one tick before the first tick derives it.
+
+  Not changed, but noted while in here:
+    - Respiratory drive ('floor') reads danger for most of every case, because a
+      paralysed ventilated patient legitimately has no drive. Literally true,
+      arguably noisy; left alone as it is pre-existing and not the reported bug.
+    - Level of consciousness stays colour:'none'. High means awareness, but a
+      pre-op or emerging patient at 98 is correct, so there is no threshold that
+      is right in both contexts.
+    - Core temperature keeps no hypothermia threshold: nothing in the model ever
+      drives temperature below TEMP_NORMAL, so it would be dead code.
+
+  tools/: probes.js gains F13 (four checks - shock values read danger, no profile
+  colours at its own resting state, every dangerLow sits above the model floor,
+  and the Nociception gauge falls when analgesia covers the stimulus). harness.js
+  publishes physStatus/physCOBaseline/physSVRBaseline, and now publishes every
+  name through a typeof guard - as one object literal, adding a binding made the
+  whole boot throw on any older revision reached via DL_HTML.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.33  ("Vouchers: Pro scenarios behind time-limited access codes")
   ---------------------------------------------------------------------------------
   First slice of monetisation: an entitlement system that locks a configurable
@@ -3270,6 +3366,13 @@ input[type=range] {
 }
 .pg-fill.warn   { background: #d9a520; }
 .pg-fill.danger { background: #d24545; }
+/* v4.34: the numeric readout carries the status colour as well as the bar.
+   A gauge in trouble at the LOW end (circulating volume 0.5 L, cardiac output
+   0.9 L/min) has almost no bar left to colour - a 6%-wide red sliver is easy
+   to miss, which is most of why low-side danger read as "not changing colour"
+   even on the gauges that did have a floor threshold. */
+.pg-val.warn   .pg-num { color: #e8bd4a; }
+.pg-val.danger .pg-num { color: #e86a6a; }
 /* Baseline tick: a vertical marker at the resting value */
 .pg-base {
     position: absolute;
@@ -9871,6 +9974,14 @@ function loadScenario(key) {
     state.nociceptionTarget = state.nociception;
     reflectNoci(state.nociception);
 
+    /* v4.34: the Physiology tab's Nociception gauge now reads
+       state.effectiveStimulus, which the tick derives from nociception and
+       analgesiaCover. scenarioReset() zeroed it, so without this the gauge would
+       read 0.0 for the ~100 ms before the first tick - the same one-tick stale
+       read state.mac already has. Derived exactly as the tick derives it, from
+       whatever cover the setup left behind. */
+    state.effectiveStimulus = Math.max(0, state.nociception - state.analgesiaCover);
+
     // v3.26: do NOT reset the dropdown - the previous behaviour blanked it back
     // to "-- pick one --" right after loading. Now the user-visible label
     // persists showing the active scenario. To re-fire the same scenario,
@@ -10882,7 +10993,21 @@ function updateVariableGraph() {
      'ceiling' - saturating mechanism vars; amber/red as they approach the top
                  of their range ("maxed out - no more headroom")
      'floor'   - vars where dropping toward zero is the concern (e.g. resp drive)
+     'band'    - dangerous in BOTH directions, or dangerous at a value that is
+                 nowhere near the end of the span; thresholds are stated
+                 explicitly (v4.34)
      'none'    - neutral accent fill; the baseline tick tells the story
+
+   v4.34: any gauge may state warnLow / dangerLow / warnHigh / dangerHigh
+   (number or function, resolved live like min/max/base). Whatever a gauge does
+   not state, 'ceiling' and 'floor' fill in from their fraction-of-span defaults,
+   so their existing behaviour is unchanged. This exists because 'ceiling' and
+   'floor' can only express "dangerous at the end of the bar", and most of the
+   circulatory variables are dangerous at a value that sits well inside the
+   span: with min 0 and max 1.7x normal, a 'floor' rule would not have called
+   circulating volume dangerous until it hit 17% of the patient's blood volume.
+   Thresholds are therefore anchored to the constant the model itself uses as
+   that patient's normal - same reasoning as the min/max functions (trap 8).
    ============================================================================= */
 
 /* Cardiac output (L/min) - mirrors the physiology tick's SV calc. */
@@ -10891,6 +11016,26 @@ function physCardiacOutput() {
     const sv = state.patient.preload * state.patient.contractility * CONFIG.SV_BASE * svScale;
     const rcf = (CONFIG.RHYTHM_CO_FACTOR[state.rhythm] !== undefined) ? CONFIG.RHYTHM_CO_FACTOR[state.rhythm] : 1.0;
     return (state.hr * sv * rcf) / 1000;
+}
+
+/* v4.34: resting cardiac output for the ACTIVE profile (L/min) - physCardiacOutput()
+   with the baseline preload/contractility the tick saturates around. Adult 5.9,
+   paed 3.2, obese 10.2. The CO gauge used to hardcode a baseline of 5.0 and a
+   span of 0-20 for every patient, so a perfectly well 20 kg child sat at 16% of
+   the bar with the baseline tick a third of the way past their actual normal -
+   and any absolute low-CO threshold would have flagged them permanently. */
+function physCOBaseline() {
+    const svScale = Math.pow(state.profile.weight / PROFILES.adult.weight, 0.75);
+    const sv = CONFIG.PRELOAD_BASELINE * 1.0 * CONFIG.SV_BASE * svScale;
+    return (state.profile.hrBase * sv) / 1000;
+}
+
+/* v4.34: this patient's own resting SVR tone - the value the tick's saturate()
+   call uses as the baseline, which is per-profile (0.55 septic, 1.39 paed) and
+   not 1.0. Absolute thresholds against 1.0 would have read a normal obese
+   patient (svrBase 0.61, normal MAP) as dangerously vasodilated. */
+function physSVRBaseline() {
+    return state.profile.svrBase !== undefined ? state.profile.svrBase : 1.0;
 }
 
 /* Gauge groups. min/max/base may be numbers or functions (resolved live so
@@ -10904,17 +11049,52 @@ const PHYS_GROUPS = {
         // child's normal 1.6 L sat below a hardcoded 2 L floor (bar pinned at
         // zero for a whole case), and a septic patient's preload ceiling of
         // 1.2 against a 1.8 span meant the bar could never pass 67%.
+        // v4.34: was colour:'none' - the gauge that prompted this change. A
+        // haemorrhage scenario takes central volume from 5.0 L to 0.5 L and the
+        // bar stayed accent-blue the whole way down. Thresholds are fractions of
+        // the patient's own anatomic volume, so they follow the paed/obese
+        // profiles: 0.85 is ~15% blood loss (class I-II), 0.70 is ~30% (class
+        // III, the point a real patient decompensates). The high side reuses the
+        // two constants the model already acts on - FLUID_OVERLOAD_THRESHOLD is
+        // where excess volume starts dropping contractility and pulmonary oedema
+        // starts capping SpO2 (OEDEMA_SPO2_THRESHOLD is the same 1.2).
         { key:'circVol',  label:'Circulating volume', unit:'L',
           min:0, max:()=>state.profile.centralVol * 1.7,
-          base:()=>state.profile.centralVol, get:()=>state.patient.centralVolume, fmt:v=>v.toFixed(2), colour:'none' },
+          base:()=>state.profile.centralVol, get:()=>state.patient.centralVolume, fmt:v=>v.toFixed(2), colour:'band',
+          warnLow:  ()=>state.profile.centralVol * 0.85,
+          dangerLow:()=>state.profile.centralVol * 0.70,
+          warnHigh: ()=>state.profile.centralVol * CONFIG.FLUID_OVERLOAD_THRESHOLD,
+          dangerHigh:()=>state.profile.centralVol * CONFIG.FLUID_OVERLOAD_CEILING },
+        // v4.34: low-side thresholds added. The ceiling rule is unchanged (it is
+        // still worth showing when the Starling plateau is reached), but the
+        // dangerous direction for preload is DOWN, and with min 0 a preload of
+        // 0.10 in untreated haemorrhage sat at 6% of the bar in plain blue.
+        // 0.80/0.65 of baseline rather than 0.85/0.70: preload dips to ~0.90
+        // under routine maintenance anaesthesia, which must not read as amber.
         { key:'preload',  label:'Preload',            unit:'',    min:0,
           max:()=>state.profile.preloadCeiling || 1.6,
-          base:()=>CONFIG.PRELOAD_BASELINE,  get:()=>state.patient.preload,       fmt:v=>v.toFixed(2), colour:'ceiling' },
+          base:()=>CONFIG.PRELOAD_BASELINE,  get:()=>state.patient.preload,       fmt:v=>v.toFixed(2), colour:'ceiling',
+          warnLow:  ()=>CONFIG.PRELOAD_BASELINE * 0.80,
+          dangerLow:()=>CONFIG.PRELOAD_BASELINE * 0.65 },
+        // v4.34: absolute low thresholds are correct here - every profile's
+        // contractility saturates around a baseline of exactly 1.0 (only the
+        // ceiling is per-profile). 0.65 catches the anaphylaxis myocardial
+        // depression (0.63) and 0.80 catches propofol's on induction (0.79).
         { key:'contract', label:'Contractility',      unit:'',    min:()=>CONFIG.CONT_FLOOR,
           max:()=>state.profile.contractilityCeiling || CONFIG.CONT_CEILING,
-          base:()=>1.0,                      get:()=>state.patient.contractility, fmt:v=>v.toFixed(2), colour:'ceiling' },
+          base:()=>1.0,                      get:()=>state.patient.contractility, fmt:v=>v.toFixed(2), colour:'ceiling',
+          warnLow:0.80, dangerLow:0.65 },
+        // v4.34: base 1.0 -> the profile's own svrBase, and low thresholds
+        // relative to it. Both matter: a septic patient rests at 0.55 and an
+        // obese one at 0.61, so the old fixed 1.0 tick sat far to the right of
+        // where either patient actually lives, and an absolute low threshold
+        // would have painted both permanently red at their normal MAP. Relative
+        // thresholds instead show the change that matters - anaphylaxis taking
+        // an adult from 0.97 to 0.74 is 0.76 of baseline, i.e. amber.
         { key:'svr',      label:'SVR tone',           unit:'',    min:()=>CONFIG.SVR_FLOOR,  max:()=>CONFIG.SVR_CEILING,
-          base:()=>1.0,                      get:()=>state.patient.svrTone,       fmt:v=>v.toFixed(2), colour:'ceiling' },
+          base:()=>physSVRBaseline(),        get:()=>state.patient.svrTone,       fmt:v=>v.toFixed(2), colour:'ceiling',
+          warnLow:  ()=>physSVRBaseline() * 0.80,
+          dangerLow:()=>physSVRBaseline() * 0.68 },
         // v4.29: floor at 0, not HR_FLOOR. HR_FLOOR (25) is the floor for a
         // PERFUSING rhythm; in asystole or pulseless VT the displayed rate is
         // 0, which clipped off the bottom of the gauge during every arrest.
@@ -10926,8 +11106,18 @@ const PHYS_GROUPS = {
         { key:'map',      label:'MAP',                unit:'mmHg', min:0,   max:200,
           base:()=>state.profile.mapTarget,  get:()=>calcMAP(state.sys, state.dia, state.hr), fmt:v=>Math.round(v), colour:'alarm', alarm:'map' },
         // v4.29: 12 -> 20. Adrenaline during a resuscitation reaches ~18 L/min.
-        { key:'co',       label:'Cardiac output',     unit:'L/min', min:0,  max:20,
-          base:()=>5.0,                      get:()=>physCardiacOutput(),         fmt:v=>v.toFixed(1), colour:'none' },
+        // v4.34: base 5.0 and max 20 were both hardcoded; they are now 1x and
+        // 3.4x this patient's resting CO. 3.4x reproduces the v4.29 span for the
+        // adult profile (5.9 -> 20.2, still clear of the 18 L/min a resuscitated
+        // arrest reaches) while scaling down for a child, whose resting 3.2 L/min
+        // used to sit at 16% of the bar. Thresholds are relative for the same
+        // reason. No high thresholds: a high cardiac output is not the danger,
+        // it is usually the pressor working.
+        { key:'co',       label:'Cardiac output',     unit:'L/min', min:0,
+          max:()=>physCOBaseline() * 3.4,
+          base:()=>physCOBaseline(),         get:()=>physCardiacOutput(),         fmt:v=>v.toFixed(1), colour:'band',
+          warnLow:  ()=>physCOBaseline() * 0.70,
+          dangerLow:()=>physCOBaseline() * 0.55 },
     ],
     resp: [
         { section: 'Determinants' },
@@ -10955,8 +11145,17 @@ const PHYS_GROUPS = {
         { section: 'Depth, nociception & paralysis' },
         { key:'consc',     label:'Level of consciousness', unit:'', min:0, max:100,
           base:()=>98,                       get:()=>state.consciousness,         fmt:v=>Math.round(v), colour:'none' },
-        { key:'noci',      label:'Nociception',       unit:'',    min:0,   max:10,
-          base:()=>0,                        get:()=>state.nociception,           fmt:v=>v.toFixed(1), colour:'ceiling' },
+        // v4.34: shows state.effectiveStimulus (nociception minus analgesiaCover)
+        // rather than raw state.nociception. The raw value is the surgeon's knife,
+        // not the patient - it is exactly what the header Surgical stimulus slider
+        // already sets, so repeating it here told the trainee nothing about their
+        // own analgesia, and the bar sat pinned high through a perfectly well
+        // covered case. Effective stimulus is what the tick actually feeds into
+        // alphaTarget/betaTarget, so this is the number that predicts the HR and
+        // BP response. The Pathways tab has always plotted effectiveStimulus
+        // under the label "Nociception"; the two tabs now agree.
+        { key:'noci',      label:'Nociception (effective)', unit:'', min:0, max:10,
+          base:()=>0,                        get:()=>state.effectiveStimulus,     fmt:v=>v.toFixed(1), colour:'ceiling' },
         { key:'paralysis', label:'Paralysis',         unit:'',    min:0,   max:1,
           base:()=>0,                        get:()=>state.patient.paralysis,     fmt:v=>v.toFixed(2), colour:'none' },
         { section: 'Autonomic tone' },
@@ -11019,6 +11218,7 @@ function buildPhysiologyGauges() {
             physGauges[item.key] = {
                 spec: item,
                 numEl: g.querySelector('.pg-num'),
+                valEl: g.querySelector('.pg-val'),   // v4.34: carries the status colour too
                 fillEl: g.querySelector('.pg-fill'),
                 baseEl: g.querySelector('.pg-base'),
                 sparkPoly: g.querySelector('.pg-spark polyline'),
@@ -11030,8 +11230,17 @@ function buildPhysiologyGauges() {
     physBuilt = true;
 }
 
-/* Colour class for a gauge value. */
+/* Colour class for a gauge value.
+
+   v4.34: rewritten around four optional thresholds instead of a fraction of the
+   span. A gauge may state any of warnLow / dangerLow / warnHigh / dangerHigh
+   (number or function); a side that is not stated, and has no default, simply
+   never colours. 'ceiling' and 'floor' supply their old fraction-of-span
+   defaults for the side they describe, so gauges that state nothing behave
+   exactly as they did before. 'none' still never colours - it is checked first
+   so a gauge cannot start colouring just because a threshold was left on it. */
 function physStatus(spec, v, min, max) {
+    if (spec.colour === 'none') return '';
     if (spec.colour === 'alarm') {
         const a = CONFIG.ALARMS[spec.alarm];
         if (!a) return '';
@@ -11041,14 +11250,44 @@ function physStatus(spec, v, min, max) {
     }
     const span = max - min;
     if (span <= 0) return '';
-    const frac = (v - min) / span;   // 0 at floor, 1 at ceiling
+    const base = physResolve(spec.base);
+
+    let warnLow    = physResolve(spec.warnLow);
+    let dangerLow  = physResolve(spec.dangerLow);
+    let warnHigh   = physResolve(spec.warnHigh);
+    let dangerHigh = physResolve(spec.dangerHigh);
     if (spec.colour === 'ceiling') {
-        if (frac >= 0.90) return 'danger';
-        if (frac >= 0.75) return 'warn';
+        if (warnHigh   === undefined) warnHigh   = min + 0.75 * span;
+        if (dangerHigh === undefined) dangerHigh = min + 0.90 * span;
+        /* v4.34: a ceiling rule measured as a fraction of the WHOLE span assumes
+           the resting value sits near the bottom of it. Three per-profile
+           ceilings added since have broken that assumption by pulling max down
+           towards base - preloadCeiling 1.4 (elderly, v3.48) and 1.2 (sepsis,
+           v4.3) against a baseline of 1.1, and contractilityCeiling 1.0 (sepsis,
+           v3.56) against a baseline of exactly 1.0. The 75%/90% marks then fell
+           at or below the baseline, so a EUVOLAEMIC elderly patient's preload
+           gauge read amber, and a septic patient read danger on preload the
+           moment you resuscitated them properly and on contractility from the
+           first tick. Measure the remaining headroom above the resting value
+           instead, which is what "maxed out" was always meant to mean. */
+        if (base !== undefined && warnHigh <= base) {
+            const headroom = max - base;
+            if (headroom > 0) {
+                warnHigh   = base + 0.75 * headroom;
+                dangerHigh = base + 0.90 * headroom;
+            } else {
+                /* No reserve at all (sepsis contractility: ceiling IS baseline).
+                   Nothing to warn about - the permanently full bar says it. */
+                warnHigh = dangerHigh = undefined;
+            }
+        }
     } else if (spec.colour === 'floor') {
-        if (frac <= 0.10) return 'danger';
-        if (frac <= 0.25) return 'warn';
+        if (warnLow    === undefined) warnLow    = min + 0.25 * span;
+        if (dangerLow  === undefined) dangerLow  = min + 0.10 * span;
     }
+
+    if ((dangerLow !== undefined && v <= dangerLow) || (dangerHigh !== undefined && v >= dangerHigh)) return 'danger';
+    if ((warnLow   !== undefined && v <= warnLow)   || (warnHigh   !== undefined && v >= warnHigh))   return 'warn';
     return '';
 }
 
@@ -11081,6 +11320,12 @@ function updatePhysiologyGauges() {
         const status = physStatus(spec, v, min, max);
         g.fillEl.classList.toggle('warn',   status === 'warn');
         g.fillEl.classList.toggle('danger', status === 'danger');
+        // v4.34: mirror onto the number, so a gauge in danger at the bottom of
+        // its range is legible even when there is barely any bar left to colour.
+        if (g.valEl) {
+            g.valEl.classList.toggle('warn',   status === 'warn');
+            g.valEl.classList.toggle('danger', status === 'danger');
+        }
 
         const basePct = clamp((base - min) / (max - min), 0, 1) * 100;
         g.baseEl.style.left = basePct.toFixed(1) + '%';

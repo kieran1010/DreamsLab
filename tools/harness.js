@@ -279,18 +279,26 @@ function boot(opts = {}) {
 
     /* Top-level const/let bindings are NOT properties of the vm global, so the
        things a test needs have to be published explicitly. Add to this list if
-       you need to reach something else in index.html. */
-    const EPILOGUE = `
-;globalThis.__dl = {
-    SCENARIOS, PHYS_GROUPS, physResolve, state, CONFIG, PROFILES, PK, drugDb,
-    loadScenario, scenarioReset, giveBolus, setInf, setVentParam, setVentMode,
-    setAirway, setNoci, toggleEvent, setBleed, setRhythm, calcMAP,
-    physCardiacOutput, suctionAirway, setProfile, resolveAllEvents, setTimeScale,
-    saturate, clamp, hasPulse,
-    ENT_CONFIG, PREMIUM_SCENARIOS, entConfigured, hasPro, isScenarioLocked,
-    entVerifyToken, entInit, entRenderUI, pickScenario
-};
-`;
+       you need to reach something else in index.html.
+
+       Names are published one at a time through a typeof guard rather than as a
+       single object literal, because DL_HTML is documented as pointing at any
+       copy or revision of index.html: an object literal makes the whole boot
+       throw a ReferenceError on the first name that revision does not have, so
+       adding a binding here used to silently break every older revision. A
+       missing name is now simply absent from `dl`. */
+    const PUBLISH = [
+        'SCENARIOS', 'PHYS_GROUPS', 'physResolve', 'state', 'CONFIG', 'PROFILES', 'PK', 'drugDb',
+        'loadScenario', 'scenarioReset', 'giveBolus', 'setInf', 'setVentParam', 'setVentMode',
+        'setAirway', 'setNoci', 'toggleEvent', 'setBleed', 'setRhythm', 'calcMAP',
+        'physCardiacOutput', 'physCOBaseline', 'physSVRBaseline', 'physStatus',
+        'suctionAirway', 'setProfile', 'resolveAllEvents', 'setTimeScale',
+        'saturate', 'clamp', 'hasPulse',
+        'ENT_CONFIG', 'PREMIUM_SCENARIOS', 'entConfigured', 'hasPro', 'isScenarioLocked',
+        'entVerifyToken', 'entInit', 'entRenderUI', 'pickScenario',
+    ];
+    const EPILOGUE = '\n;globalThis.__dl = {};\n' + PUBLISH.map(n =>
+        `if (typeof ${n} !== 'undefined') globalThis.__dl.${n} = ${n};`).join('\n') + '\n';
 
     const context = vm.createContext(sandbox);
     vm.runInContext(code + EPILOGUE, context, { filename: 'dreamslab-inline.js' });
