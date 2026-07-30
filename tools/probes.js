@@ -437,6 +437,108 @@ probe('F12', 'Physiology gauge ranges match the values they display', () => {
         'a floor below the smallest profile volume, e.g. profile-relative');
 });
 
+/* =============================================================================
+   F13  gauges do not colour when the value falls dangerously low
+   -----------------------------------------------------------------------------
+   The colour modes could only express "dangerous at the end of the bar", so the
+   circulatory variables -- whose danger sits well inside their span -- either
+   had colour:'none' or a ceiling rule that only watched the top. Untreated
+   haemorrhage took circulating volume from 5.0 L to 0.5 L and cardiac output to
+   0.9 L/min with both bars still accent-blue.
+
+   Two things have to hold at once, and they pull against each other: the
+   threshold has to fire on a genuinely sick patient, and it has to stay quiet on
+   a well one -- including a well 20 kg child and a well 130 kg adult, whose
+   normal values differ enough that any absolute threshold breaks one of them.
+   ========================================================================== */
+probe('F13', 'Low-side danger colours the gauge, for every profile', () => {
+    const dl = boot().dl;
+    const gauges = {};
+    Object.keys(dl.PHYS_GROUPS).forEach(g => dl.PHYS_GROUPS[g].forEach(i => {
+        if (!i.section) gauges[i.key] = i;
+    }));
+    const statusOf = (k, v) =>
+        dl.physStatus(gauges[k], v, resolve(gauges[k].min), resolve(gauges[k].max)) || 'none';
+
+    /* 1. The values untreated haemorrhage actually reaches must read danger. */
+    dl.setProfile('adult');
+    const bled = [
+        ['circVol',  0.50, 'central volume, untreated haemorrhage at 135 s'],
+        ['preload',  0.10, 'preload, same run'],
+        ['co',       0.92, 'cardiac output, same run'],
+        ['contract', 0.63, 'contractility, anaphylaxis with myocardial depression'],
+    ];
+    const missed = bled.filter(([k, v]) => statusOf(k, v) !== 'danger');
+    note(bled.map(([k, v, why]) => `${k.padEnd(9)} ${String(v).padEnd(5)} -> ${statusOf(k, v).padEnd(6)} (${why})`).join('\n'));
+    expect(missed.length === 0,
+        'shock-range circulatory values read danger',
+        missed.length ? `${missed.map(([k, v]) => `${k}=${v} reads ${statusOf(k, v)}`).join(', ')}`
+                      : 'all four read danger',
+        'explicit low thresholds, anchored to the value the model treats as normal');
+
+    /* 2. No profile may colour at its own resting state. This is the check that
+       rules out absolute thresholds: a resting paed CO is 3.2 L/min and a
+       resting obese SVR tone is 0.61, so thresholds picked for a 70 kg adult
+       would paint both patients permanently amber before anything happened. */
+    const falsePositives = [];
+    Object.keys(dl.PROFILES).forEach(pk => {
+        dl.setProfile(pk);
+        const resting = {
+            circVol:  dl.state.profile.centralVol,
+            preload:  dl.CONFIG.PRELOAD_BASELINE,
+            co:       dl.physCOBaseline(),
+            svr:      dl.physSVRBaseline(),
+        };
+        const line = Object.keys(resting).map(k => {
+            const st = statusOf(k, resting[k]);
+            if (st !== 'none') falsePositives.push(`${pk}/${k} rests at ${resting[k].toFixed(2)} -> ${st}`);
+            return `${k} ${resting[k].toFixed(2)} ${st}`;
+        });
+        note(`${pk.padEnd(9)} ${line.join('   ')}`);
+    });
+    expect(falsePositives.length === 0,
+        'a patient at rest colours nothing, on every profile',
+        falsePositives.length ? falsePositives.join('; ') : 'all profiles clean at rest',
+        'thresholds resolved from the profile, not hardcoded for the 70 kg adult');
+
+    /* 3. And the thresholds must sit inside the range the model can produce --
+       a danger threshold below the model's own floor can never be reached. */
+    dl.setProfile('adult');
+    const FLOOR = {
+        preload:  0,
+        contract: dl.CONFIG.CONT_FLOOR,
+        svr:      dl.CONFIG.SVR_FLOOR,
+        circVol:  0,
+        co:       0,
+    };
+    const unreachable = Object.keys(FLOOR).filter(k => {
+        const d = resolve(gauges[k].dangerLow);
+        return d === undefined || d <= FLOOR[k];
+    });
+    note(Object.keys(FLOOR).map(k =>
+        `${k.padEnd(9)} dangerLow ${String(resolve(gauges[k].dangerLow)).padEnd(20)} model floor ${FLOOR[k]}`).join('\n'));
+    expect(unreachable.length === 0,
+        'every low danger threshold sits above the model floor',
+        unreachable.length ? `unreachable: ${unreachable.join(', ')}` : 'all five reachable',
+        'dangerLow strictly above the floor the tick clamps to');
+
+    /* 4. The Nociception gauge shows what the tick acts on (effective stimulus),
+       not the raw slider position -- otherwise it just echoes the control and
+       stays pinned high through a fully covered case. */
+    const sim = boot();
+    sim.dl.loadScenario('autonomicDysreflexia');
+    sim.advance(1000);
+    const rawNoci = sim.dl.state.nociception;
+    sim.dl.state.analgesiaCover = rawNoci;          // pretend it is fully covered
+    sim.advance(1000);
+    const shown = gauges.noci.get.call(null);
+    note(`raw nociception ${rawNoci.toFixed(1)}, analgesia covering all of it -> gauge shows ${shown.toFixed(2)}`);
+    expect(shown < rawNoci - 0.5,
+        'Nociception gauge falls when analgesia covers the stimulus',
+        `gauge reads ${shown.toFixed(2)} against a raw stimulus of ${rawNoci.toFixed(1)}`,
+        'get() returns state.effectiveStimulus, as the Pathways tab already does');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
