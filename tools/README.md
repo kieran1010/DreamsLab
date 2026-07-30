@@ -138,6 +138,15 @@ probe checks untreated builds and holds, sustained rate control heals and holds,
 analgesia that leaves the heart fast does *not* heal, and — as a mechanism
 check — that supply rises as HR falls at fixed DBP.
 
+| F16 | salbutamol causes no tachycardia and barely bronchodilates | 0/4 |
+
+F16 is the v4.38 finding. Both salbutamol effect terms divided `salbCe` by a
+hardcoded `0.05` while the PK delivers a peak Ce ~37× lower, so both the
+tachycardia and the bronchodilation ran ~37× too weak. The fix references both to
+`SALB_CE_REF` (the real peak). The probe's first check is the key regression
+guard — that `SALB_CE_REF` tracks the PK-delivered peak — plus a dose-dependent
+tachycardia and a real drop in airway resistance.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

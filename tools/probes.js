@@ -690,6 +690,73 @@ probe('F15', 'Rate control heals myocardial ischaemia; tachycardia does not', ()
         'supply rises as HR falls, because diastole lengthens');
 });
 
+/* =============================================================================
+   F16  salbutamol causes no tachycardia and barely bronchodilates
+   -----------------------------------------------------------------------------
+   Both salbutamol effect terms - the beta1 tachycardia and the direct beta2
+   bronchodilator - divided salbCe by a hardcoded 0.05, with comments claiming a
+   peak Ce of ~0.05. The PK actually delivers ~0.00134 for the 250mcg reference
+   dose, ~37x lower, so both effects were ~37x too weak: no tachycardia, near-
+   placebo bronchodilation. v4.38 references both to CONFIG.SALB_CE_REF (the real
+   peak) and calibrates the gains. A beta2 vasodilation term offsets most of the
+   inotropic MAP rise (residual is a documented coupling limit).
+   ========================================================================== */
+probe('F16', 'Salbutamol causes tachycardia and bronchodilates', () => {
+    const dl0 = boot().dl;
+
+    /* Calibration guard: the effect reference must track the PK. This is the
+       exact thing that was broken - if the PK changes, SALB_CE_REF must follow. */
+    {
+        const sim = boot(); const dl = sim.dl; dl.setProfile('adult');
+        give(dl, 'salb', 0.25);
+        let ce = 0; for (let i = 0; i < 3000; i++) { sim.advance(100); ce = Math.max(ce, dl.state.patient.salbCe); }
+        const ratio = ce / dl.CONFIG.SALB_CE_REF;
+        note(`250mcg peak salbCe ${ce.toFixed(5)} vs SALB_CE_REF ${dl.CONFIG.SALB_CE_REF} (ratio ${ratio.toFixed(2)})`);
+        expect(ratio > 0.7 && ratio < 1.4,
+            'the effect reference concentration matches the PK-delivered peak Ce',
+            `250mcg peaks at salbCe ${ce.toFixed(5)}, SALB_CE_REF is ${dl.CONFIG.SALB_CE_REF}`,
+            'SALB_CE_REF within ~30% of the real peak, so the /ref terms are on scale');
+    }
+
+    /* Tachycardia: a 250mcg bolus must produce a clear, dose-dependent HR rise. */
+    function hrRise(mg) {
+        const sim = boot(); const dl = sim.dl; dl.setProfile('adult'); dl.setNoci(0);
+        sim.advance(60000); const hr0 = dl.state.hr;
+        give(dl, 'salb', mg);
+        let hrMax = hr0; for (let i = 0; i < 3000; i++) { sim.advance(100); hrMax = Math.max(hrMax, dl.state.hr); }
+        return hrMax - hr0;
+    }
+    const hr250 = hrRise(0.25), hr100 = hrRise(0.1);
+    note(`HR rise: 100mcg +${hr100.toFixed(1)}, 250mcg +${hr250.toFixed(1)}`);
+    expect(hr250 >= 10 && hr250 <= 22,
+        'a 250mcg salbutamol bolus causes a clear tachycardia',
+        `250mcg -> HR +${hr250.toFixed(1)} bpm`,
+        'a visible tachycardia in the +12-18 range');
+    expect(hr100 < hr250 - 2,
+        'the tachycardia is dose-dependent',
+        `100mcg +${hr100.toFixed(1)} vs 250mcg +${hr250.toFixed(1)}`,
+        'a smaller dose gives a smaller HR rise');
+
+    /* Bronchodilation: in an active bronchospasm, 250mcg must drop airway
+       resistance well below where it sits untreated. */
+    function resistAfter(treat) {
+        const sim = boot(); const dl = sim.dl;
+        dl.setProfile('adult'); dl.toggleEvent('bronchospasm');
+        sim.advance(30000);
+        if (treat) treat(dl, sim);
+        let rMin = dl.state.patient.bronchResistance;
+        for (let i = 0; i < 2400; i++) { sim.advance(100); rMin = Math.min(rMin, dl.state.patient.bronchResistance); }
+        return rMin;
+    }
+    const rUntreated = resistAfter(null);
+    const rSalb = resistAfter(dl => give(dl, 'salb', 0.25));
+    note(`bronchospasm airway resistance: untreated ${rUntreated.toFixed(0)}, +250mcg ${rSalb.toFixed(0)}`);
+    expect(rSalb < rUntreated - 15,
+        'salbutamol meaningfully relieves an active bronchospasm',
+        `resistance untreated ${rUntreated.toFixed(0)} -> +250mcg ${rSalb.toFixed(0)}`,
+        'a clear drop in airway resistance, not the near-placebo the /0.05 reference gave');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
