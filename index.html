@@ -51,6 +51,79 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.36  ("Opioid vagal drive stops pinning parasympathetic tone")
+  ---------------------------------------------------------------------------------
+  Reported: parasympathetic tone often runs higher than expected - the myocardial
+  ischaemia scenario named as an example.
+
+  Confirmed. Across the sweep the tone sat pinned at its 1.0 clamp for >50% of the
+  run in 16 of 40 runs, and read danger on the gauge for 2059 of 4840 samples. In
+  ischaemia it was pinned at 1.00 next to a HR of ~100 - maximal vagal tone shown
+  on a tachycardic patient.
+
+  Cause: the opioids' central vagal effect (v3.43) was a per-tick ADDITIVE push on
+  state.parasympTone. Every other sustained autonomic drive - alpha/beta's
+  nociceptive and MH terms - drives a TARGET the tone relaxes toward; parasymp was
+  the one holdout still pushing against the relaxation (structural trap #1). And
+  because TONE_DECAY_TAU is a per-tick blend factor (0.05), not a time constant, an
+  additive push k settles at REST + k/TAU = REST + 20*(gain*dt) = REST + 2*gain -
+  a silent 20x amplification. So PARASYMP_REMI_GAIN 0.8 delivered 1.6 of tone at
+  full effect against a 1.0 clamp; remifentanil above ~0.2 mcg/kg/min pinned it and
+  the model discarded 13-90% of the drive.
+
+  Three consequences, all measured:
+    - The haemodynamic dose-response went FLAT. remi 0.2, 0.25, 0.35 and 0.5
+      mcg/kg/min produced a byte-identical HR -10.4 / MAP -16.5 - no change over a
+      2.5x dose range.
+    - Further vagal drives were MASKED. A vagal event on top of a remi infusion
+      found zero headroom to the clamp, so its parasympathetic arm did nothing;
+      it only still worked because v3.66 gave vagal events a separate
+      sympathetic-withdrawal arm. Hypoxia's vagal term was masked the same way.
+    - The gauge read maximal vagal tone beside an elevated HR, because beta tone
+      is driven independently by the same stimulus.
+
+  Fix: the opioid vagal drive now builds a parasympTarget through the model's own
+  saturate() helper, and the tone relaxes toward it - exactly the alpha/beta
+  pattern. The drive approaches the 1.0 clamp asymptotically instead of crashing
+  into it, so the response stays monotonic at high dose and always leaves headroom
+  for the transient vagal pushes (events, hypoxia, baroreflex) that still add on
+  top later in the tick. New CONFIG.PARASYMP_OPIOID_K (0.42) is the half-saturation
+  drive; the potency gains (remi 0.8 : fent 0.5 : alf 0.5 : morph 0.3) are
+  unchanged, so fentanyl and remifentanil stay on the same curve and both preserve
+  their relative calibration.
+
+  Result: pinned runs 16/40 -> 2/40 (the two left are correct - the vagal event
+  itself, HR 48, and the LAST arrest, neither opioid-driven). Ischaemia's tone
+  drops from a pinned 1.00 to ~0.72 (out of danger), with HR/MAP now coherent.
+
+  Calibration note: the documented remi-0.15 -> HR-8/MAP-13 point necessarily
+  softens to about -5.5/-8.6, because at 0.15 the old tone already sat at 87% of
+  the clamp while the drive kept growing to 1.14 at remi 0.4 - no saturating curve
+  can pass through the old point AND keep climbing above it. The trade buys a
+  monotonic, physiological diminishing-returns curve (chosen deliberately; see the
+  session that produced this version).
+
+  Scenario impact: removing the excess damping raises HR/MAP by ~4-6 bpm / ~5-8
+  mmHg across opioid-containing scenarios, because they had been sitting against
+  the pinned tone. This breaks NO scenario's stated numeric contract, and improves
+  two: sepsis settles at 75/46 (setupBrief says "BP 75/45", was 70/43) and
+  ischaemia reaches HR 104 (briefing says "crept up to 105", was 99). The
+  scenarios that drift up (maintenance, tiva, asthma, emergence, anaphBrewing)
+  state no numeric target; their higher steady vitals are the honest values and are
+  shipped as-is (no re-tuning).
+
+  Pre-existing, unrelated, left alone: haemorrhage's setupBrief "MAP currently 65"
+  reads ~88 at t=0 on both old and new (it bleeds down to 65 later); sepsis's
+  "Initial BP 75/45" reads 85/52 at t=0, settling toward target over a few minutes.
+
+  Tested by probes.js F14 (dose-response stays monotonic 0.2->0.5; routine
+  infusion leaves headroom below the clamp; opioid still causes sensible
+  bradycardia; a vagal event still moves the tone on top of an opioid). Full
+  suite: probes 32/32, voucher-probe 15/15, scan 0 BUG, 0 runtime errors.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.35  ("SILENT is silent: eye opening no longer forces a beep")
   ---------------------------------------------------------------------------------
   Reported: a noise still plays when a new event fires (eye opening given as the
@@ -4997,6 +5070,17 @@ const CONFIG = {
     PARASYMP_FENT_GAIN: 0.50,    // v3.43: opioid direct vagal effect (fent). 100mcg -> HR -5 / MAP -7; 200mcg -> HR -8 / MAP -13
     PARASYMP_ALF_GAIN:  0.50,    // v3.51: similar magnitude to fent (alfE shorthand normalised the same way)
     PARASYMP_MORPH_GAIN: 0.30,   // v3.51: weaker direct vagal effect; clinically morphine bradycardia is mostly histamine-mediated peripheral pooling rather than central vagal
+    // v4.36: the opioid vagal drive above builds a parasympathetic TARGET the
+    // tone relaxes toward (via saturate()), instead of a per-tick additive push.
+    // As a push it settled at REST + push/TONE_DECAY_TAU = REST + 20*(gain*dt) =
+    // REST + 2*gain, so at rE=1 remi alone "wanted" 0.3 + 1.6 = 1.9 against a 1.0
+    // clamp - the whole dose-response above ~0.2 mcg/kg/min was flattened to a
+    // pinned 1.0, and 13-90% of the drive was silently discarded (trap #1: a
+    // sustained state must drive the target, not fight the relaxation). K is the
+    // half-saturation drive; 0.42 keeps the documented remi-0.15 / fent-200
+    // points within ~1 bpm while letting higher doses keep climbing toward, but
+    // never reaching, the clamp. See the [PHYSIOLOGY TICK] parasympTarget block.
+    PARASYMP_OPIOID_K:  0.42,
     BARO_SEVO_BLUNT: 0.5,      // 1 MAC halves baroreflex effectiveness
     BARO_PROP_BLUNT: 0.3,      // deep prop further blunts
 
@@ -6138,9 +6222,29 @@ setInterval(() => {
                         (betaRest + betaNociDrive
                          + state.mhSeverity * CONFIG.MH_BETA_DRIVE)   // v4.29
                         * (1 - (state.bbBlockFraction || 0)));
-    state.alphaTone    += (alphaTarget          - state.alphaTone)    * CONFIG.TONE_DECAY_TAU;
-    state.betaTone     += (betaTarget           - state.betaTone)     * CONFIG.TONE_DECAY_TAU;
-    state.parasympTone += (CONFIG.PARASYMP_REST - state.parasympTone) * CONFIG.TONE_DECAY_TAU;
+    /* v4.36: parasympathetic target. The opioids' central vagal drive is a
+       SUSTAINED state (present as long as the drug is), so - like alpha/beta's
+       nociceptive and MH drives - it belongs on the target the tone relaxes
+       toward, not on a per-tick push that the relaxation then fights. As a push
+       it settled at REST + push/TONE_DECAY_TAU (a 20x amplification of the
+       gain*dt step), which blew past the 1.0 clamp at any remi above ~0.2
+       mcg/kg/min and pinned the tone - flat dose-response, discarded drive, and
+       the gauge reading maximal vagal tone while the patient was tachycardic.
+       Routed through saturate() the drive now approaches the clamp asymptotically
+       instead of crashing into it: the response stays monotonic at high dose and
+       leaves headroom for the genuinely transient vagal pushes (events, hypoxia,
+       baroreflex) that still add on top further down the tick. */
+    const opioidVagalDrive = rE * CONFIG.PARASYMP_REMI_GAIN
+                           + fE * CONFIG.PARASYMP_FENT_GAIN
+                           + alfE   * CONFIG.PARASYMP_ALF_GAIN     // v3.51
+                           + morphE * CONFIG.PARASYMP_MORPH_GAIN;  // v3.51
+    const parasympTarget = saturate(
+        CONFIG.PARASYMP_REST, 0, CONFIG.PARASYMP_CLAMP,
+        opioidVagalDrive, 0,
+        CONFIG.PARASYMP_OPIOID_K, 1);
+    state.alphaTone    += (alphaTarget    - state.alphaTone)    * CONFIG.TONE_DECAY_TAU;
+    state.betaTone     += (betaTarget     - state.betaTone)     * CONFIG.TONE_DECAY_TAU;
+    state.parasympTone += (parasympTarget - state.parasympTone) * CONFIG.TONE_DECAY_TAU;
 
     // Drug-driven transient pushes on alpha and beta tones. Transient because
     // the relaxation above pulls tone back toward target each tick.
@@ -6188,16 +6292,13 @@ setInterval(() => {
     state.alphaTone -= sympatholytic;
     state.betaTone  -= sympatholytic;
 
-    // v3.43: Opioids direct vagal effect (B-016). Mu-opioid receptors in the
+    // v3.43: Opioids' direct vagal effect (B-016). Mu-opioid receptors in the
     // nucleus ambiguus enhance vagal outflow, producing mild bradycardia and
-    // modest hypotension that is independent of nociceptive coverage. Without
-    // this, fentanyl/remi only acted via noci blunting, which has no effect
-    // when no nociception is present (e.g. an awake patient at rest).
-    state.parasympTone += (rE * CONFIG.PARASYMP_REMI_GAIN
-                         + fE * CONFIG.PARASYMP_FENT_GAIN
-                         + alfE   * CONFIG.PARASYMP_ALF_GAIN     // v3.51
-                         + morphE * CONFIG.PARASYMP_MORPH_GAIN   // v3.51
-                         ) * dt;
+    // modest hypotension independent of nociceptive coverage. Without this,
+    // fentanyl/remi only acted via noci blunting, which does nothing when no
+    // nociception is present (e.g. an awake patient at rest).
+    // v4.36: moved onto parasympTarget above (was a per-tick push here, which
+    // over-amplified 20x against the relaxation and pinned the tone at the clamp).
 
     // Bleed & events push both sympathetic tones up (transient, per tick)
     if (state.events.bleed) { state.alphaTone += 0.02 * dt; state.betaTone += 0.02 * dt; }

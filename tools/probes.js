@@ -539,6 +539,84 @@ probe('F13', 'Low-side danger colours the gauge, for every profile', () => {
         'get() returns state.effectiveStimulus, as the Pathways tab already does');
 });
 
+/* =============================================================================
+   F14  opioid vagal drive pins parasympathetic tone at the clamp
+   -----------------------------------------------------------------------------
+   The opioids' central vagal effect was a per-tick additive push on
+   state.parasympTone. Against the TONE_DECAY_TAU relaxation (a per-tick blend,
+   not a time constant) an additive push k settles at REST + k/TAU = REST +
+   20*(gain*dt) = REST + 2*gain - a 20x amplification - so remifentanil above
+   ~0.2 mcg/kg/min drove the tone past its 1.0 clamp and pinned it. Consequences:
+   the haemodynamic dose-response went flat (identical output over a 2.5x dose
+   range), further vagal drives were masked (no headroom left), and the gauge
+   read maximal vagal tone next to a tachycardic patient. The drive now builds a
+   saturating parasympTarget the tone relaxes toward - trap #1, the same pattern
+   alpha and beta already use.
+   ========================================================================== */
+probe('F14', 'Opioid vagal drive does not pin parasympathetic tone', () => {
+    const clamp = boot().dl.CONFIG.PARASYMP_CLAMP;
+
+    /* Steady-state HR drop and parasympTone under a fixed remi infusion on a
+       resting adult (no stimulus), so only the opioid vagal arm is exercised. */
+    function remiSteady(rate) {
+        const sim = boot(); const dl = sim.dl;
+        dl.setProfile('adult'); dl.setNoci(0);
+        sim.advance(60000);
+        const hr0 = dl.state.hr;
+        dl.state.machine.pumps.remi = rate;
+        sim.advance(600000);
+        return { dHR: dl.state.hr - hr0, para: dl.state.parasympTone };
+    }
+
+    /* 1. The dose-response must keep moving across the range that used to be
+       flat. Old model: remi 0.2..0.5 all produced an identical HR (pinned). */
+    const rates = [0.2, 0.3, 0.4, 0.5];
+    const pts = rates.map(r => ({ r, ...remiSteady(r) }));
+    note(pts.map(p => `remi ${p.r}  parasymp ${p.para.toFixed(3)}  HR ${p.dHR.toFixed(1)}`).join('\n'));
+    let monotonic = true;
+    for (let i = 1; i < pts.length; i++) {
+        // each higher dose must give measurably MORE bradycardia, not the same
+        if (pts[i].dHR > pts[i - 1].dHR - 0.2) monotonic = false;
+    }
+    expect(monotonic,
+        'remifentanil bradycardia keeps deepening from 0.2 to 0.5 mcg/kg/min',
+        `HR deltas: ${pts.map(p => p.dHR.toFixed(1)).join(', ')}`,
+        'a monotonic dose-response, not a flat pinned region');
+
+    /* 2. At a routine infusion the tone must sit strictly below the clamp,
+       leaving the headroom that vagal events / hypoxia / baroreflex add into. */
+    const mid = remiSteady(0.25);
+    expect(mid.para < clamp - 0.02,
+        'a routine remi infusion leaves parasympathetic headroom below the clamp',
+        `remi 0.25 -> parasymp ${mid.para.toFixed(3)} (clamp ${clamp})`,
+        `parasympTone below ${clamp} so further vagal drives still register`);
+
+    /* 3. The opioid must still produce a plausible bradycardia - the fix is
+       meant to stop the pin, not to zero out the vagal effect. */
+    const lo = remiSteady(0.15);
+    expect(lo.dHR <= -3 && lo.dHR >= -12,
+        'remifentanil still causes clinically sensible bradycardia',
+        `remi 0.15 -> HR ${lo.dHR.toFixed(1)} bpm (documented calibration is about -8)`,
+        'a HR drop in roughly the -4 to -10 range at 0.15 mcg/kg/min');
+
+    /* 4. A vagal event on top of an opioid infusion must still move the tone -
+       the old pin left zero headroom, so the parasympathetic arm did nothing
+       and only the separate sympathetic-withdrawal arm survived. */
+    const sim = boot(); const dl = sim.dl;
+    dl.loadScenario('maintenance'); dl.setNoci(0);
+    dl.state.machine.pumps.remi = 0.2;
+    sim.advance(300000);
+    const pBefore = dl.state.parasympTone;
+    dl.toggleEvent('vagal');
+    let pPeak = pBefore;
+    for (let i = 0; i < 400; i++) { sim.advance(100); pPeak = Math.max(pPeak, dl.state.parasympTone); }
+    note(`on remi 0.2: parasymp ${pBefore.toFixed(3)} -> vagal-event peak ${pPeak.toFixed(3)}`);
+    expect(pPeak > pBefore + 0.1,
+        'a vagal event still drives parasympathetic tone up on top of an opioid',
+        `parasymp ${pBefore.toFixed(3)} -> ${pPeak.toFixed(3)} when the event fires`,
+        'the opioid no longer consumes all the headroom to the clamp');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

@@ -67,7 +67,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 28/28,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 32/32,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -100,6 +100,16 @@ This independently broke three things: the aneurysm scenario's "massive
 sympathetic surge" (gone in ~2 s), MH's tachycardia (a 0.04/tick push produced
 ~2 bpm), and the esmolol curve. **Sustained states must drive the targets** —
 see `sahSurge`, `MH_BETA_DRIVE` and the beta-blockade term in `betaTarget`.
+
+The subtler failure is a push that is *too strong*, not too weak: it settles at
+`REST + k/0.05`, i.e. **20× the per-tick step**, and silently saturates against
+the tone's clamp. The v4.36 finding — the opioids' vagal drive was a per-tick
+push on `parasympTone`, so `PARASYMP_REMI_GAIN` 0.8 delivered 1.6 of tone and
+pinned it at the 1.0 clamp for any remifentanil above ~0.2 mcg/kg/min, flattening
+the dose-response and masking every other vagal drive. Fixed by building a
+saturating `parasympTarget` (via `saturate()`) the tone relaxes toward, like
+`alphaTarget`/`betaTarget`. `parasympTone` was the last autonomic tone still
+driven by raw pushes; all three now use targets.
 
 **2. Multiplying a tone per tick compounds.** `betaTone *= (1 - f)` at 10 Hz
 against a 0.05 relaxation settles at `0.05·T·(1-f) / (0.05 + 0.95f)` of target —
