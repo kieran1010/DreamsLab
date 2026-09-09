@@ -109,6 +109,21 @@ function createPrompter(rl) {
     };
 }
 
+/* Read-only: the files in resources/ that aren't in the RESOURCES array yet.
+   Shared by main() below and by .githooks/pre-commit, which needs to know
+   whether there's actually anything to prompt for before deciding whether a
+   missing terminal is even a problem. */
+function findNewFiles() {
+    if (!fs.existsSync(RESOURCES_DIR)) return [];
+    const files = fs.readdirSync(RESOURCES_DIR)
+        .filter(f => !IGNORE.has(f) && !f.startsWith('.'))
+        .filter(f => fs.statSync(path.join(RESOURCES_DIR, f)).isFile())
+        .sort();
+    const html = fs.readFileSync(INDEX_HTML, 'utf8');
+    const known = knownResourceFiles(html, locateArray(html));
+    return files.filter(f => !known.has(f));
+}
+
 async function main() {
     if (!fs.existsSync(RESOURCES_DIR)) {
         console.error('resources/ does not exist.');
@@ -116,16 +131,9 @@ async function main() {
         return;
     }
 
-    const files = fs.readdirSync(RESOURCES_DIR)
-        .filter(f => !IGNORE.has(f) && !f.startsWith('.'))
-        .filter(f => fs.statSync(path.join(RESOURCES_DIR, f)).isFile())
-        .sort();
-
     const html = fs.readFileSync(INDEX_HTML, 'utf8');
     const loc = locateArray(html);
-    const known = knownResourceFiles(html, loc);
-
-    const newFiles = files.filter(f => !known.has(f));
+    const newFiles = findNewFiles();
     if (!newFiles.length) {
         console.log('No new files in resources/ - the RESOURCES array is already up to date.');
         return;
@@ -167,7 +175,11 @@ async function main() {
     console.log('Review the diff, then commit index.html together with the new file(s) in resources/.');
 }
 
-main().catch(err => {
-    console.error(err.message);
-    process.exitCode = 1;
-});
+module.exports = { findNewFiles };
+
+if (require.main === module) {
+    main().catch(err => {
+        console.error(err.message);
+        process.exitCode = 1;
+    });
+}

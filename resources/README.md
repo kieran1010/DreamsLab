@@ -18,6 +18,27 @@ single-file app itself, and not processed by anything.
 (Or skip the script and edit the `RESOURCES` array in `index.html` by hand -
 grep for `[RESOURCES]`. The script is just a shortcut for the same edit.)
 
+## Doing it automatically on commit
+
+One-time setup, per machine you commit from:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, `git commit` runs the sweeper for you whenever `resources/` has a
+file the `RESOURCES` array doesn't know about yet: it prompts for Name/Topic
+right there in your terminal and folds the updated `index.html` into the
+commit you're making. A commit that doesn't touch `resources/`, or where
+everything's already synced, passes straight through untouched.
+
+Needs a real terminal to ask its questions - most GUI git clients (VS Code's
+Source Control panel, GitHub Desktop) don't give hooks one, so a commit with
+something new to sync aborts there with instructions rather than hanging. Run
+`node resources/sweep-resources.js` yourself first in that case, then commit
+again. Not set up automatically by cloning the repo - git never auto-enables
+hooks from a fresh clone, on purpose.
+
 ## Videos
 
 Don't put video files in here. GitHub has a hard 100MB per-file limit, and
