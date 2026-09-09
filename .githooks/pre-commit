@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+/* =============================================================================
+   PRE-COMMIT HOOK  --  keep the Resources tab in sync automatically
+   -----------------------------------------------------------------------------
+   Not enabled by cloning the repo - git deliberately never auto-runs hooks
+   from a fresh clone (that would let a repo run arbitrary code on checkout).
+   One-time opt-in per machine:
+
+       git config core.hooksPath .githooks
+
+   Every `git commit` checks whether resources/ has files not yet in
+   resources/manifest.json (via sweep-resources.js's findNewFiles()): if so,
+   it prompts for a Name and a Topic per file, right there in your terminal,
+   then folds the updated manifest.json into the commit you're making. A
+   commit with nothing new to sync - including one where you already ran the
+   sweeper yourself and staged its result - passes straight through.
+
+   Git itself redirects a hook's stdin to /dev/null, even when the hook is
+   run from a perfectly ordinary interactive terminal (verified empirically -
+   this isn't specific to GUI git clients). stdout/stderr are unaffected. So
+   rather than trust process.stdin, this opens /dev/tty directly for the
+   sweeper's input - the same workaround tools like husky use. If that fails
+   (no controlling terminal at all: CI, most GUI git clients, or Windows,
+   which has no /dev/tty), it aborts the commit with instructions rather than
+   hanging - run `node resources/sweep-resources.js` yourself first in that
+   case, then commit again.
+   ============================================================================= */
+'use strict';
+
+const fs = require('fs');
+const { execFileSync, spawnSync } = require('child_process');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+const { findNewFiles } = require(path.join(ROOT, 'resources', 'sweep-resources.js'));
+
+if (findNewFiles().length === 0) {
+    process.exit(0);
+}
+
+let ttyFd;
+try {
+    ttyFd = fs.openSync('/dev/tty', 'r');
+} catch (e) {
+    console.error(
+        '\nresources/ has new file(s) not yet in the Resources tab, but this commit has ' +
+        'no interactive terminal available for the sweeper to ask its questions. Run it ' +
+        'yourself first, then commit again:\n\n' +
+        '    node resources/sweep-resources.js\n'
+    );
+    process.exit(1);
+}
+
+const result = spawnSync('node', ['resources/sweep-resources.js'], {
+    cwd: ROOT,
+    stdio: [ttyFd, 'inherit', 'inherit'],
+});
+fs.closeSync(ttyFd);
+if (result.status !== 0) {
+    process.exit(result.status === null ? 1 : result.status);
+}
+
+/* sweep-resources.js may have rewritten manifest.json - fold that into the
+   commit that's already in progress. */
+execFileSync('git', ['add', 'resources/manifest.json'], { cwd: ROOT, stdio: 'inherit' });
+process.exit(0);

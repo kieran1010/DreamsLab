@@ -51,6 +51,52 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.40  ("Resources tab")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. Adds a RESOURCES button to the brand bar, to
+  the right of PHYSIOLOGY, opening a modal for student-facing explainers/PDFs/
+  videos/links - a place to point trainees while they work through scenarios.
+
+  Same overlay/head/close chrome as the Physiology modal, but flat rather than
+  tabbed: content is grouped and rendered by renderResources() into
+  #resources-list under type headings (PDFs / Videos / Links) via
+  RESOURCE_TYPE_ORDER. An empty list renders a "nothing here yet" message
+  rather than a blank modal. Each entry needs only {title, type, url,
+  description}; description is optional. Links open in a new tab
+  (rel="noopener noreferrer").
+
+  Content lives in resources/manifest.json (a plain JSON array), not in this
+  script - index.html fetches it fresh every time the modal opens, so a new
+  resource shows up on next open with no redeploy of index.html itself. Add
+  one with `node resources/sweep-resources.js` (prompts for Name/Topic per new
+  file in resources/, guesses type from the extension) or by hand; see
+  resources/README.md. An optional pre-commit hook (.githooks/pre-commit, opt
+  in via `git config core.hooksPath .githooks`) runs the sweeper automatically
+  whenever a commit touches resources/ with something not yet in the manifest.
+
+  A `url` can be a real file committed under resources/ (relative path, e.g.
+  'resources/tiva-induction.pdf') or an external URL (required for video:
+  GitHub caps files at 100MB and git isn't built for streaming media). This is
+  the one deliberate crack in the "index.html is one artefact" rule in
+  CLAUDE.md, and a stronger one than a plain relative link would be: fetch()
+  of a same-origin file fails outright under file:// (verified empirically),
+  so opening index.html by double-click runs the whole sim normally but shows
+  a "couldn't load" message in the Resources tab specifically. A failed
+  re-fetch on a later open keeps showing the last list that DID load rather
+  than blanking the tab (resourcesCache). Everything else in the sim stays
+  fully offline-capable. Accepted tradeoff, documented in CLAUDE.md and
+  resources/README.md.
+
+  Not covered by the headless harness (tools/) - it doesn't touch physiology,
+  PK, scenarios or entitlements, so sweep/scan/probes are unaffected, and the
+  sandbox has no fetch() to exercise the runtime load anyway. Verify by
+  opening the modal in a browser, both served (http.server or the deployed
+  site) and via file:// for the fallback message (see CLAUDE.md "For UI or
+  frontend changes").
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.39  ("Drug audit fixes: neostigmine, dexmedetomidine, magnesium")
   ---------------------------------------------------------------------------------
   A sweep of all 27 drugs for the same bug class as salbutamol (v4.38) - an effect
@@ -2976,9 +3022,10 @@ input[type=range] {
 #brand-about-btn,
 #brand-scenarios-btn,
 #brand-phys-btn,
+#brand-resources-btn,
 #brand-panel-btn {     /* v3.64: SCENARIOS button uses same styling. v4.17: PANEL too - it
                            only turns accent-blue while the side panel is actually open.
-                           v4.20: PHYSIOLOGY button shares the styling. */
+                           v4.20: PHYSIOLOGY button shares the styling. v4.40: RESOURCES too. */
     padding: 4px 10px;
     font-size: 0.6rem;
     background: rgba(42,42,42,0.85);
@@ -2992,10 +3039,14 @@ input[type=range] {
 #brand-about-btn:hover,
 #brand-scenarios-btn:hover,
 #brand-phys-btn:hover,
+#brand-resources-btn:hover,
 #brand-panel-btn:hover { background: rgba(60,60,60,0.85); color: #ddd; border-color: #888; }
 /* v4.20: PHYSIOLOGY button lights up accent-blue while its modal is open */
 #brand-phys-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #brand-phys-btn.active:hover { filter: brightness(1.15); }
+/* v4.40: RESOURCES button shares the same active-state treatment */
+#brand-resources-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#brand-resources-btn.active:hover { filter: brightness(1.15); }
 /* v4.25: compact surgical-stimulus slider in the brand bar
    v4.32: now sits on the left, beside the brand lockup - margin-left gives it
    breathing room from the wordmark */
@@ -3666,6 +3717,115 @@ input[type=range] {
     font-size: 0.62rem; color: #666; margin: 0 0 8px;
 }
 
+/* === RESOURCES MODAL (v4.40) =============================================
+   Opens via the RESOURCES brand-bar button. A flat list of student-facing
+   PDFs/videos/links, grouped by type. Same overlay/head/close chrome as the
+   Physiology modal above; no tabs since the list is small and flat. */
+#resources-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.78);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+#resources-modal-overlay.open { display: flex; }
+#resources-modal {
+    background: #141414;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #ccc;
+    width: 100%;
+    max-width: 640px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#resources-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px 10px;
+    border-bottom: 1px solid #262626;
+    flex: 0 0 auto;
+}
+#resources-modal-head h2 {
+    margin: 0;
+    font-size: 1.0rem;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: #e4e4e4;
+}
+#resources-modal-head .sub {
+    font-size: 0.6rem;
+    color: #666;
+    margin-top: 2px;
+}
+#resources-modal-close {
+    background: transparent;
+    color: #999;
+    border: 1px solid #555;
+    width: 28px; height: 28px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+#resources-modal-close:hover { color: #fff; border-color: #888; }
+#resources-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px 20px 20px;
+}
+.res-empty {
+    color: #777;
+    font-size: 0.8rem;
+    padding: 20px 0;
+    text-align: center;
+}
+.res-group-label {
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #777;
+    margin: 14px 0 6px;
+    border-top: 1px solid #262626;
+    padding-top: 12px;
+}
+.res-group-label:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.res-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 4px;
+    border-radius: 4px;
+    text-decoration: none;
+    color: inherit;
+}
+.res-item:hover { background: #1c1c1c; }
+.res-icon {
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    border-radius: 4px;
+    background: #222;
+    color: #999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+.res-item:hover .res-icon { background: var(--accent); color: #fff; }
+.res-text { flex: 1 1 auto; min-width: 0; }
+.res-title { font-size: 0.82rem; color: #ddd; font-weight: 500; }
+.res-item:hover .res-title { color: #fff; text-decoration: underline; }
+.res-desc { font-size: 0.68rem; color: #888; margin-top: 2px; }
+
 /* === SCENARIO BRIEFING MODAL (v3.6) ===================================== */
 #scenario-briefing-modal {
     display: none;                    /* shown via JS */
@@ -3976,6 +4136,9 @@ input[type=range] {
              later rehoming of Setup/Parameters/Log. -->
         <!-- v4.20: PHYSIOLOGY button - opens the physiology dashboard modal -->
         <button id="brand-phys-btn" onclick="togglePhysiologyModal()" title="Live physiology dashboard">PHYSIOLOGY</button>
+        <!-- v4.40: RESOURCES button - opens the student resources modal
+             (PDFs / videos / links). Sits to the right of PHYSIOLOGY. -->
+        <button id="brand-resources-btn" onclick="toggleResourcesModal()" title="Explainers, references and links">RESOURCES</button>
         <!-- v4.23: ABOUT button removed - re-homed as a link in the START HERE
              modal footer (see #sh-about-link / shOpenAbout()). -->
         <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">AUDIO ON</button>
@@ -4018,6 +4181,24 @@ input[type=range] {
                     <!-- Edges + nodes rendered dynamically by buildVariableGraph() -->
                 </svg>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- v4.40: Resources modal - opens via the RESOURCES brand-bar button.
+     Content lives in the RESOURCES array in the script; renderResources()
+     builds the grouped (PDFs/Videos/Links) list into #resources-list. -->
+<div id="resources-modal-overlay" onclick="if(event.target.id==='resources-modal-overlay') toggleResourcesModal()">
+    <div id="resources-modal">
+        <div id="resources-modal-head">
+            <div>
+                <h2>Resources</h2>
+                <div class="sub">Explainers, references and links for working through the sim.</div>
+            </div>
+            <button id="resources-modal-close" onclick="toggleResourcesModal()" title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div id="resources-body">
+            <div id="resources-list"></div>
         </div>
     </div>
 </div>
@@ -11736,6 +11917,109 @@ function togglePhysiologyModal() {
         if (physTab === 'pathways') updateVariableGraph();
         else updatePhysiologyGauges();
     }
+}
+
+/* =============================================================================
+   [RESOURCES]  -- Student-facing explainers, PDFs, videos, links
+   ---------------------------------------------------------------------------------
+   Content lives in resources/manifest.json, NOT in this script - fetched
+   fresh (cache: 'no-store') every time the modal opens, grouped by type. A
+   resource added to the manifest shows up on the very next open, with no
+   index.html redeploy at all. Add one by running
+   node resources/sweep-resources.js (or editing the manifest by hand,
+   {title, type, url, description[optional]}, type one of RESOURCE_TYPES
+   below); see resources/README.md.
+
+   This is the one part of the sim that needs network access: fetch() of a
+   same-origin file fails outright under file:// (a browser security
+   restriction, verified empirically, not a bug we can route around) - so
+   opening index.html by double-click shows a "couldn't load" message here
+   instead of the list. Everything else in the sim stays fully
+   offline-capable; see the portability note in CLAUDE.md and
+   resources/README.md. A failed re-fetch (e.g. a flaky connection on a
+   second open) keeps showing the last list that DID load, rather than
+   blanking the tab - see resourcesCache below.
+   ============================================================================= */
+const RESOURCE_TYPES = {
+    pdf:   { label: 'PDFs',   icon: 'PDF' },
+    video: { label: 'Videos', icon: '▶' },
+    link:  { label: 'Links',  icon: '↗' }
+};
+const RESOURCE_TYPE_ORDER = ['pdf', 'video', 'link'];
+let resourcesCache = null;
+
+function renderResourceList(el, list) {
+    el.innerHTML = '';
+    if (!list.length) {
+        el.innerHTML = '<div class="res-empty">Nothing here yet &ndash; check back soon.</div>';
+        return;
+    }
+    RESOURCE_TYPE_ORDER.forEach(type => {
+        const items = list.filter(r => r.type === type);
+        if (!items.length) return;
+        const meta = RESOURCE_TYPES[type] || { label: type, icon: '' };
+        const label = document.createElement('div');
+        label.className = 'res-group-label';
+        label.textContent = meta.label;
+        el.appendChild(label);
+        items.forEach(r => {
+            const a = document.createElement('a');
+            a.className = 'res-item';
+            a.href = r.url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            const icon = document.createElement('div');
+            icon.className = 'res-icon';
+            icon.textContent = meta.icon;
+            const text = document.createElement('div');
+            text.className = 'res-text';
+            const title = document.createElement('div');
+            title.className = 'res-title';
+            title.textContent = r.title;
+            text.appendChild(title);
+            if (r.description) {
+                const desc = document.createElement('div');
+                desc.className = 'res-desc';
+                desc.textContent = r.description;
+                text.appendChild(desc);
+            }
+            a.appendChild(icon);
+            a.appendChild(text);
+            el.appendChild(a);
+        });
+    });
+}
+
+async function renderResources() {
+    const el = document.getElementById('resources-list');
+    if (!el) return;
+    if (!resourcesCache) {
+        el.innerHTML = '<div class="res-empty">Loading&hellip;</div>';
+    }
+    try {
+        const res = await fetch('resources/manifest.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const list = await res.json();
+        resourcesCache = list;
+        renderResourceList(el, list);
+    } catch (err) {
+        if (resourcesCache) {
+            renderResourceList(el, resourcesCache);
+        } else {
+            el.innerHTML = '<div class="res-empty">Couldn&rsquo;t load the resources list ' +
+                '&ndash; this needs the page loaded from a server (like synapse.hypnos.one), ' +
+                'not opened as a local file.</div>';
+        }
+    }
+}
+
+function toggleResourcesModal() {
+    const ov = document.getElementById('resources-modal-overlay');
+    if (!ov) return;
+    const opening = !ov.classList.contains('open');
+    ov.classList.toggle('open', opening);
+    document.getElementById('brand-resources-btn').classList.toggle('active', opening);
+    if (opening) renderResources();
 }
 
 /* Always-on 2 Hz history sampler (keeps sparkline trends warm). */
