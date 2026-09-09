@@ -7,11 +7,16 @@ single-file app itself, and not processed by anything.
 ## Adding a resource
 
 1. Drop the file in here, e.g. `resources/tiva-induction.pdf`.
-2. Add an entry to the `RESOURCES` array in `index.html` (grep for
-   `[RESOURCES]`), with `url` set to the relative path:
-   `resources/tiva-induction.pdf`.
-3. Commit and push to `main` - GitHub Pages serves it automatically at
+2. Run `node resources/sweep-resources.js`. It scans this folder for files
+   not yet in the `RESOURCES` array in `index.html`, and for each one prompts
+   for a **Name** and a **Topic**, then appends the entry itself (type is
+   guessed from the file extension). Existing entries are never touched.
+3. Review the diff, commit `index.html` together with the new file(s) here,
+   and push to `main` - GitHub Pages serves it automatically at
    `synapse.hypnos.one/resources/tiva-induction.pdf`.
+
+(Or skip the script and edit the `RESOURCES` array in `index.html` by hand -
+grep for `[RESOURCES]`. The script is just a shortcut for the same edit.)
 
 ## Videos
 
