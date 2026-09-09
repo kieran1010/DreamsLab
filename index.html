@@ -51,6 +51,50 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.41  ("Supabase go-live: Resources admin + voucher setup, in progress")
+  ---------------------------------------------------------------------------------
+  No behaviour change yet - both systems ship exactly as dormant as before.
+  Groundwork for taking the v4.33 voucher system live and moving the
+  Resources tab off git entirely, requested so resources can be managed from
+  a browser with no command line at all.
+
+  1. RESOURCES_CONFIG (new, [RESOURCES] section): {supabaseUrl,
+     supabaseAnonKey}, both blank. fetchResourceList() uses the Supabase
+     `resources` table (public read, authenticated write via admin.html - see
+     supabase/migrations/20260909100000_resources.sql) when both are filled
+     in, otherwise falls back to resources/manifest.json exactly as v4.40
+     shipped - same "ships dormant until configured" pattern as ENT_CONFIG,
+     chosen specifically so this could be pushed safely before the Supabase
+     table exists (main deploys the live site with no staging environment;
+     wiring a fetch straight at a nonexistent endpoint would have broken the
+     working tab immediately).
+
+  2. ENT_CONFIG.publicKeyJwk filled in (keypair generated 2026-09-09). Still
+     dormant: entOnline() requires redeemUrl too, still blank pending the
+     redeem Edge Function's first deployment.
+
+  3. admin.html reworked into two tabs (Vouchers / Resources) under one
+     login, plus a new Resources tab: upload a file (goes to the `resources`
+     Storage bucket) or paste an external URL, with Name/Topic/Type, mirrors
+     straight into the table the tab above reads from. Along the way, found
+     and fixed a real pre-existing bug, unrelated to this change: showApp()
+     set view-app's inline style to '', which doesn't override the
+     stylesheet's `#view-app { display: none; }` - so a successful login
+     never actually revealed the app view. Not caught earlier because
+     admin.html isn't part of index.html's script and so isn't touched by
+     the tools/ harness, and ENT_CONFIG being empty meant no one had reason
+     to log in for real yet. Fixed with an explicit 'block'.
+
+  Still to do before either system is actually live: apply this migration
+  (dashboard SQL editor) alongside the existing vouchers one, fill in
+  admin.html's SB_URL/SB_ANON and index.html's RESOURCES_CONFIG /
+  ENT_CONFIG.redeemUrl, store the generated private signing key as the
+  Supabase secret, deploy the redeem function, and re-verify with
+  tools/voucher-probe.js plus a real browser pass before anything ships.
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.40  ("Resources tab")
   ---------------------------------------------------------------------------------
   UI only, no physiology changes. Adds a RESOURCES button to the brand bar, to
@@ -11922,13 +11966,22 @@ function togglePhysiologyModal() {
 /* =============================================================================
    [RESOURCES]  -- Student-facing explainers, PDFs, videos, links
    ---------------------------------------------------------------------------------
-   Content lives in resources/manifest.json, NOT in this script - fetched
-   fresh (cache: 'no-store') every time the modal opens, grouped by type. A
-   resource added to the manifest shows up on the very next open, with no
-   index.html redeploy at all. Add one by running
-   node resources/sweep-resources.js (or editing the manifest by hand,
-   {title, type, url, description[optional]}, type one of RESOURCE_TYPES
-   below); see resources/README.md.
+   Content is fetched fresh (cache: 'no-store') every time the modal opens,
+   grouped by type, from one of two sources (fetchResourceList() below):
+
+     - RESOURCES_CONFIG (Supabase, same project ENT_CONFIG uses) when both
+       fields are filled in - the `resources` table + `resources` Storage
+       bucket, managed via admin.html's Resources tab. See
+       supabase/migrations/20260909100000_resources.sql and
+       supabase/README.md.
+     - resources/manifest.json otherwise - the original v4.41 design, kept
+       as the default so this ships safely dormant (identical to today's
+       behaviour) until the Supabase table actually exists, exactly like
+       ENT_CONFIG. Add an entry with node resources/sweep-resources.js, or by
+       hand; see resources/README.md.
+
+   Either way an entry is {title, type, url, description[optional]}, type one
+   of RESOURCE_TYPES below.
 
    This is the one part of the sim that needs network access: fetch() of a
    same-origin file fails outright under file:// (a browser security
@@ -11940,6 +11993,12 @@ function togglePhysiologyModal() {
    second open) keeps showing the last list that DID load, rather than
    blanking the tab - see resourcesCache below.
    ============================================================================= */
+const RESOURCES_CONFIG = {
+    // Supabase project (dashboard > Settings > API), same project as
+    // ENT_CONFIG.redeemUrl. Both blank = use resources/manifest.json.
+    supabaseUrl: '',
+    supabaseAnonKey: '',
+};
 const RESOURCE_TYPES = {
     pdf:   { label: 'PDFs',   icon: 'PDF' },
     video: { label: 'Videos', icon: '▶' },
@@ -11947,6 +12006,22 @@ const RESOURCE_TYPES = {
 };
 const RESOURCE_TYPE_ORDER = ['pdf', 'video', 'link'];
 let resourcesCache = null;
+
+function resourcesLive() {
+    return !!(RESOURCES_CONFIG.supabaseUrl && RESOURCES_CONFIG.supabaseAnonKey);
+}
+
+async function fetchResourceList() {
+    const url = resourcesLive()
+        ? RESOURCES_CONFIG.supabaseUrl + '/rest/v1/resources?select=title,type,url,description&order=created_at.desc'
+        : 'resources/manifest.json';
+    const headers = resourcesLive()
+        ? { apikey: RESOURCES_CONFIG.supabaseAnonKey }
+        : undefined;
+    const res = await fetch(url, { cache: 'no-store', headers });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+}
 
 function renderResourceList(el, list) {
     el.innerHTML = '';
@@ -11997,9 +12072,7 @@ async function renderResources() {
         el.innerHTML = '<div class="res-empty">Loading&hellip;</div>';
     }
     try {
-        const res = await fetch('resources/manifest.json', { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const list = await res.json();
+        const list = await fetchResourceList();
         resourcesCache = list;
         renderResourceList(el, list);
     } catch (err) {
@@ -12354,10 +12427,15 @@ function resize() {
 const ENT_CONFIG = {
     // URL of the deployed redeem function, e.g.
     // 'https://abcdefgh.supabase.co/functions/v1/redeem'
+    // Still empty: the redeem Edge Function isn't deployed yet. entOnline()
+    // requires both this AND publicKeyJwk, so the system stays safely
+    // dormant (padlocks hidden) until this is filled in too.
     redeemUrl: '',
-    // Public half of the signing keypair. Generate both halves with
-    // `node tools/make-voucher-keys.js` and paste the JWK it prints here.
-    publicKeyJwk: null,
+    // Public half of the signing keypair, generated 2026-09-09 with
+    // `node tools/make-voucher-keys.js`. The private half was handed to the
+    // user to store as the VOUCHER_SIGNING_KEY Supabase secret - never
+    // committed here. Regenerating invalidates every token issued so far.
+    publicKeyJwk: {"kty":"EC","crv":"P-256","x":"ZxsNWIDrHS3k_zgi5cpy2Y1UEkbvc3Z8IRq3QWHpiC4","y":"XaDQ_i01RNekQ7TL8HhJd1dpC_9XCDtjkxuZ3ouTdNw"},
 };
 
 /* The content decision: which scenarios are Pro. Edit freely - everything

@@ -4,15 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>Synapse — voucher admin</title>
+<title>Synapse — admin</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
-  Synapse voucher admin.
-  One self-contained file, same ethos as index.html: no build, no dependencies.
-  Talks to Supabase directly (auth password grant + PostgREST). All data access
-  is protected by Supabase Auth + row-level security -- this page being public
-  HTML exposes nothing but the anon key, which is public by design.
+  Synapse admin. One self-contained file, same ethos as index.html: no build,
+  no dependencies. Talks to Supabase directly (auth password grant + REST for
+  Postgres, plus the Storage REST API for the Resources tab's file uploads).
+  All data access is protected by Supabase Auth + row-level security -- this
+  page being public HTML exposes nothing but the anon key, which is public by
+  design.
+
+  Two tabs, one login:
+    Vouchers   - create/monitor/revoke access codes (v4.33; supabase/README.md)
+    Resources  - upload files / add links for the Resources tab in index.html
+                 (v4.42; reads from the `resources` table + `resources`
+                 Storage bucket instead of the old git-committed
+                 resources/manifest.json - see supabase/README.md)
 
   Setup: fill in SB_URL and SB_ANON below (see supabase/README.md).
 ==================================================================================
@@ -44,8 +52,9 @@ button.danger { border-color: #7a3030; background: #3a1a1a; }
 button.danger:hover { background: #4a2020; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: #7d8da3; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px; border-bottom: 1px solid #263349; }
-td { padding: 7px 8px; border-bottom: 1px solid #1a2436; vertical-align: top; }
+td { padding: 7px 8px; border-bottom: 1px solid #1a2436; vertical-align: top; word-break: break-word; }
 tr:hover td { background: #16203180; }
+td a { color: #3fa9f5; }
 .code { font-family: 'Cascadia Code', Consolas, monospace; letter-spacing: 0.08em; white-space: nowrap; }
 .chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .chip.active  { background: #123a2a; color: #37c98b; }
@@ -65,14 +74,24 @@ tr:hover td { background: #16203180; }
 .topbar { display: flex; justify-content: space-between; align-items: baseline; max-width: 1100px; }
 #view-app { display: none; }
 .unconfigured { color: #e7b93c; }
+.tabs { display: flex; gap: 4px; max-width: 1100px; margin-bottom: 14px; }
+.tab {
+    background: #121926; border: 1px solid #263349; border-bottom: none; color: #9fb2c8;
+    padding: 8px 18px; border-radius: 8px 8px 0 0; cursor: pointer;
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.tab.active { background: #1d3a5f; color: #fff; border-color: #3fa9f5; }
+.pane { display: none; }
+.pane.active { display: block; }
+.or-sep { color: #7d8da3; font-size: 12px; text-align: center; margin: 4px 0; }
 </style>
 </head>
 <body>
 
 <div class="topbar">
     <div>
-        <h1><span class="brand">SYNAPSE</span> voucher admin</h1>
-        <div class="sub">Create, monitor and revoke access codes</div>
+        <h1><span class="brand">SYNAPSE</span> admin</h1>
+        <div class="sub">Vouchers and the Resources tab, in one place</div>
     </div>
     <div><button id="logout-btn" class="small" style="display:none" onclick="logout()">Sign out</button></div>
 </div>
@@ -92,47 +111,88 @@ tr:hover td { background: #16203180; }
 
 <!-- APP -->
 <div id="view-app">
-    <div class="card">
-        <h2>New voucher</h2>
-        <div class="row">
-            <div style="flex:2"><label>Label (who / what it's for)</label>
-                <input id="f-label" placeholder="e.g. St Elsewhere FRCA course, Sept 2026"></div>
-            <div><label>Seats</label>
-                <select id="f-seats">
-                    <option value="1">Single use (1)</option>
-                    <option value="10">10</option>
-                    <option value="30">Classroom (30)</option>
-                    <option value="100">100</option>
-                    <option value="">Unlimited</option>
-                </select></div>
+    <div class="tabs">
+        <button id="tab-vouchers" class="tab active" onclick="setAdminTab('vouchers')">Vouchers</button>
+        <button id="tab-resources" class="tab" onclick="setAdminTab('resources')">Resources</button>
+    </div>
+
+    <div id="pane-vouchers" class="pane active">
+        <div class="card">
+            <h2>New voucher</h2>
+            <div class="row">
+                <div style="flex:2"><label>Label (who / what it's for)</label>
+                    <input id="f-label" placeholder="e.g. St Elsewhere FRCA course, Sept 2026"></div>
+                <div><label>Seats</label>
+                    <select id="f-seats">
+                        <option value="1">Single use (1)</option>
+                        <option value="10">10</option>
+                        <option value="30">Classroom (30)</option>
+                        <option value="100">100</option>
+                        <option value="">Unlimited</option>
+                    </select></div>
+            </div>
+            <div class="row">
+                <div><label>Access length (days from redemption)</label>
+                    <input id="f-days" type="number" min="1" value="365" placeholder="blank = until fixed date only"></div>
+                <div><label>Access ends no later than (optional)</label>
+                    <input id="f-until" type="date"></div>
+                <div><label>Redeemable until (optional)</label>
+                    <input id="f-redeemby" type="date"></div>
+            </div>
+            <div class="row"><div><label>Notes (optional, internal)</label><input id="f-notes"></div></div>
+            <button class="primary" onclick="createVoucher()">Create voucher</button>
+            <div id="create-msg" class="msg"></div>
+            <div id="newcode" class="newcode">
+                <div class="code" id="newcode-code"></div>
+                <div class="hint">Copy this now and send it to the customer — it is shown dashed for readability; dashes and case don't matter on entry.</div>
+            </div>
         </div>
-        <div class="row">
-            <div><label>Access length (days from redemption)</label>
-                <input id="f-days" type="number" min="1" value="365" placeholder="blank = until fixed date only"></div>
-            <div><label>Access ends no later than (optional)</label>
-                <input id="f-until" type="date"></div>
-            <div><label>Redeemable until (optional)</label>
-                <input id="f-redeemby" type="date"></div>
-        </div>
-        <div class="row"><div><label>Notes (optional, internal)</label><input id="f-notes"></div></div>
-        <button class="primary" onclick="createVoucher()">Create voucher</button>
-        <div id="create-msg" class="msg"></div>
-        <div id="newcode" class="newcode">
-            <div class="code" id="newcode-code"></div>
-            <div class="hint">Copy this now and send it to the customer — it is shown dashed for readability; dashes and case don't matter on entry.</div>
+
+        <div class="card">
+            <h2>Vouchers <button class="small" style="float:right" onclick="refresh()">Refresh</button></h2>
+            <table>
+                <thead><tr>
+                    <th>Code</th><th>Label</th><th>Status</th><th>Used</th>
+                    <th>Access</th><th>Redeem by</th><th>Created</th><th>Last used</th><th></th>
+                </tr></thead>
+                <tbody id="voucher-rows"><tr><td colspan="9" class="dim">Loading…</td></tr></tbody>
+            </table>
+            <div id="list-msg" class="msg"></div>
         </div>
     </div>
 
-    <div class="card">
-        <h2>Vouchers <button class="small" style="float:right" onclick="refresh()">Refresh</button></h2>
-        <table>
-            <thead><tr>
-                <th>Code</th><th>Label</th><th>Status</th><th>Used</th>
-                <th>Access</th><th>Redeem by</th><th>Created</th><th>Last used</th><th></th>
-            </tr></thead>
-            <tbody id="voucher-rows"><tr><td colspan="9" class="dim">Loading…</td></tr></tbody>
-        </table>
-        <div id="list-msg" class="msg"></div>
+    <div id="pane-resources" class="pane">
+        <div class="card">
+            <h2>New resource</h2>
+            <div class="row">
+                <div style="flex:2"><label>Name</label>
+                    <input id="rf-title" placeholder="e.g. TIVA induction explainer"></div>
+                <div><label>Type</label>
+                    <select id="rf-type">
+                        <option value="pdf">PDF</option>
+                        <option value="video">Video</option>
+                        <option value="link">Link</option>
+                    </select></div>
+            </div>
+            <div class="row"><div><label>Topic / description (optional)</label><input id="rf-desc"></div></div>
+            <div class="row"><div><label>Upload a file (PDF etc.)</label><input id="rf-file" type="file"></div></div>
+            <div class="or-sep">— or —</div>
+            <div class="row"><div><label>External URL (required for video/link; leave blank if uploading a file above)</label>
+                <input id="rf-url" type="url" placeholder="https://..."></div></div>
+            <button class="primary" onclick="createResource()">Add resource</button>
+            <div id="res-create-msg" class="msg"></div>
+        </div>
+
+        <div class="card">
+            <h2>Resources <button class="small" style="float:right" onclick="refreshResources()">Refresh</button></h2>
+            <table>
+                <thead><tr>
+                    <th>Name</th><th>Type</th><th>URL</th><th>Added</th><th></th>
+                </tr></thead>
+                <tbody id="resource-rows"><tr><td colspan="5" class="dim">Loading…</td></tr></tbody>
+            </table>
+            <div id="res-list-msg" class="msg"></div>
+        </div>
     </div>
 </div>
 
@@ -150,6 +210,16 @@ function el(id) { return document.getElementById(id); }
 function esc(s) {
     return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* ---- tabs --------------------------------------------------------------- */
+let resourcesLoaded = false;
+function setAdminTab(tab) {
+    ['vouchers', 'resources'].forEach(t => {
+        el('tab-' + t).classList.toggle('active', t === tab);
+        el('pane-' + t).classList.toggle('active', t === tab);
+    });
+    if (tab === 'resources' && !resourcesLoaded) { resourcesLoaded = true; refreshResources(); }
 }
 
 /* ---- auth ------------------------------------------------------------- */
@@ -181,8 +251,14 @@ function logout() {
 }
 function showApp() {
     el('view-login').style.display = 'none';
-    el('view-app').style.display = '';
+    // Explicit 'block', not '': #view-app has display:none in the stylesheet
+    // (hidden until JS says otherwise), so clearing the inline style falls
+    // straight back to that CSS rule rather than revealing the view - this
+    // was a real, pre-existing bug (login never actually showed the app).
+    el('view-app').style.display = 'block';
     el('logout-btn').style.display = '';
+    resourcesLoaded = false;
+    setAdminTab('vouchers');
     refresh();
 }
 
@@ -199,7 +275,7 @@ function generateCode() {
 }
 function dashed(code) { return code.replace(/(.{4})(?=.)/g, '$1-'); }
 
-/* ---- create ----------------------------------------------------------- */
+/* ---- vouchers: create --------------------------------------------------- */
 async function createVoucher() {
     const msg = el('create-msg'); msg.className = 'msg'; msg.textContent = '';
     el('newcode').style.display = 'none';
@@ -235,7 +311,7 @@ async function createVoucher() {
     } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
 }
 
-/* ---- list / revoke ---------------------------------------------------- */
+/* ---- vouchers: list / revoke -------------------------------------------- */
 function statusOf(v) {
     if (v.revoked) return ['revoked', 'Revoked'];
     if (v.redeem_by && new Date(v.redeem_by) < new Date()) return ['expired', 'Closed'];
@@ -289,6 +365,112 @@ async function setRevoked(id, revoked) {
     } catch (e) { const m = el('list-msg'); m.className = 'msg err'; m.textContent = e.message; }
 }
 function copyCode(code) { navigator.clipboard?.writeText(dashed(code)); }
+
+/* ---- resources: upload + create -----------------------------------------
+   A file goes to Supabase Storage first (public `resources` bucket), then
+   the row is created pointing at the resulting public URL. An external URL
+   (video/link, or a PDF you'd rather host elsewhere) skips the upload. */
+function storagePublicPrefix() { return SB_URL + '/storage/v1/object/public/resources/'; }
+
+async function uploadResourceFile(file) {
+    const path = Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const r = await fetch(SB_URL + '/storage/v1/object/resources/' + encodeURIComponent(path), {
+        method: 'POST',
+        headers: {
+            apikey: SB_ANON,
+            Authorization: 'Bearer ' + session.access_token,
+            'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: file,
+    });
+    if (r.status === 401) { sessionExpired(); throw new Error('Session expired'); }
+    if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.message || 'Upload failed');
+    }
+    return storagePublicPrefix() + path;
+}
+
+async function createResource() {
+    const msg = el('res-create-msg'); msg.className = 'msg'; msg.textContent = '';
+    const title = el('rf-title').value.trim();
+    const type = el('rf-type').value;
+    const description = el('rf-desc').value.trim() || null;
+    const file = el('rf-file').files[0];
+    const externalUrl = el('rf-url').value.trim();
+
+    if (!title) { msg.className = 'msg err'; msg.textContent = 'Name is required.'; return; }
+    if (!file && !externalUrl) {
+        msg.className = 'msg err';
+        msg.textContent = 'Choose a file to upload, or paste an external URL.';
+        return;
+    }
+
+    try {
+        let url;
+        if (file) {
+            msg.textContent = 'Uploading…';
+            url = await uploadResourceFile(file);
+        } else {
+            url = externalUrl;
+        }
+        msg.textContent = 'Saving…';
+        const r = await fetch(REST() + '/resources', {
+            method: 'POST',
+            headers: { ...authHeaders(), Prefer: 'return=representation' },
+            body: JSON.stringify({ title, type, url, description }),
+        });
+        if (r.status === 401) return sessionExpired();
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || 'Create failed');
+        msg.className = 'msg ok'; msg.textContent = 'Added.';
+        el('rf-title').value = ''; el('rf-desc').value = '';
+        el('rf-file').value = ''; el('rf-url').value = '';
+        refreshResources();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+
+/* ---- resources: list / delete -------------------------------------------- */
+async function refreshResources() {
+    const msg = el('res-list-msg'); msg.className = 'msg'; msg.textContent = '';
+    try {
+        const r = await fetch(REST() + '/resources?select=*&order=created_at.desc', { headers: authHeaders() });
+        if (r.status === 401) return sessionExpired();
+        const rows = await r.json();
+        if (!r.ok) throw new Error(rows.message || 'Load failed');
+        const tb = el('resource-rows');
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="5" class="dim">No resources yet.</td></tr>'; return; }
+        tb.innerHTML = rows.map(res => (
+            '<tr>'
+            + '<td>' + esc(res.title) + (res.description ? '<br><span class="dim">' + esc(res.description) + '</span>' : '') + '</td>'
+            + '<td>' + esc(res.type) + '</td>'
+            + '<td><a href="' + esc(res.url) + '" target="_blank" rel="noopener noreferrer">' + esc(res.url) + '</a></td>'
+            + '<td>' + fmtDate(res.created_at) + '</td>'
+            + '<td><button class="small danger" onclick="deleteResource(' + JSON.stringify(res.id) + ',' + JSON.stringify(res.url) + ')">Delete</button></td>'
+            + '</tr>'
+        )).join('');
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+async function deleteResource(id, url) {
+    if (!confirm('Delete this resource? This cannot be undone.')) return;
+    const msg = el('res-list-msg');
+    try {
+        if (url.startsWith(storagePublicPrefix())) {
+            const path = url.slice(storagePublicPrefix().length);
+            await fetch(SB_URL + '/storage/v1/object/resources/' + path, {
+                method: 'DELETE', headers: authHeaders(),
+            });
+        }
+        const r = await fetch(REST() + '/resources?id=eq.' + id, {
+            method: 'DELETE', headers: authHeaders(),
+        });
+        if (r.status === 401) return sessionExpired();
+        if (!r.ok) throw new Error('Delete failed');
+        refreshResources();
+    } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
+}
+
+/* ---- shared -------------------------------------------------------------- */
 function sessionExpired() {
     logout();
     const m = el('login-msg'); m.className = 'msg err';
