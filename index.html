@@ -66,6 +66,16 @@
   Each entry needs only {title, type, url, description}; description is
   optional. Links open in a new tab (rel="noopener noreferrer").
 
+  A `url` can be a real file committed under the new resources/ folder
+  (relative path, e.g. 'resources/tiva-induction.pdf' - see
+  resources/README.md) or an external URL (required for video: GitHub caps
+  files at 100MB and git isn't built for streaming media). This is the one
+  deliberate crack in the "index.html is one artefact" rule in CLAUDE.md - a
+  resources/-relative link only resolves when index.html is loaded from the
+  deployed site or a folder that still has resources/ next to it, not from a
+  standalone copy of just index.html. Accepted tradeoff, documented in
+  CLAUDE.md and resources/README.md.
+
   Not covered by the headless harness (tools/) - it doesn't touch physiology,
   PK, scenarios or entitlements, so sweep/scan/probes are unaffected. Verify
   by opening the modal in a browser (see CLAUDE.md "For UI or frontend
@@ -11896,10 +11906,26 @@ function togglePhysiologyModal() {
     }
 }
 
-/* v4.40: RESOURCES tab - static list of student-facing explainers/PDFs/
-   videos/links, grouped by type in the modal. To add a resource, add an
-   entry here; nothing else needs touching. `type` must be a key of
-   RESOURCE_TYPES below ('pdf' | 'video' | 'link'). */
+/* =============================================================================
+   [RESOURCES]  -- Student-facing explainers, PDFs, videos, links
+   ---------------------------------------------------------------------------------
+   Static list, grouped by type in the modal (see renderResources() /
+   toggleResourcesModal() below). To add a resource, add an entry here;
+   nothing else needs touching.
+
+   `url` can be either:
+     - A file committed under resources/ (see resources/README.md) - use a
+       relative path, e.g. 'resources/tiva-induction.pdf'. GitHub Pages
+       serves it automatically once pushed to main. Only resolves when
+       index.html is loaded from the deployed site, or from a folder that
+       still has resources/ alongside it - not from a standalone copy of
+       just index.html (see the portability note in resources/README.md).
+     - An external URL (YouTube, Google Drive, etc.) - always works, and is
+       the only sane option for video: GitHub has a 100MB per-file limit and
+       git isn't built for streaming media.
+
+   `type` must be a key of RESOURCE_TYPES below ('pdf' | 'video' | 'link').
+   ============================================================================= */
 const RESOURCES = [
     // Placeholder examples - replace with real material, or delete both and
     // leave the array empty; renderResources() handles an empty list.

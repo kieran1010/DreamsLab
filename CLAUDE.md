@@ -18,7 +18,14 @@ open offline. Do not introduce a build step, split the script into modules, or
 add a dependency without asking. The exceptions: `tools/` (test harness) and
 `supabase/` (voucher backend) never ship to the browser; `admin.html` is a
 second self-contained page (voucher administration) that deploys alongside the
-sim but is not part of it.
+sim but is not part of it; `resources/` (v4.40) holds static files — PDFs and
+the like — for the Resources tab, referenced by relative URL from the
+`RESOURCES` array in `index.html` (see `resources/README.md`). Unlike
+`tools/`/`supabase/`, these files *do* ship, and unlike everything else here
+they knowingly give up a slice of the "one artefact" guarantee: a
+`resources/`-relative link only resolves when `index.html` is loaded from the
+deployed site or a folder that still has `resources/` next to it, not from a
+standalone copy of just `index.html`. Accepted tradeoff, not an oversight.
 
 ## Where things are in index.html
 
@@ -41,6 +48,7 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
 | `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating: `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
+| `[RESOURCES]` | 11900 | v4.40 Resources tab: the `RESOURCES` list backing the modal |
 
 The voucher system (v4.33) **ships dormant**: with `ENT_CONFIG` empty nothing
 is locked and its UI is hidden. Its gate lives in `pickScenario()` (UI), never
