@@ -1,22 +1,30 @@
 # resources/
 
 Static files for the Resources tab (PDFs, and any other downloadable
-material). Plain files served alongside `index.html` - not part of the
-single-file app itself, and not processed by anything.
+material), plus `manifest.json` - the list of entries the tab actually
+displays. Served alongside `index.html`; not part of the single-file app's
+own script, and not processed by anything at build/deploy time.
+
+`index.html` fetches `manifest.json` at runtime, fresh, every time the
+Resources modal opens (see `[RESOURCES]` there) - so updating the manifest
+and pushing to `main` is enough for students to see the change on their next
+open. No index.html edit, no redeploy of the sim's own script.
 
 ## Adding a resource
 
 1. Drop the file in here, e.g. `resources/tiva-induction.pdf`.
 2. Run `node resources/sweep-resources.js`. It scans this folder for files
-   not yet in the `RESOURCES` array in `index.html`, and for each one prompts
-   for a **Name** and a **Topic**, then appends the entry itself (type is
-   guessed from the file extension). Existing entries are never touched.
-3. Review the diff, commit `index.html` together with the new file(s) here,
-   and push to `main` - GitHub Pages serves it automatically at
-   `synapse.hypnos.one/resources/tiva-induction.pdf`.
+   not yet in `manifest.json`, and for each one prompts for a **Name** and a
+   **Topic**, then appends the entry itself (type is guessed from the file
+   extension). Existing entries are never touched.
+3. Review the diff, commit `manifest.json` together with the new file(s)
+   here, and push to `main` - GitHub Pages serves both automatically at
+   `synapse.hypnos.one/resources/...`.
 
-(Or skip the script and edit the `RESOURCES` array in `index.html` by hand -
-grep for `[RESOURCES]`. The script is just a shortcut for the same edit.)
+(Or skip the script and edit `manifest.json` by hand - it's a plain JSON
+array of `{title, type, url, description}`, `type` one of `pdf` / `video` /
+`link`, `description` optional. The script is just a shortcut for the same
+edit.)
 
 ## Doing it automatically on commit
 
@@ -27,9 +35,9 @@ git config core.hooksPath .githooks
 ```
 
 After that, `git commit` runs the sweeper for you whenever `resources/` has a
-file the `RESOURCES` array doesn't know about yet: it prompts for Name/Topic
-right there in your terminal and folds the updated `index.html` into the
-commit you're making. A commit that doesn't touch `resources/`, or where
+file `manifest.json` doesn't know about yet: it prompts for Name/Topic right
+there in your terminal and folds the updated `manifest.json` into the commit
+you're making. A commit that doesn't touch `resources/`, or where
 everything's already synced, passes straight through untouched.
 
 Needs a real terminal to ask its questions - most GUI git clients (VS Code's
@@ -49,8 +57,13 @@ external URL as `url` instead.
 ## Portability tradeoff
 
 CLAUDE.md documents `index.html` as a single artefact a teacher can save,
-email or open offline. A `resources/`-relative link only resolves when
-`index.html` is loaded from the deployed site, or from a folder that still
-has this `resources/` directory sitting next to it - not from a standalone
-copy of just `index.html`. Accepted as of v4.40 so real PDFs can be linked
-without depending on external hosting for everything.
+email or open offline. Because the Resources tab now fetches `manifest.json`
+at runtime rather than embedding the list, this is a stronger version of that
+tradeoff than a plain relative link: `fetch()` of a same-origin file fails
+outright under `file://` (a browser security restriction - verified, not a
+theoretical concern), so opening `index.html` by double-click shows a
+"couldn't load" message in the Resources tab specifically, rather than a
+working-but-possibly-broken-link tab. Every other part of the sim - the
+physiology model, scenarios, drug cabinet - is completely unaffected and
+stays fully offline-capable. Accepted as of v4.40/v4.41 so the tab can update
+live without redeploying `index.html` for every resource change.

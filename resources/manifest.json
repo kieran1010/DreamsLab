@@ -1,0 +1,14 @@
+[
+  {
+    "title": "Example: TIVA induction explainer (replace me)",
+    "type": "pdf",
+    "url": "https://example.com/tiva-induction.pdf",
+    "description": "One-page summary of target-controlled infusion basics."
+  },
+  {
+    "title": "Example: reading an arterial line waveform (replace me)",
+    "type": "video",
+    "url": "https://example.com/art-line-waveform",
+    "description": "Short video walkthrough of waveform morphology."
+  }
+]

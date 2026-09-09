@@ -1,9 +1,10 @@
 /* =============================================================================
    RESOURCES SWEEPER  --  add new resources/ files to the Resources tab
    -----------------------------------------------------------------------------
-   Scans resources/ for files that aren't yet listed in the RESOURCES array in
-   ../index.html (see [RESOURCES] there), and for each new one found, prompts
-   for a Name and a Topic, then appends an entry:
+   Scans resources/ for files that aren't yet listed in resources/manifest.json
+   (the data the Resources tab fetches at runtime - see [RESOURCES] in
+   index.html), and for each new one found, prompts for a Name and a Topic,
+   then appends an entry:
 
        { title: <name>, type: <guessed from extension>, url: 'resources/<file>',
          description: <topic> }
@@ -14,9 +15,9 @@
        node resources/sweep-resources.js
 
    This is local tooling, like tools/*.js - it does not run automatically, and
-   the sim has no runtime dependency on it or on being able to list a
-   directory (a static host can't do that anyway). Requires Node 18+. No
-   dependencies.
+   the sim has no build-time dependency on it (the Resources tab reads
+   manifest.json directly at runtime; this script is just the convenient way
+   to edit that file). Requires Node 18+. No dependencies.
    ============================================================================= */
 'use strict';
 
@@ -25,10 +26,10 @@ const path = require('path');
 const readline = require('readline');
 
 const RESOURCES_DIR = __dirname;
-const INDEX_HTML = path.join(__dirname, '..', 'index.html');
+const MANIFEST_PATH = path.join(__dirname, 'manifest.json');
 
 /* Files in resources/ that aren't resources themselves. */
-const IGNORE = new Set(['README.md', 'sweep-resources.js']);
+const IGNORE = new Set(['README.md', 'sweep-resources.js', 'manifest.json']);
 
 const EXT_TYPE = {
     '.pdf': 'pdf',
@@ -38,54 +39,23 @@ function guessType(file) {
     return EXT_TYPE[path.extname(file).toLowerCase()] || 'link';
 }
 
-function escapeJsString(s) {
-    return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+function readManifest() {
+    if (!fs.existsSync(MANIFEST_PATH)) return [];
+    const raw = fs.readFileSync(MANIFEST_PATH, 'utf8').trim();
+    return raw ? JSON.parse(raw) : [];
 }
 
-const ARRAY_START = 'const RESOURCES = [';
-function locateArray(html) {
-    const start = html.indexOf(ARRAY_START);
-    if (start === -1) {
-        throw new Error('Could not find "' + ARRAY_START + '" in index.html - ' +
-            'has the RESOURCES array moved or been renamed? (grep for [RESOURCES])');
-    }
-    const openBracket = start + ARRAY_START.length - 1;
-    let depth = 0;
-    for (let i = openBracket; i < html.length; i++) {
-        if (html[i] === '[') depth++;
-        else if (html[i] === ']') {
-            depth--;
-            if (depth === 0) return { openBracket, closeBracket: i };
-        }
-    }
-    throw new Error('Could not find the closing "]" for the RESOURCES array in index.html.');
+function writeManifest(list) {
+    fs.writeFileSync(MANIFEST_PATH, JSON.stringify(list, null, 2) + '\n');
 }
 
-/* Existing resources/-relative urls already listed, so we don't add the same
-   file twice on a re-run. */
-function knownResourceFiles(html, loc) {
-    const body = html.slice(loc.openBracket, loc.closeBracket);
-    const known = new Set();
-    const re = /url:\s*'resources\/([^']+)'/g;
-    let m;
-    while ((m = re.exec(body))) known.add(m[1]);
-    return known;
-}
-
-function formatEntry(title, type, url, description) {
-    const lines = [
-        '    {',
-        `        title: '${escapeJsString(title)}',`,
-        `        type: '${type}',`,
-        `        url: '${escapeJsString(url)}',`,
-    ];
-    if (description) {
-        lines.push(`        description: '${escapeJsString(description)}'`);
-    } else {
-        lines[lines.length - 1] = lines[lines.length - 1].replace(/,$/, '');
-    }
-    lines.push('    }');
-    return lines.join('\n');
+const RESOURCES_PREFIX = 'resources/';
+function knownResourceFiles(manifest) {
+    return new Set(
+        manifest
+            .filter(r => typeof r.url === 'string' && r.url.startsWith(RESOURCES_PREFIX))
+            .map(r => r.url.slice(RESOURCES_PREFIX.length))
+    );
 }
 
 /* Not rl.question() in a loop: with piped/non-TTY stdin, Node's readline can
@@ -109,7 +79,7 @@ function createPrompter(rl) {
     };
 }
 
-/* Read-only: the files in resources/ that aren't in the RESOURCES array yet.
+/* Read-only: the files in resources/ that aren't in manifest.json yet.
    Shared by main() below and by .githooks/pre-commit, which needs to know
    whether there's actually anything to prompt for before deciding whether a
    missing terminal is even a problem. */
@@ -119,8 +89,7 @@ function findNewFiles() {
         .filter(f => !IGNORE.has(f) && !f.startsWith('.'))
         .filter(f => fs.statSync(path.join(RESOURCES_DIR, f)).isFile())
         .sort();
-    const html = fs.readFileSync(INDEX_HTML, 'utf8');
-    const known = knownResourceFiles(html, locateArray(html));
+    const known = knownResourceFiles(readManifest());
     return files.filter(f => !known.has(f));
 }
 
@@ -131,11 +100,9 @@ async function main() {
         return;
     }
 
-    const html = fs.readFileSync(INDEX_HTML, 'utf8');
-    const loc = locateArray(html);
     const newFiles = findNewFiles();
     if (!newFiles.length) {
-        console.log('No new files in resources/ - the RESOURCES array is already up to date.');
+        console.log('No new files in resources/ - manifest.json is already up to date.');
         return;
     }
 
@@ -155,7 +122,9 @@ async function main() {
         }
         const description = (await ask('Topic: ')).trim();
         console.log('');
-        newEntries.push(formatEntry(title, guessType(file), `resources/${file}`, description));
+        const entry = { title, type: guessType(file), url: `resources/${file}` };
+        if (description) entry.description = description;
+        newEntries.push(entry);
     }
     rl.close();
 
@@ -164,15 +133,10 @@ async function main() {
         return;
     }
 
-    const before = html.slice(0, loc.closeBracket).replace(/\s*$/, '');
-    const after = html.slice(loc.closeBracket);
-    const needsComma = /\}$/.test(before);
-    const insertion = (needsComma ? ',\n' : '\n') + newEntries.join(',\n') + '\n';
-    const updated = before + insertion + after;
-
-    fs.writeFileSync(INDEX_HTML, updated);
-    console.log(`Added ${newEntries.length} entr${newEntries.length === 1 ? 'y' : 'ies'} to the RESOURCES array in index.html.`);
-    console.log('Review the diff, then commit index.html together with the new file(s) in resources/.');
+    const manifest = readManifest();
+    writeManifest(manifest.concat(newEntries));
+    console.log(`Added ${newEntries.length} entr${newEntries.length === 1 ? 'y' : 'ies'} to resources/manifest.json.`);
+    console.log('Review the diff, then commit manifest.json together with the new file(s) in resources/.');
 }
 
 module.exports = { findNewFiles };

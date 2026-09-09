@@ -11,21 +11,26 @@ Deployed to **synapse.hypnos.one** via GitHub Pages from `main`. **Pushing to
 
 **Everything is in `index.html`.** ~11,400 lines: styles, markup and the entire
 simulator in a single inline `<script>`. No build step, no bundler, no
-dependencies, no framework. Open the file in a browser and it runs.
+dependencies, no framework. Open the file in a browser and it runs — with one
+exception, the Resources tab, below.
 
 This is deliberate — the whole app is one artefact a teacher can save, email or
 open offline. Do not introduce a build step, split the script into modules, or
 add a dependency without asking. The exceptions: `tools/` (test harness) and
 `supabase/` (voucher backend) never ship to the browser; `admin.html` is a
 second self-contained page (voucher administration) that deploys alongside the
-sim but is not part of it; `resources/` (v4.40) holds static files — PDFs and
-the like — for the Resources tab, referenced by relative URL from the
-`RESOURCES` array in `index.html` (see `resources/README.md`). Unlike
-`tools/`/`supabase/`, these files *do* ship, and unlike everything else here
-they knowingly give up a slice of the "one artefact" guarantee: a
-`resources/`-relative link only resolves when `index.html` is loaded from the
-deployed site or a folder that still has `resources/` next to it, not from a
-standalone copy of just `index.html`. Accepted tradeoff, not an oversight.
+sim but is not part of it; `resources/` (v4.40, reworked v4.41) holds static
+files — PDFs and the like — plus `manifest.json`, the data behind the
+Resources tab (see `resources/README.md`). Unlike `tools/`/`supabase/`, these
+*do* ship, and unlike everything else here they knowingly give up a slice of
+the "one artefact" guarantee: `index.html` fetches `manifest.json` at runtime
+on every open of the Resources modal (so a new resource shows up without
+redeploying `index.html` at all) rather than embedding the list, and `fetch()`
+of a same-origin file fails outright under `file://` — verified, not
+theoretical. So opening `index.html` by double-click runs the whole sim
+normally, but the Resources tab itself shows a "couldn't load" message rather
+than its list. Everything else stays fully offline-capable. Accepted tradeoff,
+not an oversight.
 
 ## Where things are in index.html
 
@@ -48,7 +53,7 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
 | `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating: `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
-| `[RESOURCES]` | 11900 | v4.40 Resources tab: the `RESOURCES` list backing the modal |
+| `[RESOURCES]` | 11910 | v4.40/v4.41 Resources tab: fetches `resources/manifest.json` at runtime |
 
 The voucher system (v4.33) **ships dormant**: with `ENT_CONFIG` empty nothing
 is locked and its UI is hidden. Its gate lives in `pickScenario()` (UI), never

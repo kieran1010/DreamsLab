@@ -9,11 +9,11 @@
        git config core.hooksPath .githooks
 
    Every `git commit` checks whether resources/ has files not yet in
-   index.html's RESOURCES array (via sweep-resources.js's findNewFiles()): if
-   so, it prompts for a Name and a Topic per file, right there in your
-   terminal, then folds the updated index.html into the commit you're making.
-   A commit with nothing new to sync - including one where you already ran
-   the sweeper yourself and staged its result - passes straight through.
+   resources/manifest.json (via sweep-resources.js's findNewFiles()): if so,
+   it prompts for a Name and a Topic per file, right there in your terminal,
+   then folds the updated manifest.json into the commit you're making. A
+   commit with nothing new to sync - including one where you already ran the
+   sweeper yourself and staged its result - passes straight through.
 
    Git itself redirects a hook's stdin to /dev/null, even when the hook is
    run from a perfectly ordinary interactive terminal (verified empirically -
@@ -60,7 +60,7 @@ if (result.status !== 0) {
     process.exit(result.status === null ? 1 : result.status);
 }
 
-/* sweep-resources.js may have rewritten index.html - fold that into the
+/* sweep-resources.js may have rewritten manifest.json - fold that into the
    commit that's already in progress. */
-execFileSync('git', ['add', 'index.html'], { cwd: ROOT, stdio: 'inherit' });
+execFileSync('git', ['add', 'resources/manifest.json'], { cwd: ROOT, stdio: 'inherit' });
 process.exit(0);

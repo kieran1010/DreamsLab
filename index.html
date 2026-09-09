@@ -58,28 +58,41 @@
   videos/links - a place to point trainees while they work through scenarios.
 
   Same overlay/head/close chrome as the Physiology modal, but flat rather than
-  tabbed: content is a small static array (RESOURCES, near togglePhysiologyModal
-  in the script), grouped and rendered by renderResources() into #resources-list
-  under type headings (PDFs / Videos / Links) via RESOURCE_TYPE_ORDER. Ships
-  with two clearly-marked placeholder entries - replace or delete them; an
-  empty array renders a "nothing here yet" message rather than a blank modal.
-  Each entry needs only {title, type, url, description}; description is
-  optional. Links open in a new tab (rel="noopener noreferrer").
+  tabbed: content is grouped and rendered by renderResources() into
+  #resources-list under type headings (PDFs / Videos / Links) via
+  RESOURCE_TYPE_ORDER. An empty list renders a "nothing here yet" message
+  rather than a blank modal. Each entry needs only {title, type, url,
+  description}; description is optional. Links open in a new tab
+  (rel="noopener noreferrer").
 
-  A `url` can be a real file committed under the new resources/ folder
-  (relative path, e.g. 'resources/tiva-induction.pdf' - see
-  resources/README.md) or an external URL (required for video: GitHub caps
-  files at 100MB and git isn't built for streaming media). This is the one
-  deliberate crack in the "index.html is one artefact" rule in CLAUDE.md - a
-  resources/-relative link only resolves when index.html is loaded from the
-  deployed site or a folder that still has resources/ next to it, not from a
-  standalone copy of just index.html. Accepted tradeoff, documented in
-  CLAUDE.md and resources/README.md.
+  Content lives in resources/manifest.json (a plain JSON array), not in this
+  script - index.html fetches it fresh every time the modal opens, so a new
+  resource shows up on next open with no redeploy of index.html itself. Add
+  one with `node resources/sweep-resources.js` (prompts for Name/Topic per new
+  file in resources/, guesses type from the extension) or by hand; see
+  resources/README.md. An optional pre-commit hook (.githooks/pre-commit, opt
+  in via `git config core.hooksPath .githooks`) runs the sweeper automatically
+  whenever a commit touches resources/ with something not yet in the manifest.
+
+  A `url` can be a real file committed under resources/ (relative path, e.g.
+  'resources/tiva-induction.pdf') or an external URL (required for video:
+  GitHub caps files at 100MB and git isn't built for streaming media). This is
+  the one deliberate crack in the "index.html is one artefact" rule in
+  CLAUDE.md, and a stronger one than a plain relative link would be: fetch()
+  of a same-origin file fails outright under file:// (verified empirically),
+  so opening index.html by double-click runs the whole sim normally but shows
+  a "couldn't load" message in the Resources tab specifically. A failed
+  re-fetch on a later open keeps showing the last list that DID load rather
+  than blanking the tab (resourcesCache). Everything else in the sim stays
+  fully offline-capable. Accepted tradeoff, documented in CLAUDE.md and
+  resources/README.md.
 
   Not covered by the headless harness (tools/) - it doesn't touch physiology,
-  PK, scenarios or entitlements, so sweep/scan/probes are unaffected. Verify
-  by opening the modal in a browser (see CLAUDE.md "For UI or frontend
-  changes").
+  PK, scenarios or entitlements, so sweep/scan/probes are unaffected, and the
+  sandbox has no fetch() to exercise the runtime load anyway. Verify by
+  opening the modal in a browser, both served (http.server or the deployed
+  site) and via file:// for the fallback message (see CLAUDE.md "For UI or
+  frontend changes").
 ==================================================================================
 -->
 <!--
@@ -11909,56 +11922,40 @@ function togglePhysiologyModal() {
 /* =============================================================================
    [RESOURCES]  -- Student-facing explainers, PDFs, videos, links
    ---------------------------------------------------------------------------------
-   Static list, grouped by type in the modal (see renderResources() /
-   toggleResourcesModal() below). To add a resource, add an entry here;
-   nothing else needs touching.
+   Content lives in resources/manifest.json, NOT in this script - fetched
+   fresh (cache: 'no-store') every time the modal opens, grouped by type. A
+   resource added to the manifest shows up on the very next open, with no
+   index.html redeploy at all. Add one by running
+   node resources/sweep-resources.js (or editing the manifest by hand,
+   {title, type, url, description[optional]}, type one of RESOURCE_TYPES
+   below); see resources/README.md.
 
-   `url` can be either:
-     - A file committed under resources/ (see resources/README.md) - use a
-       relative path, e.g. 'resources/tiva-induction.pdf'. GitHub Pages
-       serves it automatically once pushed to main. Only resolves when
-       index.html is loaded from the deployed site, or from a folder that
-       still has resources/ alongside it - not from a standalone copy of
-       just index.html (see the portability note in resources/README.md).
-     - An external URL (YouTube, Google Drive, etc.) - always works, and is
-       the only sane option for video: GitHub has a 100MB per-file limit and
-       git isn't built for streaming media.
-
-   `type` must be a key of RESOURCE_TYPES below ('pdf' | 'video' | 'link').
+   This is the one part of the sim that needs network access: fetch() of a
+   same-origin file fails outright under file:// (a browser security
+   restriction, verified empirically, not a bug we can route around) - so
+   opening index.html by double-click shows a "couldn't load" message here
+   instead of the list. Everything else in the sim stays fully
+   offline-capable; see the portability note in CLAUDE.md and
+   resources/README.md. A failed re-fetch (e.g. a flaky connection on a
+   second open) keeps showing the last list that DID load, rather than
+   blanking the tab - see resourcesCache below.
    ============================================================================= */
-const RESOURCES = [
-    // Placeholder examples - replace with real material, or delete both and
-    // leave the array empty; renderResources() handles an empty list.
-    {
-        title: 'Example: TIVA induction explainer (replace me)',
-        type: 'pdf',
-        url: 'https://example.com/tiva-induction.pdf',
-        description: 'One-page summary of target-controlled infusion basics.'
-    },
-    {
-        title: 'Example: reading an arterial line waveform (replace me)',
-        type: 'video',
-        url: 'https://example.com/art-line-waveform',
-        description: 'Short video walkthrough of waveform morphology.'
-    }
-];
 const RESOURCE_TYPES = {
     pdf:   { label: 'PDFs',   icon: 'PDF' },
     video: { label: 'Videos', icon: '▶' },
     link:  { label: 'Links',  icon: '↗' }
 };
 const RESOURCE_TYPE_ORDER = ['pdf', 'video', 'link'];
+let resourcesCache = null;
 
-function renderResources() {
-    const el = document.getElementById('resources-list');
-    if (!el) return;
+function renderResourceList(el, list) {
     el.innerHTML = '';
-    if (!RESOURCES.length) {
+    if (!list.length) {
         el.innerHTML = '<div class="res-empty">Nothing here yet &ndash; check back soon.</div>';
         return;
     }
     RESOURCE_TYPE_ORDER.forEach(type => {
-        const items = RESOURCES.filter(r => r.type === type);
+        const items = list.filter(r => r.type === type);
         if (!items.length) return;
         const meta = RESOURCE_TYPES[type] || { label: type, icon: '' };
         const label = document.createElement('div');
@@ -11991,6 +11988,29 @@ function renderResources() {
             el.appendChild(a);
         });
     });
+}
+
+async function renderResources() {
+    const el = document.getElementById('resources-list');
+    if (!el) return;
+    if (!resourcesCache) {
+        el.innerHTML = '<div class="res-empty">Loading&hellip;</div>';
+    }
+    try {
+        const res = await fetch('resources/manifest.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const list = await res.json();
+        resourcesCache = list;
+        renderResourceList(el, list);
+    } catch (err) {
+        if (resourcesCache) {
+            renderResourceList(el, resourcesCache);
+        } else {
+            el.innerHTML = '<div class="res-empty">Couldn&rsquo;t load the resources list ' +
+                '&ndash; this needs the page loaded from a server (like synapse.hypnos.one), ' +
+                'not opened as a local file.</div>';
+        }
+    }
 }
 
 function toggleResourcesModal() {
