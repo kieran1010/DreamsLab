@@ -51,6 +51,29 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.40  ("Resources tab")
+  ---------------------------------------------------------------------------------
+  UI only, no physiology changes. Adds a RESOURCES button to the brand bar, to
+  the right of PHYSIOLOGY, opening a modal for student-facing explainers/PDFs/
+  videos/links - a place to point trainees while they work through scenarios.
+
+  Same overlay/head/close chrome as the Physiology modal, but flat rather than
+  tabbed: content is a small static array (RESOURCES, near togglePhysiologyModal
+  in the script), grouped and rendered by renderResources() into #resources-list
+  under type headings (PDFs / Videos / Links) via RESOURCE_TYPE_ORDER. Ships
+  with two clearly-marked placeholder entries - replace or delete them; an
+  empty array renders a "nothing here yet" message rather than a blank modal.
+  Each entry needs only {title, type, url, description}; description is
+  optional. Links open in a new tab (rel="noopener noreferrer").
+
+  Not covered by the headless harness (tools/) - it doesn't touch physiology,
+  PK, scenarios or entitlements, so sweep/scan/probes are unaffected. Verify
+  by opening the modal in a browser (see CLAUDE.md "For UI or frontend
+  changes").
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.39  ("Drug audit fixes: neostigmine, dexmedetomidine, magnesium")
   ---------------------------------------------------------------------------------
   A sweep of all 27 drugs for the same bug class as salbutamol (v4.38) - an effect
@@ -2976,9 +2999,10 @@ input[type=range] {
 #brand-about-btn,
 #brand-scenarios-btn,
 #brand-phys-btn,
+#brand-resources-btn,
 #brand-panel-btn {     /* v3.64: SCENARIOS button uses same styling. v4.17: PANEL too - it
                            only turns accent-blue while the side panel is actually open.
-                           v4.20: PHYSIOLOGY button shares the styling. */
+                           v4.20: PHYSIOLOGY button shares the styling. v4.40: RESOURCES too. */
     padding: 4px 10px;
     font-size: 0.6rem;
     background: rgba(42,42,42,0.85);
@@ -2992,10 +3016,14 @@ input[type=range] {
 #brand-about-btn:hover,
 #brand-scenarios-btn:hover,
 #brand-phys-btn:hover,
+#brand-resources-btn:hover,
 #brand-panel-btn:hover { background: rgba(60,60,60,0.85); color: #ddd; border-color: #888; }
 /* v4.20: PHYSIOLOGY button lights up accent-blue while its modal is open */
 #brand-phys-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #brand-phys-btn.active:hover { filter: brightness(1.15); }
+/* v4.40: RESOURCES button shares the same active-state treatment */
+#brand-resources-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#brand-resources-btn.active:hover { filter: brightness(1.15); }
 /* v4.25: compact surgical-stimulus slider in the brand bar
    v4.32: now sits on the left, beside the brand lockup - margin-left gives it
    breathing room from the wordmark */
@@ -3666,6 +3694,115 @@ input[type=range] {
     font-size: 0.62rem; color: #666; margin: 0 0 8px;
 }
 
+/* === RESOURCES MODAL (v4.40) =============================================
+   Opens via the RESOURCES brand-bar button. A flat list of student-facing
+   PDFs/videos/links, grouped by type. Same overlay/head/close chrome as the
+   Physiology modal above; no tabs since the list is small and flat. */
+#resources-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.78);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+#resources-modal-overlay.open { display: flex; }
+#resources-modal {
+    background: #141414;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #ccc;
+    width: 100%;
+    max-width: 640px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#resources-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px 10px;
+    border-bottom: 1px solid #262626;
+    flex: 0 0 auto;
+}
+#resources-modal-head h2 {
+    margin: 0;
+    font-size: 1.0rem;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: #e4e4e4;
+}
+#resources-modal-head .sub {
+    font-size: 0.6rem;
+    color: #666;
+    margin-top: 2px;
+}
+#resources-modal-close {
+    background: transparent;
+    color: #999;
+    border: 1px solid #555;
+    width: 28px; height: 28px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    flex: 0 0 auto;
+}
+#resources-modal-close:hover { color: #fff; border-color: #888; }
+#resources-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px 20px 20px;
+}
+.res-empty {
+    color: #777;
+    font-size: 0.8rem;
+    padding: 20px 0;
+    text-align: center;
+}
+.res-group-label {
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #777;
+    margin: 14px 0 6px;
+    border-top: 1px solid #262626;
+    padding-top: 12px;
+}
+.res-group-label:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.res-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 4px;
+    border-radius: 4px;
+    text-decoration: none;
+    color: inherit;
+}
+.res-item:hover { background: #1c1c1c; }
+.res-icon {
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    border-radius: 4px;
+    background: #222;
+    color: #999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+.res-item:hover .res-icon { background: var(--accent); color: #fff; }
+.res-text { flex: 1 1 auto; min-width: 0; }
+.res-title { font-size: 0.82rem; color: #ddd; font-weight: 500; }
+.res-item:hover .res-title { color: #fff; text-decoration: underline; }
+.res-desc { font-size: 0.68rem; color: #888; margin-top: 2px; }
+
 /* === SCENARIO BRIEFING MODAL (v3.6) ===================================== */
 #scenario-briefing-modal {
     display: none;                    /* shown via JS */
@@ -3976,6 +4113,9 @@ input[type=range] {
              later rehoming of Setup/Parameters/Log. -->
         <!-- v4.20: PHYSIOLOGY button - opens the physiology dashboard modal -->
         <button id="brand-phys-btn" onclick="togglePhysiologyModal()" title="Live physiology dashboard">PHYSIOLOGY</button>
+        <!-- v4.40: RESOURCES button - opens the student resources modal
+             (PDFs / videos / links). Sits to the right of PHYSIOLOGY. -->
+        <button id="brand-resources-btn" onclick="toggleResourcesModal()" title="Explainers, references and links">RESOURCES</button>
         <!-- v4.23: ABOUT button removed - re-homed as a link in the START HERE
              modal footer (see #sh-about-link / shOpenAbout()). -->
         <button id="brand-silence-btn" onclick="cycleAudioMode()" title="Cycle audio mode">AUDIO ON</button>
@@ -4018,6 +4158,24 @@ input[type=range] {
                     <!-- Edges + nodes rendered dynamically by buildVariableGraph() -->
                 </svg>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- v4.40: Resources modal - opens via the RESOURCES brand-bar button.
+     Content lives in the RESOURCES array in the script; renderResources()
+     builds the grouped (PDFs/Videos/Links) list into #resources-list. -->
+<div id="resources-modal-overlay" onclick="if(event.target.id==='resources-modal-overlay') toggleResourcesModal()">
+    <div id="resources-modal">
+        <div id="resources-modal-head">
+            <div>
+                <h2>Resources</h2>
+                <div class="sub">Explainers, references and links for working through the sim.</div>
+            </div>
+            <button id="resources-modal-close" onclick="toggleResourcesModal()" title="Close" aria-label="Close">&times;</button>
+        </div>
+        <div id="resources-body">
+            <div id="resources-list"></div>
         </div>
     </div>
 </div>
@@ -11736,6 +11894,86 @@ function togglePhysiologyModal() {
         if (physTab === 'pathways') updateVariableGraph();
         else updatePhysiologyGauges();
     }
+}
+
+/* v4.40: RESOURCES tab - static list of student-facing explainers/PDFs/
+   videos/links, grouped by type in the modal. To add a resource, add an
+   entry here; nothing else needs touching. `type` must be a key of
+   RESOURCE_TYPES below ('pdf' | 'video' | 'link'). */
+const RESOURCES = [
+    // Placeholder examples - replace with real material, or delete both and
+    // leave the array empty; renderResources() handles an empty list.
+    {
+        title: 'Example: TIVA induction explainer (replace me)',
+        type: 'pdf',
+        url: 'https://example.com/tiva-induction.pdf',
+        description: 'One-page summary of target-controlled infusion basics.'
+    },
+    {
+        title: 'Example: reading an arterial line waveform (replace me)',
+        type: 'video',
+        url: 'https://example.com/art-line-waveform',
+        description: 'Short video walkthrough of waveform morphology.'
+    }
+];
+const RESOURCE_TYPES = {
+    pdf:   { label: 'PDFs',   icon: 'PDF' },
+    video: { label: 'Videos', icon: '▶' },
+    link:  { label: 'Links',  icon: '↗' }
+};
+const RESOURCE_TYPE_ORDER = ['pdf', 'video', 'link'];
+
+function renderResources() {
+    const el = document.getElementById('resources-list');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!RESOURCES.length) {
+        el.innerHTML = '<div class="res-empty">Nothing here yet &ndash; check back soon.</div>';
+        return;
+    }
+    RESOURCE_TYPE_ORDER.forEach(type => {
+        const items = RESOURCES.filter(r => r.type === type);
+        if (!items.length) return;
+        const meta = RESOURCE_TYPES[type] || { label: type, icon: '' };
+        const label = document.createElement('div');
+        label.className = 'res-group-label';
+        label.textContent = meta.label;
+        el.appendChild(label);
+        items.forEach(r => {
+            const a = document.createElement('a');
+            a.className = 'res-item';
+            a.href = r.url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            const icon = document.createElement('div');
+            icon.className = 'res-icon';
+            icon.textContent = meta.icon;
+            const text = document.createElement('div');
+            text.className = 'res-text';
+            const title = document.createElement('div');
+            title.className = 'res-title';
+            title.textContent = r.title;
+            text.appendChild(title);
+            if (r.description) {
+                const desc = document.createElement('div');
+                desc.className = 'res-desc';
+                desc.textContent = r.description;
+                text.appendChild(desc);
+            }
+            a.appendChild(icon);
+            a.appendChild(text);
+            el.appendChild(a);
+        });
+    });
+}
+
+function toggleResourcesModal() {
+    const ov = document.getElementById('resources-modal-overlay');
+    if (!ov) return;
+    const opening = !ov.classList.contains('open');
+    ov.classList.toggle('open', opening);
+    document.getElementById('brand-resources-btn').classList.toggle('active', opening);
+    if (opening) renderResources();
 }
 
 /* Always-on 2 Hz history sampler (keeps sparkline trends warm). */
