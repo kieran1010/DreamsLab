@@ -3,10 +3,25 @@
 The v4.33 voucher system locks the scenarios listed in `PREMIUM_SCENARIOS`
 (in `index.html`, `[ENTITLEMENTS]` section) behind time-limited access codes.
 
-**The repo ships with the system OFF.** `ENT_CONFIG` in `index.html` is empty,
-so nothing is locked and the voucher UI is hidden — you can merge and deploy
-v4.33 safely before doing any of the steps below. Filling in the two
-`ENT_CONFIG` values is the switch that turns it on.
+**Status: live**, as of v4.42 (2026-09-17). `ENT_CONFIG` in `index.html`
+carries this deployment's real `redeemUrl` and `publicKeyJwk`; the `redeem`
+Edge Function is deployed (via the dashboard editor, not the CLI - see step 3)
+with its `VOUCHER_SIGNING_KEY` secret set.
+
+The steps below are still the reference for doing this from scratch (a new
+deployment, or rotating the signing key). The design point that made this
+safe to build incrementally: while `ENT_CONFIG` is empty, nothing is locked
+and the voucher UI is hidden — v4.33 could be merged and deployed long before
+any of the steps below were done, exactly as it shipped for several months.
+Filling in the two `ENT_CONFIG` values is the switch that turns it on, and
+`tools/voucher-probe.js` still exercises that unconfigured-state mechanism
+even now that the committed config is live (by explicitly re-emptying it for
+that one check).
+
+None of this setup strictly requires the Supabase CLI - the dashboard has a
+SQL editor (migrations), an Edge Functions code editor + deploy button
+(step 3), and a Secrets page (step 2), all browser-based. The CLI commands
+below are kept as the alternative for anyone who prefers them.
 
 ## How it fits together
 
@@ -49,18 +64,26 @@ student's browser                     Supabase project
    ```
    It prints two values and writes nothing to disk:
    - the **public JWK** → paste as `ENT_CONFIG.publicKeyJwk` in `index.html`
-   - the **private key** → `supabase secrets set VOUCHER_SIGNING_KEY=<value>`
+   - the **private key** → store as the `VOUCHER_SIGNING_KEY` secret, either
+     `supabase secrets set VOUCHER_SIGNING_KEY=<value>` or, CLI-free, the
+     dashboard's Edge Functions → Secrets page.
 
    Keep a copy of the private key somewhere safe (password manager). If you
    lose or regenerate it, every issued token stops verifying.
 
-3. **Deploy the redeem function:**
+3. **Deploy the redeem function.** Either:
    ```bash
    supabase functions deploy redeem --no-verify-jwt
    ```
-   `--no-verify-jwt` is required — the sim calls it anonymously; the voucher
-   code itself is the credential. Then set `ENT_CONFIG.redeemUrl` in
-   `index.html` to `https://<project-ref>.supabase.co/functions/v1/redeem`.
+   or, CLI-free: dashboard → Edge Functions → Create a new function, name it
+   `redeem`, paste in `supabase/functions/redeem/index.ts`'s contents, and
+   turn **off** JWT verification before deploying (look for that option on
+   the create screen or the function's own Settings tab afterward - dashboard
+   layouts change, so check what's actually in front of you). Either way,
+   `--no-verify-jwt` / JWT verification off is required - the sim calls this
+   anonymously; the voucher code itself is the credential. Then set
+   `ENT_CONFIG.redeemUrl` in `index.html` to
+   `https://<project-ref>.supabase.co/functions/v1/redeem`.
 
 4. **Create your admin login.** In the dashboard: Authentication → Users →
    *Add user* (your email + a strong password). Then **disable public

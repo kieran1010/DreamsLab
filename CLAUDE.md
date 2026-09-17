@@ -52,13 +52,23 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `scenarioReset()` | 9512 | Clears state between scenarios |
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
-| `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating: `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
+| `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating (live v4.42): `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
 | `[RESOURCES]` | 11910 | v4.40/v4.41 Resources tab: fetches `resources/manifest.json` at runtime |
 
-The voucher system (v4.33) **ships dormant**: with `ENT_CONFIG` empty nothing
-is locked and its UI is hidden. Its gate lives in `pickScenario()` (UI), never
-`loadScenario()`, so the harness can always drive every scenario. Backend setup
-lives in `supabase/README.md`; keys come from `tools/make-voucher-keys.js`.
+The voucher system (v4.33) **is live as of v4.42**: `ENT_CONFIG` carries this
+deployment's real `redeemUrl` and `publicKeyJwk`, so `PREMIUM_SCENARIOS`
+(`tiva`, `sepsis`, `haemorrhage`, `bronchospasm`, `anaphylaxis`, `aspiration`,
+`ischaemia`, `pulmEmbolism` - a content decision, edit freely) are genuinely
+locked behind a voucher. It shipped dormant from v4.33 through v4.41 specifically
+so it could be merged and deployed safely before the backend existed - with
+`ENT_CONFIG` empty nothing is locked and its UI is hidden, which
+`tools/voucher-probe.js`'s first check still covers (by explicitly re-emptying
+`ENT_CONFIG`, since the committed config is no longer empty). The gate lives
+in `pickScenario()` (UI), never `loadScenario()`, so the harness can always
+drive every scenario regardless. Backend setup lives in `supabase/README.md`;
+keys come from `tools/make-voucher-keys.js`. The `redeem` Edge Function itself
+was deployed via the Supabase dashboard's Edge Functions editor, not the CLI -
+see `supabase/README.md` for that path too.
 
 The tick is one long function, ordered: PK → bronchospasm → volume/preload →
 autonomic tone → drug pushes → event blocks → baroreflex → tone clamps →

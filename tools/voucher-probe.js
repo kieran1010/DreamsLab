@@ -30,11 +30,17 @@ async function makeToken(privateKey, payload) {
     return b64u(bytes) + '.' + b64u(sig);
 }
 
-/* Boot a sim with the voucher system switched on for the given public key. */
+/* Boot a sim with the voucher system switched on for the given public key.
+   Also pins PREMIUM_SCENARIOS to a known test list ('sepsis' locked,
+   everything else free) rather than trusting whatever the real committed
+   list currently is - that's a content decision (see [ENTITLEMENTS] in
+   index.html) this probe shouldn't be coupled to. */
 async function bootConfigured(jwk) {
     const sim = boot();
     sim.dl.ENT_CONFIG.redeemUrl = 'https://example.invalid/functions/v1/redeem';
     sim.dl.ENT_CONFIG.publicKeyJwk = { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y };
+    sim.dl.PREMIUM_SCENARIOS.length = 0;
+    sim.dl.PREMIUM_SCENARIOS.push('sepsis');
     return sim;
 }
 
@@ -44,10 +50,18 @@ async function bootConfigured(jwk) {
     const jwk = await wc.subtle.exportKey('jwk', pair.publicKey);
     const DAY = 86400000;
 
-    console.log('\nvoucher-probe: shipped (unconfigured) state');
+    console.log('\nvoucher-probe: unconfigured state (mechanism, not current deployment state)');
     {
+        /* v4.42: index.html now ships CONFIGURED for real (this deployment's
+           live redeemUrl/publicKeyJwk are committed) - the system went live.
+           So this no longer asserts anything about the committed config;
+           instead it explicitly re-empties it, to keep covering the
+           mechanism a fresh/unconfigured clone relies on: empty config must
+           still mean nothing is locked. */
         const sim = boot();
-        check(sim.dl.entConfigured() === false, 'repo ships with ENT_CONFIG empty');
+        sim.dl.ENT_CONFIG.redeemUrl = '';
+        sim.dl.ENT_CONFIG.publicKeyJwk = null;
+        check(sim.dl.entConfigured() === false, 'empty ENT_CONFIG reads as unconfigured');
         check(sim.dl.PREMIUM_SCENARIOS.every(k => !sim.dl.isScenarioLocked(k)),
             'unconfigured build locks nothing (deploy-before-setup is a no-op)');
         sim.dl.pickScenario('sepsis');
