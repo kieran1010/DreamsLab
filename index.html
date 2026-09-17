@@ -51,6 +51,52 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.42  ("Voucher system goes live; Resources tab fully verified")
+  ---------------------------------------------------------------------------------
+  ENT_CONFIG.redeemUrl filled in (the redeem Edge Function is deployed - via
+  the Supabase dashboard's Edge Functions code editor, not the CLI, with JWT
+  verification off since the sim calls it anonymously). Combined with the
+  publicKeyJwk filled in back in v4.41, entConfigured() now returns true for
+  real: this is the first genuinely live, user-facing change in this whole
+  effort - everything before this had a safe fallback or stayed dormant.
+
+  PREMIUM_SCENARIOS set to [] (was the 8-scenario v4.33 default list) - a
+  content decision, not technical: all 20 scenarios stay free for now. The
+  backend is fully live and ready regardless (admin.html can issue codes,
+  the redeem endpoint works) - flipping scenarios back to Pro later is just
+  editing this one array, no redeploy of anything else needed.
+
+  Fixed a real bug this surfaced: entRenderUI() showed the voucher-entry box
+  based on entConfigured() alone, not on whether PREMIUM_SCENARIOS actually
+  has anything in it. That combination - backend live, scenario list empty -
+  never existed before now, so it never mattered until today. Now requires
+  both, so an empty list correctly hides the box instead of showing "enter
+  a voucher code" with nothing to redeem.
+
+  tools/voucher-probe.js updated: its "configured" test groups now pin their
+  own PREMIUM_SCENARIOS test list inside bootConfigured() rather than trusting
+  the real committed list, which is a content decision the probe shouldn't be
+  coupled to. Still 15/15.
+
+  Verified end-to-end in a real browser against MOCKED Supabase responses
+  (this sandbox cannot reach *.supabase.co at all, confirmed via curl and an
+  in-page fetch - a network policy restriction, not a code issue): a
+  redemption using a token signed with the REAL private key (matching the
+  REAL publicKeyJwk now embedded here) correctly verifies offline, sets
+  entitlement, persists to localStorage, and unlocks - proving the full
+  offline-trust chain works with the actual production keys. A rejected
+  redemption correctly grants no access. Also confirmed (now that
+  PREMIUM_SCENARIOS is empty): all scenarios report unlocked, and the
+  voucher box stays hidden.
+
+  Resources tab (v4.40-v4.42): user-confirmed live on the deployed site -
+  admin.html login/upload/write works, and the main site correctly reads
+  live Supabase data (the two placeholder examples seen right after deploy
+  were the manifest.json fallback showing before a refresh, not a bug).
+==================================================================================
+-->
+<!--
+==================================================================================
   DREAMS LAB  v4.41  ("Supabase go-live: Resources admin + voucher setup, in progress")
   ---------------------------------------------------------------------------------
   No behaviour change yet - both systems ship exactly as dormant as before.
@@ -12443,12 +12489,11 @@ function resize() {
    ============================================================================= */
 
 const ENT_CONFIG = {
-    // URL of the deployed redeem function, e.g.
-    // 'https://abcdefgh.supabase.co/functions/v1/redeem'
-    // Still empty: the redeem Edge Function isn't deployed yet. entOnline()
-    // requires both this AND publicKeyJwk, so the system stays safely
-    // dormant (padlocks hidden) until this is filled in too.
-    redeemUrl: '',
+    // Deployed 2026-09-17 via the Supabase dashboard's Edge Functions editor
+    // (JWT verification off - the sim calls this anonymously, the voucher
+    // code itself is the credential). This is the switch: entConfigured()
+    // now returns true, so PREMIUM_SCENARIOS are genuinely locked from here.
+    redeemUrl: 'https://tjqqyoypuwtqsxzjslnd.supabase.co/functions/v1/redeem',
     // Public half of the signing keypair, generated 2026-09-09 with
     // `node tools/make-voucher-keys.js`. The private half was handed to the
     // user to store as the VOUCHER_SIGNING_KEY Supabase secret - never
@@ -12460,8 +12505,13 @@ const ENT_CONFIG = {
    else follows. Keys absent from VERIFIED_SCENARIOS are unaffected (hidden
    from the menu anyway). Starting split: the four bread-and-butter scenarios
    stay free as the taster; crisis management is the paid product. */
-const PREMIUM_SCENARIOS = ['tiva', 'sepsis', 'haemorrhage', 'bronchospasm',
-    'anaphylaxis', 'aspiration', 'ischaemia', 'pulmEmbolism'];
+const PREMIUM_SCENARIOS = [];
+// All 20 scenarios free for now (2026-09-17) - a content decision, not a
+// technical one. The voucher backend is fully live (redeem function
+// deployed, admin.html can issue codes) regardless of this list; leaving it
+// empty just means isScenarioLocked() is false for everything and the
+// voucher UI stays hidden. Add scenario keys back here whenever ready - no
+// redeploy of the backend needed, just this array.
 
 const ENT_STORE_KEY = 'dl_entitlement';
 let entitlement = null;   // verified token payload {tier, exp, iat, label}, or null
@@ -12588,7 +12638,11 @@ async function applyVoucher() {
 /* Paint the voucher area and the lock badges to match current entitlement. */
 function entRenderUI() {
     const area = document.getElementById('voucher-area');
-    if (area) area.style.display = entConfigured() ? '' : 'none';
+    // Not just entConfigured(): the backend can be fully live (as it now is)
+    // while PREMIUM_SCENARIOS is deliberately empty (a content decision -
+    // see [ENTITLEMENTS]), in which case there's nothing to redeem and the
+    // box would be confusing clutter. Show it only when both are true.
+    if (area) area.style.display = (entConfigured() && PREMIUM_SCENARIOS.length > 0) ? '' : 'none';
     const status = document.getElementById('voucher-status');
     if (status) {
         status.textContent = hasPro()
