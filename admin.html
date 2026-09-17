@@ -212,6 +212,19 @@ function esc(s) {
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+/* For a JS argument embedded in an inline onclick="..." attribute (itself
+   double-quoted). JSON.stringify() correctly escapes everything WITHIN the
+   string (quotes, backslashes, unicode) as backslash-escapes, so the only
+   bare '"' characters left in its output are the two delimiter quotes -
+   HTML-entity-escaping those (safe: internal quotes are never bare) stops
+   them from colliding with onclick's own delimiters. Without this, any id
+   or url reaching an onclick built this way truncates the handler into
+   invalid JS the moment the browser parses the tag - silently, so the
+   button just does nothing when clicked. */
+function attrJs(value) {
+    return JSON.stringify(value).replace(/"/g, '&quot;');
+}
+
 /* ---- tabs --------------------------------------------------------------- */
 let resourcesLoaded = false;
 function setAdminTab(tab) {
@@ -446,7 +459,7 @@ async function refreshResources() {
             + '<td>' + esc(res.type) + '</td>'
             + '<td><a href="' + esc(res.url) + '" target="_blank" rel="noopener noreferrer">' + esc(res.url) + '</a></td>'
             + '<td>' + fmtDate(res.created_at) + '</td>'
-            + '<td><button class="small danger" onclick="deleteResource(' + JSON.stringify(res.id) + ',' + JSON.stringify(res.url) + ')">Delete</button></td>'
+            + '<td><button class="small danger" onclick="deleteResource(' + attrJs(res.id) + ',' + attrJs(res.url) + ')">Delete</button></td>'
             + '</tr>'
         )).join('');
     } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; }
