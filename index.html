@@ -11996,8 +11996,8 @@ function togglePhysiologyModal() {
 const RESOURCES_CONFIG = {
     // Supabase project (dashboard > Settings > API), same project as
     // ENT_CONFIG.redeemUrl. Both blank = use resources/manifest.json.
-    supabaseUrl: '',
-    supabaseAnonKey: '',
+    supabaseUrl: 'https://tjqqyoypuwtqsxzjslnd.supabase.co',
+    supabaseAnonKey: 'sb_publishable_ZbqscOvnF_ivq3m9-jqa1w_oFD7-OUp',
 };
 const RESOURCE_TYPES = {
     pdf:   { label: 'PDFs',   icon: 'PDF' },
@@ -12011,16 +12011,34 @@ function resourcesLive() {
     return !!(RESOURCES_CONFIG.supabaseUrl && RESOURCES_CONFIG.supabaseAnonKey);
 }
 
-async function fetchResourceList() {
-    const url = resourcesLive()
-        ? RESOURCES_CONFIG.supabaseUrl + '/rest/v1/resources?select=title,type,url,description&order=created_at.desc'
-        : 'resources/manifest.json';
-    const headers = resourcesLive()
-        ? { apikey: RESOURCES_CONFIG.supabaseAnonKey }
-        : undefined;
-    const res = await fetch(url, { cache: 'no-store', headers });
+async function fetchManifestJson() {
+    const res = await fetch('resources/manifest.json', { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
+}
+
+/* Three-tier fallback, in order: Supabase (if configured) -> manifest.json
+   -> whatever renderResources() had cached from a prior successful load.
+   The Supabase -> manifest.json step matters a lot in practice: it means
+   RESOURCES_CONFIG can be filled in and pushed *before* the `resources`
+   table necessarily exists yet (main deploys live, no staging environment)
+   without breaking the tab - it just keeps reading manifest.json until the
+   table is there, then picks it up automatically on the next open, no
+   further deploy needed. */
+async function fetchResourceList() {
+    if (resourcesLive()) {
+        try {
+            const res = await fetch(
+                RESOURCES_CONFIG.supabaseUrl + '/rest/v1/resources?select=title,type,url,description&order=created_at.desc',
+                { cache: 'no-store', headers: { apikey: RESOURCES_CONFIG.supabaseAnonKey } }
+            );
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return await res.json();
+        } catch (err) {
+            return fetchManifestJson();
+        }
+    }
+    return fetchManifestJson();
 }
 
 function renderResourceList(el, list) {
