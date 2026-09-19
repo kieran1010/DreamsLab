@@ -17,7 +17,7 @@
    ============================================================================= */
 'use strict';
 
-const { boot, resolve, give } = require('./harness');
+const { boot, resolve, give, gaugeSpecs } = require('./harness');
 
 /* -----------------------------------------------------------------------------
    tiny check framework
@@ -830,6 +830,193 @@ probe('F17', 'Neostigmine, dexmedetomidine and magnesium work', () => {
         'magnesium gives modest bronchodilation, weaker than salbutamol',
         `resistance untreated ${rNone.toFixed(0)}, mag ${rMag.toFixed(0)}, salb ${rSalb.toFixed(0)}`,
         'a real adjunct effect (was near-placebo), but less than the primary reliever');
+});
+
+/* =============================================================================
+   F19  myocardial ischaemia never moves the blood pressure, and its own
+        recommended treatment cannot heal it
+   -----------------------------------------------------------------------------
+   The September 2026 audit, measured against an identical run with the event
+   forced off. Four findings:
+
+     - BP never fell. state.ischaemia had exactly two consumers in the whole
+       model: the ECG morphology, and one contractility push-down capped at
+       ISCHAEMIA_CONTR_DROP 0.20. Contractility went 0.95 -> 0.80 and stopped;
+       the baroreflex absorbed it. MAP dipped 107 -> 98 at t=74s and was back at
+       104 by t=600, ending at BP 135/83 - higher than its own trough.
+     - The scenario never presented its briefed numbers. setupBrief promises
+       "HR 105, BP 150/95"; SBP peaked at 139 and settled 128-135. The event-off
+       control reached 154/95 exactly, so the briefing had been written against
+       the NON-ischaemic haemodynamics and the contractility drop then removed
+       15-20 mmHg of it.
+     - It saturated and then did nothing. state.ischaemia hit 1.00 at t=144s and
+       clamped, while the underlying imbalance went on climbing 1.10 -> 1.31 with
+       nowhere to show it. The last seven and a half minutes were static: no
+       progression, no arrhythmia, no route to the cardiogenic shock objective 1
+       names.
+     - No hint-derived plan could heal it. Every plan within the hints' stated
+       doses left ischaemia at 1.00, including the sweep's own transcription.
+       The cause was not the model's calibration: esmolol is well calibrated
+       (50mg takes HR 104 -> 89 at nadir) but a bolus wears off with a ~9 min
+       half-life while the surgical stimulus persists indefinitely, and hint 3
+       said "esmolol 25-50mg slow IV" without saying to repeat it. Probe F15
+       masked this by stacking two 50mg boluses onto a remifentanil rate of 0.5
+       at t=0 - it never tested a hint-derived plan.
+
+   v4.44 splits the haemodynamic consequence into state.ischaemiaStun, a slow
+   follower of the score, so the ECG changes first and the pressure follows;
+   deepens ISCHAEMIA_CONTR_DROP to 0.50; lightens the scenario's opioid cover so
+   the briefed opening numbers are actually on the monitor; and rewrites hint 3
+   to teach titration. ISCHAEMIA_HR_REF is deliberately unchanged.
+   ========================================================================== */
+probe('F19', 'Ischaemia moves the blood pressure, and titrated rate control heals it', () => {
+
+    /** Run the scenario under a plan, sampling at 1 Hz. Actions are dispatched
+        order-independently (as sweep.js does) - a while-loop over an unsorted
+        list silently drops everything after the first out-of-order entry. */
+    function run(opts) {
+        opts = opts || {};
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('ischaemia');
+        if (opts.noEvent) { dl.state.events.ischaemia = false; dl.state.ischaemia = 0; }
+        // Cardiac output has no state field - it is computed in the gauge's own
+        // getter, so read it the way the Physiology tab does.
+        const coSpec = gaugeSpecs(dl).find(g => g.key === 'co');
+        const pending = (opts.acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (opts.dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            const st = dl.state;
+            rows.push({ t: s, map: mapOf(dl), sys: st.sys, dia: st.dia, hr: st.hr,
+                        co: coSpec.spec.get(), isch: st.ischaemia, stun: st.ischaemiaStun,
+                        contract: st.patient.contractility });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors,
+                 maxSys: Math.max(...rows.map(r => r.sys)),
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const ESMO = (t, d) => ({ t, do: dl => give(dl, 'esmo', d) });
+    const REMI = (t, r) => ({ t, do: dl => dl.setInf('remi', r) });
+    const METAR = (t, d) => ({ t, do: dl => give(dl, 'metar', d) });
+    const SEVO = (t, v) => ({ t, do: dl => dl.setVentParam('sevo', v) });
+
+    const un = run();
+
+    /* 1. The scenario opens on the hypertensive picture its briefing describes.
+          setupBrief says "HR 105, BP 150/95". */
+    const open = un.at(20);
+    note(`opening (t=20s): BP ${open.sys.toFixed(0)}/${open.dia.toFixed(0)}, ` +
+         `HR ${open.hr.toFixed(0)}, ischaemia ${open.isch.toFixed(2)} - briefed as HR 105, BP 150/95`);
+    expect(open.sys >= 145 && open.hr >= 100,
+        'the scenario presents the hypertensive demand picture it briefs',
+        `BP ${open.sys.toFixed(0)}/${open.dia.toFixed(0)}, HR ${open.hr.toFixed(0)} at t=20s`,
+        'SBP >= 145 and HR >= 100 (the old cover held it at 141/87, HR 99)');
+
+    /* 2. And then the pressure FALLS - the finding that started this audit. */
+    const late = un.at(600);
+    const fall = open.sys - late.sys;
+    note(`untreated trajectory: BP ${open.sys.toFixed(0)}/${open.dia.toFixed(0)} at t=20s -> ` +
+         `${un.at(180).sys.toFixed(0)}/${un.at(180).dia.toFixed(0)} at t=180s -> ` +
+         `${late.sys.toFixed(0)}/${late.dia.toFixed(0)} at t=600s; ` +
+         `CO ${un.at(20).co.toFixed(1)} -> ${late.co.toFixed(1)} L/min`);
+    expect(fall >= 22 && late.map < open.map - 15,
+        'the untreated blood pressure falls as the myocardium stuns',
+        `SBP falls ${fall.toFixed(0)} mmHg (${open.sys.toFixed(0)} -> ${late.sys.toFixed(0)}), ` +
+        `MAP ${open.map.toFixed(0)} -> ${late.map.toFixed(0)}`,
+        '>= 22 mmHg of systolic fall (was an 8 mmHg dip that then recovered)');
+    expect(late.co < un.at(20).co - 1.0,
+        'cardiac output falls too, rather than being held up by the tachycardia',
+        `CO ${un.at(20).co.toFixed(1)} -> ${late.co.toFixed(1)} L/min`,
+        'a real fall - untreated CO used to RISE, 6.4 -> 6.6, as HR climbed');
+
+    /* 3. The two phases are genuinely separated: the ECG sign arrives while the
+          pressure is still high, which is the recognition moment. */
+    note(`phase separation: at t=60s ischaemia ${un.at(60).isch.toFixed(2)} but stun only ` +
+         `${un.at(60).stun.toFixed(2)}, BP still ${un.at(60).sys.toFixed(0)}/${un.at(60).dia.toFixed(0)}`);
+    expect(un.at(60).isch > 0.8 && un.at(60).stun < 0.35 && un.at(60).sys > 135,
+        'the ECG changes lead the haemodynamic collapse',
+        `at t=60s: ischaemia ${un.at(60).isch.toFixed(2)}, stun ${un.at(60).stun.toFixed(2)}, ` +
+        `SBP ${un.at(60).sys.toFixed(0)}`,
+        'score already high while stun is low and the pressure is still up');
+
+    /* 4. It must not go static. Before v4.44 the score clamped at 1.0 by t=144s
+          and nothing moved again for seven and a half minutes. */
+    expect(un.at(600).stun > un.at(180).stun + 0.2 && un.at(600).contract < un.at(180).contract,
+        'deterioration continues after the score saturates',
+        `stun ${un.at(180).stun.toFixed(2)} -> ${un.at(600).stun.toFixed(2)}, ` +
+        `contractility ${un.at(180).contract.toFixed(2)} -> ${un.at(600).contract.toFixed(2)}`,
+        'the lagged stun carries the progression the clamped score cannot');
+
+    /* 5. A single esmolol bolus is not enough, but titrating to a rate target
+          is - which is what hint 3 now says, and what the old hint did not. */
+    const single = run({ acts: [ESMO(60, 50)] });
+    const titrated = run({ acts: [ESMO(60, 50), ESMO(150, 50), ESMO(240, 50), ESMO(330, 50)] });
+    note(`esmolol: one 50mg bolus -> HR ${single.at(600).hr.toFixed(0)}, ischaemia ` +
+         `${single.at(600).isch.toFixed(2)}; titrated 4 x 50mg -> HR ` +
+         `${titrated.at(600).hr.toFixed(0)}, ischaemia ${titrated.at(600).isch.toFixed(2)}`);
+    expect(single.at(600).isch > 0.8,
+        'a single esmolol bolus does not heal it',
+        `one 50mg bolus leaves ischaemia ${single.at(600).isch.toFixed(2)} at HR ${single.at(600).hr.toFixed(0)}`,
+        'still ischaemic - the bolus wears off while the stimulus does not');
+    expect(titrated.at(600).isch < 0.6 && titrated.at(600).isch < single.at(600).isch - 0.3,
+        'titrating esmolol to a rate target does heal it',
+        `4 x 50mg leaves ischaemia ${titrated.at(600).isch.toFixed(2)} at HR ${titrated.at(600).hr.toFixed(0)}`,
+        'clearly better than a single dose - rate control has to be sustained');
+
+    /* 6. The sweep's own plan - the hints, transcribed - must now work, and must
+          work better than the same plan without the DBP support, because supply
+          is proportional to diastolic pressure. */
+    const full = run({ acts: [REMI(60, 0.25), ESMO(90, 50), METAR(95, 1),
+                              ESMO(180, 50), ESMO(270, 50)] });
+    const noPressor = run({ acts: [REMI(60, 0.25), ESMO(90, 50),
+                                   ESMO(180, 50), ESMO(270, 50)] });
+    note(`hint-derived plan: with metaraminol ischaemia ${full.at(600).isch.toFixed(2)} at ` +
+         `BP ${full.at(600).sys.toFixed(0)}/${full.at(600).dia.toFixed(0)}; without it ` +
+         `${noPressor.at(600).isch.toFixed(2)} at ` +
+         `${noPressor.at(600).sys.toFixed(0)}/${noPressor.at(600).dia.toFixed(0)}`);
+    expect(full.at(600).isch < 0.3,
+        "the scenario's own recommended management heals it",
+        `ischaemia ${full.at(600).isch.toFixed(2)} at HR ${full.at(600).hr.toFixed(0)}, ` +
+        `BP ${full.at(600).sys.toFixed(0)}/${full.at(600).dia.toFixed(0)}`,
+        '< 0.3 - every hint-derived plan used to leave it pinned at 1.00');
+    expect(full.at(600).isch < noPressor.at(600).isch,
+        'defending the diastolic pressure improves the outcome (objective 4)',
+        `with metaraminol ${full.at(600).isch.toFixed(2)} vs without ${noPressor.at(600).isch.toFixed(2)}`,
+        'better - supply is proportional to DBP, so a pressor earns its place');
+
+    /* 7. Deep volatile is the trap the hints warn about: it cuts demand but
+          collapses the diastolic pressure the coronaries are perfused by. */
+    const sevoHeavy = run({ acts: [SEVO(60, 2.5), REMI(62, 0.3), ESMO(90, 50),
+                                   ESMO(180, 50), ESMO(270, 50)] });
+    note(`sevo-heavy variant: BP ${sevoHeavy.at(600).sys.toFixed(0)}/` +
+         `${sevoHeavy.at(600).dia.toFixed(0)}, ischaemia ${sevoHeavy.at(600).isch.toFixed(2)} ` +
+         `(vs ${full.at(600).sys.toFixed(0)}/${full.at(600).dia.toFixed(0)} for the DBP-sparing plan)`);
+    expect(sevoHeavy.at(600).dia < full.at(600).dia - 5,
+        'deepening the volatile costs diastolic pressure',
+        `DBP ${sevoHeavy.at(600).dia.toFixed(0)} vs ${full.at(600).dia.toFixed(0)} for the DBP-sparing plan`,
+        'lower - which is the trade-off hints 2 and 4 are warning about');
+
+    /* 8. The mistakes the objectives name must still be mistakes. */
+    const pressorOnly = run({ acts: [METAR(60, 1)] });
+    const fluidOnly = run({ acts: [{ t: 60, do: dl => give(dl, 'flu', 0.5) }] });
+    note(`mistakes: metaraminol alone -> ischaemia ${pressorOnly.at(600).isch.toFixed(2)} at ` +
+         `BP ${pressorOnly.at(600).sys.toFixed(0)}/${pressorOnly.at(600).dia.toFixed(0)}; ` +
+         `500mL fluid -> ${fluidOnly.at(600).isch.toFixed(2)}`);
+    expect(pressorOnly.at(600).isch > 0.8 && fluidOnly.at(600).isch > 0.8,
+        'a pressor or fluid alone, without addressing demand, still fails',
+        `metaraminol alone ${pressorOnly.at(600).isch.toFixed(2)}, ` +
+        `fluid ${fluidOnly.at(600).isch.toFixed(2)}`,
+        'both still ischaemic - objective 5 and the fluid hint stay honest');
+
+    /* 9. Sanity: no dropped actions, no tick errors anywhere above. */
+    const allRuns = [un, single, titrated, full, noPressor, sevoHeavy, pressorOnly, fluidOnly];
+    const errs = allRuns.reduce((n, r) => n + r.errors.length, 0);
+    const drops = allRuns.reduce((n, r) => n + r.undone, 0);
+    expect(errs === 0 && drops === 0,
+        'every run completes with no tick errors and no dropped actions',
+        `${errs} tick errors, ${drops} undelivered actions across ${allRuns.length} runs`,
+        'zero of each');
 });
 
 /* -----------------------------------------------------------------------------

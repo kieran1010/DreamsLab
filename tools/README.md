@@ -157,6 +157,26 @@ partial but not a dense block (sugammadex reverses dense), a dex infusion via
 `setInf()` causes bradycardia + sedation, and magnesium gives modest
 bronchodilation weaker than salbutamol.
 
+| F19 | ischaemia never moves the BP, and its own treatment cannot heal it | 0/12 |
+
+F19 is the v4.44 finding. The reported symptom was that the blood pressure never
+falls even untreated, and it held up: `state.ischaemia` had exactly two consumers
+in the whole model — the ECG morphology, and one contractility push-down capped at
+0.20. MAP dipped 107 → 98 at t=74s and was back to 104 by t=600, ending *higher*
+than its own trough, with cardiac output rising as the tachycardia compensated.
+Three more findings came with it: the scenario never presented its briefed
+"HR 105, BP 150/95" (SBP peaked at 139, while the event-off control reached
+154/95 exactly — the briefing had been written against the non-ischaemic
+haemodynamics); the score saturated at t=144s and then did nothing for seven and
+a half minutes while the underlying imbalance went on climbing; and no
+hint-derived plan could heal it. That last one was **not** a calibration problem
+— esmolol is well calibrated and `ISCHAEMIA_HR_REF` is unchanged — but a bolus
+wears off while the surgical stimulus does not, and hint 3 never said to repeat
+it. **F15 had masked it since v4.37** by stacking two 50 mg boluses onto a
+remifentanil rate of 0.5 at t=0: it proved the model *could* be healed while the
+scenario's documented treatment left it pinned at 1.00. A cautionary example of a
+probe that passes without testing the thing the scenario actually teaches.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

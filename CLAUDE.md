@@ -9,7 +9,7 @@ Deployed to **synapse.hypnos.one** via GitHub Pages from `main`. **Pushing to
 
 ## The one structural fact
 
-**Everything is in `index.html`.** ~11,400 lines: styles, markup and the entire
+**Everything is in `index.html`.** ~13,100 lines: styles, markup and the entire
 simulator in a single inline `<script>`. No build step, no bundler, no
 dependencies, no framework. Open the file in a browser and it runs — with one
 exception, the Resources tab, below.
@@ -75,6 +75,14 @@ autonomic tone → drug pushes → event blocks → baroreflex → tone clamps �
 haemodynamics → ventilation → gas exchange → SpO₂ → etCO₂ → alarms. **Order
 matters a lot** — see the traps below.
 
+**A score and its consequence are not the same number.** v4.44 split
+`state.ischaemiaStun` out of `state.ischaemia`: the score drives the ECG
+immediately, the stun follows it over `ISCHAEMIA_STUN_TAU` and is what drives
+contractility. They were one number until then, so the stunned myocardium
+arrived at the same instant as the ST depression and blunted the scenario's own
+presentation from t=0. Ask, for any new pathology, whether the *sign* and the
+*consequence* should share a clock.
+
 ## Testing
 
 `tools/` runs the real simulator headlessly in a Node `vm` sandbox with a
@@ -90,7 +98,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 45/45,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 57/57,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -216,6 +224,17 @@ thresholds for anything where the resting value is not near an end.
   than red on its own; it takes a second vasodilator (tourniquet release, CO₂
   embolism) to reach the danger threshold. Same family as the aneurysm item — the
   vasodilatory pushdowns are modest, not the gauge.
+- In the ischaemia scenario's **treated** run `alphaTone` pins at its 1.4 clamp
+  from ~t=120 onward (97 of 120 samples). Rate control to HR 65 plus a stunned
+  myocardium puts MAP in the 60s against the elderly profile's `mapTarget` of 95,
+  and the baroreflex answers maximally. Coherent, but a *second* pressor dose late
+  in that case does nothing — the first, given before the tone pins, is what earns
+  objective 4's improvement. The global `ALPHA_CLAMP` limit, not a scenario bug.
+- The ischaemia scenario still cannot reach frank cardiogenic shock or an
+  arrhythmia: the untreated fall stops where `ischaemiaStun` saturates (BP ~118/72,
+  MAP ~91 from a 149/92 opening). Objective 1 names cardiogenic shock as the severe
+  presentation, so v4.44 narrowed that gap without closing it.
+  `ISCHAEMIA_CONTR_DROP` is the single constant that sets the depth.
 - Salbutamol (v4.38) raises MAP ~+15-18 at 250mcg where real salbutamol is
   roughly BP-neutral. `betaTone` drives contractility as well as HR, so creating
   the tachycardia unavoidably adds inotropy; the beta2 vasodilation term

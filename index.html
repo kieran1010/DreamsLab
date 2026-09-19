@@ -51,6 +51,134 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.44  ("Ischaemia: a blood pressure that actually falls")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  NB numbered v4.44 on the assumption that v4.43 (the anaphylaxis audit) merges
+  first. The two are independent; if this lands first, renumber.
+
+  Audit of the myocardial ischaemia scenario, measured against an identical run
+  with the event forced off so every number is the event's own contribution.
+  Reported symptom: the blood pressure never falls, even untreated. Confirmed,
+  and the cause was structural rather than a tuning drift - along with three
+  other findings.
+
+  1. The blood pressure never fell, and then recovered.
+     state.ischaemia had exactly TWO consumers in the whole model: the ECG
+     morphology, and one contractility push-down capped at ISCHAEMIA_CONTR_DROP
+     0.20. Contractility went 0.95 -> 0.80 and stopped there; the baroreflex and
+     the slowly rising stimulus absorbed the rest. MAP peaked 107 at t=6s, dipped
+     to 98 at t=74s and was back to 104 by t=600, ending at BP 135/83 - higher
+     than its own trough. Cardiac output ROSE over the run, 6.4 -> 6.6, because
+     the tachycardia compensated. An eight-millimetre dip that then reverses is
+     the entire haemodynamic consequence of a myocardial infarction.
+
+  2. The scenario never presented its own briefed numbers.
+     setupBrief promises "HR 105, BP 150/95" and the setup comment claimed a
+     "150-170 systolic range". Measured: SBP peaked at 139 and settled 128-135.
+     The event-off control reached 154/95 exactly - so the briefing had been
+     written against the NON-ischaemic haemodynamics, and the contractility drop
+     then quietly removed 15-20 mmHg of it. Fixed from the model end: the
+     scenario's opioid cover is lighter (remi pump 0.08 -> 0.05, seeded Ce
+     0.0027 -> 0.0015), which puts 149/92 at HR 102 on the monitor by t=20s.
+     Notably this needed no extra surgical stimulus and no profile tweak - the
+     old cover was simply holding the opening pressure down, and only let it
+     drift toward 150/95 over ten minutes as the remi wore off, long after the
+     scenario's opening phase.
+
+  3. It saturated at t=144s and then did nothing for seven and a half minutes.
+     state.ischaemia clamped at 1.00 while the underlying imbalance went on
+     climbing, 1.10 -> 1.31, with nowhere to show it. No progression, no
+     arrhythmia, and no route to the cardiogenic shock objective 1 names.
+
+  Fix for 1 and 3: split the haemodynamic consequence out of the score.
+  state.ischaemiaStun is a slow follower of state.ischaemia (STUN_TAU 150s) and
+  is what now drives ISCHAEMIA_CONTR_DROP, raised 0.20 -> 0.50. ST depression is
+  immediate; measurable contractile failure is not. That gives the scenario two
+  phases instead of a blunted one:
+
+     t=20s   BP 149/92  HR 102  MAP 114  CO 7.5   ischaemia 0.56  stun 0.04
+     t=60s   BP 141/87  HR 104  MAP 108  CO 7.0   ischaemia 0.92  stun 0.22
+     t=180s  BP 125/77  HR 107  MAP  97  CO 6.1   ischaemia 1.00  stun 0.64
+     t=600s  BP 118/72  HR 110  MAP  91  CO 5.7   ischaemia 1.00  stun 0.98
+
+  The ECG sign arrives while the pressure is still high - which is the
+  recognition moment - and the pressure then falls 31 mmHg systolic with
+  contractility 0.93 -> 0.65 and CO 7.5 -> 5.7. The lagged stun also carries the
+  progression the clamped score could not, so the run no longer goes static.
+  Deepening the drop is safe rather than self-reinforcing: a bigger drop cuts SBP
+  proportionally more than DBP, so the imbalance FALLS as it deepens (1.31 at
+  0.20 down to 1.06 at 0.90). There is no ischaemic spiral to run away with.
+
+  4. No hint-derived treatment could heal it.
+     Every plan within the hints' stated doses left ischaemia pinned at 1.00,
+     including the sweep's own transcription of them (sevo 2% + fentanyl 100mcg +
+     esmolol 30mg + metaraminol 0.5mg: 1.00 for the whole run). This was NOT a
+     calibration problem, which is where the audit first went looking:
+       - esmolol is well calibrated. 50mg takes HR 104 -> 89 at nadir, 100mg ->
+         76, and -5 in an unstimulated patient. All clinically sensible.
+       - ISCHAEMIA_HR_REF is left at 84, unchanged. Making the crossover
+         reachable by bending it would have needed ~120, which is not a "neutral
+         HR" in any sense and would have moved the discrimination away from heart
+         rate - undercutting the one thing the scenario teaches.
+     The actual cause: a bolus wears off (esmolol t1/2 ~9 min) while the surgical
+     stimulus does not, and hint 3 said "esmolol 25-50mg slow IV" without saying
+     to repeat it. So a trainee following the hints literally gives one dose,
+     watches HR recover from 89 back to 99, and never gets near the crossover.
+     Probe F15 had masked this since v4.37 by stacking two 50mg boluses onto a
+     remifentanil rate of 0.5 at t=0 - it proved the model COULD be healed, but
+     never tested a hint-derived plan.
+
+     Fixed in the hints, not the physiology. Hint 3 now says to titrate to a
+     rate target (aim under 80) and explains why one dose is not enough.
+     Measured, at the unchanged HR_REF 84:
+       one esmolol 50mg           -> ischaemia 1.00, HR 99
+       esmolol 50mg titrated x4   -> ischaemia 0.39, HR 69
+       remi 0.15 + esmo x3        -> ischaemia 0.25, BP 72/44
+       the same + metaraminol     -> ischaemia 0.15, BP 98/60
+       remi 0.4 alone             -> ischaemia 1.00, HR 93   (rate control is the lever)
+       metaraminol or fluid alone -> ischaemia 1.00           (still mistakes)
+
+  Two new pieces of scenario text for what the model now does: an objective and a
+  hint on the second phase, because a previously hypertensive patient drifting
+  down towards "normal" is decompensating, not improving, and that is the harder
+  half of the recognition.
+
+  Known, and deliberately not chased here:
+   - In the TREATED run alphaTone pins at its 1.4 clamp from ~t=120 onward (97 of
+     120 samples, against 37 before this change). Rate control to HR 65 plus a
+     stunned myocardium puts MAP in the 60s against the elderly profile's
+     mapTarget of 95, and the baroreflex answers maximally. Physiologically
+     coherent, but it means a SECOND pressor dose late in the case does nothing -
+     the first, given before the tone pins, is what earns the improvement in
+     objective 4. This is the global ALPHA_CLAMP limit already noted in the
+     structural traps, not something specific to this scenario.
+   - Treating hard enough to heal costs pressure: the sweep's plan troughs at MAP
+     59 around t=350 before recovering to 73. The hints already warn about
+     exactly this, and a sevo-heavy variant reaches BP 49/30, so the trade-off is
+     visible rather than hidden. ISCHAEMIA_CONTR_DROP is the single constant to
+     turn down if that reads as too punishing.
+   - The scenario still cannot reach frank cardiogenic shock or arrhythmia; the
+     fall stops where the stun saturates. Objective 1 names cardiogenic shock as
+     the severe presentation, so that gap is narrowed but not closed.
+
+  Also fixed: the integrator's comment still described a hysteresis-gated
+  ISCHAEMIA badge (events.ischaemiaActive, CONFIG.ISCHAEMIA_LABEL_ON /
+  LABEL_OFF) that v3.79 deleted when it replaced the badge with real ST/T-wave
+  morphology. None of those three identifiers had existed in the code since.
+
+  tools/probes.js gains F19 (12 checks) covering all four findings plus the phase
+  separation, the titration dose-response, the DBP-defence effect and the two
+  mistakes. tools/sweep.js TREATMENTS retimed to titrate rather than give one
+  dose. Baseline: probes 57/57, voucher-probe 15/15, scan 0 BUG-level findings,
+  0 runtime errors, and every non-ischaemia row of scan's treatment-effect table
+  unchanged.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.42  ("Voucher system goes live; Resources tab fully verified")
   ---------------------------------------------------------------------------------
   ENT_CONFIG.redeemUrl filled in (the redeem Edge Function is deployed - via
@@ -5479,7 +5607,37 @@ const CONFIG = {
     ISCHAEMIA_HR_REF: 84,             // v4.37: neutral HR for the diastolic-time factor. HR_REF/HR = 1 here, <1 (supply penalised) above, >1 (rewarded) below. Calibrated - not the resting 72 - so the demand/supply cross-over lands where clinically good management does: sustained rate control into the low 70s with an adequate DBP heals in ~4-5 min, while analgesia alone (HR still ~90) or a single esmolol dose does not. A lower value makes ischaemia essentially unhealable; a higher one lets a barely-slowed heart heal.
     ISCHAEMIA_BUILD_TAU: 30,          // sec to build to 1.0 under imbalance=1
     ISCHAEMIA_HEAL_TAU:  60,          // sec to heal toward 0 under imbalance=-1 (heals slower than it builds)
-    ISCHAEMIA_CONTR_DROP: 0.20,       // contractility drops up to 20% at full ischaemia
+    /* v4.44: contractility drop at full STUN (state.ischaemiaStun, not
+       state.ischaemia - see STUN_TAU below). Was 0.20, which made the whole
+       haemodynamic consequence of a myocardial infarction a 15% dip in
+       contractility that the baroreflex then absorbed: MAP went 107 -> 98 at
+       t=74s and recovered to 104 by t=600, so the untreated patient's blood
+       pressure never fell. Measured sensitivity, with the drop applied
+       instantly as it was then: 0.20 -> BP 135/83, 0.35 -> 123/76,
+       0.50 -> 113/70, 0.70 -> 104/64, 0.90 -> 96/59.
+       Deepening this is safe rather than self-reinforcing: a bigger drop cuts
+       SBP proportionally more than DBP, so the demand/supply imbalance
+       actually FALLS as it deepens (1.31 at 0.20 down to 1.06 at 0.90). There
+       is no ischaemic spiral to run away with.
+
+       0.50 rather than deeper is a balance against treatment: the stunned
+       myocardium and the treatment's own negative inotropy/vasodilation
+       compound, and the supply term is proportional to DBP, so too deep a drop
+       leaves every demand-reducing plan in a low-output state its coronaries
+       cannot recover from. At 0.50 the untreated patient falls 149/92 -> 118/72
+       while a well-judged plan still lands at 89/55; at 0.62 the same plan sat
+       at 85/52 and a sevo-heavy one reached 54/33. */
+    ISCHAEMIA_CONTR_DROP: 0.50,
+    /* v4.44: seconds for contractile dysfunction to follow the ischaemia score.
+       ST depression is immediate; measurable contractile failure is not. A long
+       tau is what buys the scenario its two phases - roughly 90s of the
+       hypertensive demand picture the briefing promises (BP ~150/95, HR ~105,
+       ECG already changing), then a progressive fall as the myocardium stuns.
+       Also restores the deterioration the scenario had lost: `ischaemia` itself
+       saturated at 1.0 by t=144s and nothing moved for the remaining seven and
+       a half minutes, while the underlying imbalance went on climbing from 1.10
+       to 1.31 with nowhere to show it. */
+    ISCHAEMIA_STUN_TAU: 150,
     ISCHAEMIA_SCENARIO_AMPLIFIER: 1.6, // scenario-active multiplier on imbalance (models coronary disease)
 
     // Graded haemorrhage rates (mL/s)
@@ -5841,6 +5999,14 @@ const state = {
     // v3.79: directly drives ECG morphology (ST depression + T-wave
     // inversion) - no separate hysteresis label needed.
     ischaemia: 0,
+    /* v4.44: contractile dysfunction, a lagged follower of `ischaemia`.
+       The two were the same number until v4.44, which meant the stunned
+       myocardium arrived at the same instant as the ST depression and the
+       scenario never got to present the hypertensive demand picture its own
+       briefing describes. Splitting them gives the clinical sequence: the ECG
+       changes first and the pressure follows, minutes later. This - not
+       `ischaemia` - is what drives ISCHAEMIA_CONTR_DROP. */
+    ischaemiaStun: 0,
 
     // v3.77: pulmonary embolism V/Q-mismatch shunt (0..1).
     // Built rapidly while events.pulmEmbolism is on. Drives SpO2 ceiling
@@ -6864,9 +7030,14 @@ setInterval(() => {
        that makes the heart less tolerant). Without the flag, a healthy patient
        can tolerate moderate workload without ischaemia.
 
-       Hysteresis: events.ischaemiaActive is the BOOLEAN visual flag for the
-       ECG label. It turns on when score crosses LABEL_ON and off only when
-       it drops below LABEL_OFF - prevents flicker. */
+       v4.44: the comment that stood here described a hysteresis-gated boolean
+       (events.ischaemiaActive, CONFIG.ISCHAEMIA_LABEL_ON / LABEL_OFF) for an
+       ISCHAEMIA badge on the HR box. v3.79 deleted all three when it replaced
+       the badge with real ST/T-wave morphology; none of those identifiers has
+       existed in the code since. The score now drives the ECG directly.
+
+       v4.44 also splits the haemodynamic consequence out into
+       state.ischaemiaStun, a slow follower of this score - see below. */
     {
         const sbp = state.sys || 120;
         const dbp = state.dia || 80;
@@ -6903,6 +7074,16 @@ setInterval(() => {
             state.ischaemia -= state.ischaemia * healRate * dt;
         }
         state.ischaemia = clamp(state.ischaemia, 0, 1);
+        /* v4.44: contractile dysfunction lags the ECG. ST depression appears
+           within seconds of the imbalance; a stunned, failing myocardium takes
+           minutes. Tracking it separately is what lets the scenario open on the
+           hypertensive demand picture its briefing describes and then
+           decompensate, instead of blunting its own presentation from t=0.
+           Follows in BOTH directions, so a healed patient's pressure recovers
+           over the same timescale rather than snapping back. */
+        const stunBlend = 1 - Math.exp(-dt / CONFIG.ISCHAEMIA_STUN_TAU);
+        state.ischaemiaStun += (state.ischaemia - state.ischaemiaStun) * stunBlend;
+        state.ischaemiaStun = clamp(state.ischaemiaStun, 0, 1);
     }
 
     // v3.16: esmolol blocks the deviation of betaTone from rest baseline.
@@ -7200,7 +7381,7 @@ setInterval(() => {
         const pushDown = state.mac * hSens * CONFIG.CONT_SEVO_DROP    // v3.48: hSens for mac (pE already includes it)
                        + pE        * CONFIG.CONT_PROP_DROP
                        + overloadPushDown
-                       + state.ischaemia * CONFIG.ISCHAEMIA_CONTR_DROP; // v3.76: stunned myocardium
+                       + state.ischaemiaStun * CONFIG.ISCHAEMIA_CONTR_DROP; // v3.76 stunned myocardium; v4.44 reads the lagged stun, not the raw score
         p.contractility = saturate(
             1.0, CONFIG.CONT_FLOOR,
             state.profile.contractilityCeiling || CONFIG.CONT_CEILING,    // v3.48: per-profile inotropic reserve
@@ -9273,6 +9454,7 @@ const SCENARIOS = {
             // No active events
             state.events.ischaemia = false;
             state.ischaemia = 0;
+            state.ischaemiaStun = 0;   // v4.44
             state.events.pulmEmbolism = false;
             state.peShunt = 0;
             // FRC starts with room-air content (525 mL O2 at adult 70kg FRC).
@@ -10169,15 +10351,17 @@ const SCENARIOS = {
             'Identify the demand-supply imbalance driving this',
             'Reduce myocardial oxygen DEMAND (slow the heart, reduce SBP, deepen anaesthesia/analgesia)',
             'Consider raising DIASTOLIC pressure to improve coronary supply',
-            'Recognise that simply giving fluid or pressors without addressing demand will worsen things'
+            'Recognise that simply giving fluid or pressors without addressing demand will worsen things',
+            'Recognise the second phase: a falling cardiac output and blood pressure as the myocardium stuns, which in a hypertensive patient shows up as a drift towards normal rather than as frank hypotension'
         ],
         hints: [
             'Ischaemia = O2 demand > O2 supply. Demand is driven by HR x SBP (rate-pressure product); supply by diastolic pressure AND diastolic TIME - a slow heart spends more of each beat in diastole, when the coronaries fill. So slowing the heart cuts demand and improves supply at once, which is why rate control is the lever that actually resolves it',
             'First step: reduce demand. Deepen anaesthesia (more sevo) and increase opioid (remifentanil up, or fentanyl bolus)',
-            'If HR remains high, esmolol 25-50mg slow IV to slow the heart',
+            'If HR remains high, esmolol 25-50mg slow IV - and TITRATE: one bolus wears off in a few minutes while the surgical stimulus does not, so repeat it to a heart-rate target (aim under 80) rather than giving a single dose and moving on',
             'GTN can help if SBP is high but watch the diastolic - too much reduces coronary supply',
             'An alpha-pressor (metaraminol) can RAISE DBP and thus coronary perfusion, BUT also raises SBP/afterload, so use cautiously',
-            'A common mistake is to give fluid - this raises preload, increases wall tension, and worsens demand'
+            'A common mistake is to give fluid - this raises preload, increases wall tension, and worsens demand',
+            'Watch the trend, not the number: as the myocardium stuns, cardiac output and BP fall away from the hypertensive opening picture. A previously hypertensive patient drifting down towards "normal" is decompensating, not improving'
         ],
         setup() {
             setProfile('elderly');
@@ -10212,9 +10396,17 @@ const SCENARIOS = {
             // v4.29: was `pumps.remi.rate = 0.08` - pumps.remi is a number, so
             // that assignment was silently discarded and the scenario ran with
             // no infusion at all.
-            state.machine.pumps.remi = 0.08;
-            p.remiCp = 0.0027;
-            p.remiCe = 0.0027;
+            // v4.44: 0.08 -> 0.05 and the seeded Ce 0.0027 -> 0.0015. The
+            // briefing and setupBrief both promise "HR 105, BP 150/95", but the
+            // cover from the old settings held the opening pressure at 141/87
+            // and only crept toward 150/95 over ten minutes as the remi wore
+            // off - long after the scenario's opening phase. Lighter cover puts
+            // the promised numbers on the monitor by t=20s (153/94, HR 104),
+            // which is what "present but insufficient for the rising surgical
+            // stimulus" was always supposed to mean.
+            state.machine.pumps.remi = 0.05;
+            p.remiCp = 0.0015;
+            p.remiCe = 0.0015;
             // Mid-case fentanyl on board, partially worn off
             p.fentCp = 0.0010;
             p.fentCe = 0.0010;
@@ -10225,14 +10417,17 @@ const SCENARIOS = {
             // Sustained surgical stimulus. Set both nociception and
             // nociceptionTarget so the value doesn't decay. Tuned so the
             // effectiveStimulus (nociception minus analgesia cover) drives
-            // HR up to ~105 and BP up into the 150-170 systolic range -
-            // the textbook intraop ischaemia picture - without overshooting.
+            // HR up to ~105 and BP to ~150/90 - the textbook intraop ischaemia
+            // picture - without overshooting. (v4.44: the comment used to claim
+            // a 150-170 systolic range; the model never reached 140 with the
+            // old cover, let alone 170. It now opens at 149/92, HR 102.)
             state.nociception = 8;
             state.nociceptionTarget = 8;
             // Trigger the ischaemia event flag (amplifies demand-supply
             // imbalance in the integrator - models impaired coronary reserve).
             state.events.ischaemia = true;
             state.ischaemia = 0;
+            state.ischaemiaStun = 0;   // v4.44
             syncScenarioUI();
             log('=== SCENARIO: Intraoperative myocardial ischaemia ===');
             log(SCENARIOS.ischaemia.briefing);
@@ -10848,7 +11043,8 @@ function disableEvent(key) {
         case 'mh':               state.mhSeverity = 0; break;
         case 'last':             state.lastTimer = 0; break;
         case 'pulmEmbolism':     state.peShunt = 0; break;
-        case 'ischaemia':        state.ischaemia = 0; break;
+        case 'ischaemia':        state.ischaemia = 0;
+                                 state.ischaemiaStun = 0; break;   // v4.44
         case 'aspiration':
             state.aspirationSource = false;
             state.aspirationInjury = 0;
@@ -10953,6 +11149,7 @@ function resolveAllEvents() {
     state.aspirationSource = false; // v3.70
     state.aspirationReactivateTimer = 0;
     state.ischaemia = 0;           // v3.76
+    state.ischaemiaStun = 0;       // v4.44
     state.peShunt = 0;             // v3.77
     log("All events resolved");
 }
