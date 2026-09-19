@@ -9,7 +9,7 @@ Deployed to **synapse.hypnos.one** via GitHub Pages from `main`. **Pushing to
 
 ## The one structural fact
 
-**Everything is in `index.html`.** ~11,400 lines: styles, markup and the entire
+**Everything is in `index.html`.** ~13,200 lines: styles, markup and the entire
 simulator in a single inline `<script>`. No build step, no bundler, no
 dependencies, no framework. Open the file in a browser and it runs — with one
 exception, the Resources tab, below.
@@ -70,10 +70,17 @@ keys come from `tools/make-voucher-keys.js`. The `redeem` Edge Function itself
 was deployed via the Supabase dashboard's Edge Functions editor, not the CLI -
 see `supabase/README.md` for that path too.
 
-The tick is one long function, ordered: PK → bronchospasm → volume/preload →
-autonomic tone → drug pushes → event blocks → baroreflex → tone clamps →
-haemodynamics → ventilation → gas exchange → SpO₂ → etCO₂ → alarms. **Order
-matters a lot** — see the traps below.
+The tick is one long function, ordered: PK → **anaphylaxis envelopes** →
+bronchospasm → volume/preload → autonomic tone → drug pushes → event blocks →
+baroreflex → tone clamps → haemodynamics → ventilation → gas exchange → SpO₂ →
+etCO₂ → alarms. **Order matters a lot** — see the traps below.
+
+The anaphylaxis envelopes (v4.43) sit deliberately out of order, near the top
+rather than with the other event blocks, because everything that consumes the
+reaction — the bronchospasm hysteresis, the capillary leak, the autonomic
+targets, the SVR formula, the HR calculation — is downstream of that point.
+`state.anaphSeverity` is one 0..1 number all of them read, like `mhSeverity`.
+Only the bronchospasm co-trigger and release stayed with the event blocks.
 
 ## Testing
 
@@ -90,7 +97,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 45/45,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 58/58,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -119,10 +126,15 @@ about two seconds. Any code that *assigns* `alphaTone`/`betaTone`/
 `parasympTone`, or pushes them a little each tick, is fighting a relaxation that
 wins. A per-tick push of `k` settles only `k/0.05` above target.
 
-This independently broke three things: the aneurysm scenario's "massive
+This independently broke four things: the aneurysm scenario's "massive
 sympathetic surge" (gone in ~2 s), MH's tachycardia (a 0.04/tick push produced
-~2 bpm), and the esmolol curve. **Sustained states must drive the targets** —
-see `sahSurge`, `MH_BETA_DRIVE` and the beta-blockade term in `betaTarget`.
+~2 bpm), the esmolol curve, and — found in v4.43, having survived the v4.29 sweep
+— anaphylaxis's catecholamine surge, a 0.03/tick push on both `alphaTone` and
+`betaTone` that delivered +0.046 of tone, i.e. +2.2 bpm. That one had a second
+sting: because `alphaTone` raises SVR, the reaction's opening act *lifted* MAP by
+5.5 mmHg, so the patient looked better as the anaphylaxis began.
+**Sustained states must drive the targets** — see `sahSurge`, `MH_BETA_DRIVE`,
+`ANAPHYLAXIS_SYMP_BETA` and the beta-blockade term in `betaTarget`.
 
 The subtler failure is a push that is *too strong*, not too weak: it settles at
 `REST + k/0.05`, i.e. **20× the per-tick step**, and silently saturates against
@@ -212,10 +224,24 @@ thresholds for anything where the resting value is not near an end.
 - The Respiratory drive gauge (`'floor'`) reads danger for most of every case: a
   paralysed ventilated patient legitimately has no drive. Literally true,
   arguably noise. Left as-is in v4.34.
-- Anaphylaxis only pushes SVR tone to ~0.72 of baseline, so it reads amber rather
-  than red on its own; it takes a second vasodilator (tourniquet release, CO₂
-  embolism) to reach the danger threshold. Same family as the aneurysm item — the
-  vasodilatory pushdowns are modest, not the gauge.
+- Repeated adrenaline boluses overshoot: five 100mcg doses in the anaphylaxis
+  scenario peak MAP at 180 with `alphaTone` and `betaTone` pinned at their 1.4
+  clamps for minutes. This is adrenaline's own calibration, not the scenario's —
+  100mcg IV in a stable maintenance patient takes MAP 66 → 152 — so retuning it
+  would move every pressor in the sim. Same family as the aneurysm and
+  salbutamol items.
+- `anaphBrewing` shares the anaphylaxis event, so v4.43's deeper reaction applies
+  there too, but its baseline is already MAP 53 (sevo 1.0 MAC + remifentanil
+  maintenance) and it now bottoms out near 32 rather than 38. The reaction behaves
+  identically in both scenarios; what differs is that scenario's starting
+  pressure, which its own briefing calls "currently stable". A content decision:
+  either lift its baseline or accept it as the harder of the two.
+- **FiO₂ cannot improve SpO₂ anywhere in the model.** `spo2Ceiling` is built from
+  the shunt terms only, and FiO₂ enters the SpO₂ block solely through the
+  `effectiveAlveolarFiO2 >= SPO2_DESAT_THRESHOLD_FIO2` (0.13) branch — i.e. only
+  under near-apnoea. Verified: FiO₂ 1.0 and FiO₂ 0.21 give identical SpO₂ (90.1)
+  in the bronchospasm scenario. Defensible as a simplification, but it silently
+  removes the first lever a trainee reaches for in any desaturation.
 - Salbutamol (v4.38) raises MAP ~+15-18 at 250mcg where real salbutamol is
   roughly BP-neutral. `betaTone` drives contractility as well as HR, so creating
   the tachycardia unavoidably adds inotropy; the beta2 vasodilation term

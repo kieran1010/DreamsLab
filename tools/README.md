@@ -157,6 +157,26 @@ partial but not a dense block (sugammadex reverses dense), a dex infusion via
 `setInf()` causes bradycardia + sedation, and magnesium gives modest
 bronchodilation weaker than salbutamol.
 
+| F18 | anaphylaxis barely presents, and treating it made it worse | 0/13 |
+
+F18 is the v4.43 finding, and the largest single-scenario one so far. Measured
+against an identical run with the event forced off, the whole untreated reaction
+was worth MAP -15.5, HR +5.5 and SpO2 -3.3 at its worst, then cleared itself by
+145s and drifted up to MAP 107 — doing nothing was the winning strategy. Five
+causes: a trap #1 per-tick push for the "sympathetic surge" (worth +2.2 bpm, and
+because `alphaTone` raises SVR it *lifted* MAP by 5.5); a vasoplegia depth cut in
+v3.75 and never re-measured after the model's baseline rose ~25 mmHg; no
+capillary leak at all, while the scenario's own objectives taught volume
+resuscitation; an adrenaline hook that advanced `anaphylaxisTimer` forward into
+peak vasoplegia, so 100mcg at t=30s dropped MAP 86 → 70 within five seconds; and
+a co-triggered bronchospasm reaching a quarter of the model's own severity that
+then never resolved. The 13 checks pin each of those, plus the monotonicity of
+the new adrenaline dose-response, that fluid given is *retained* (a floor-based
+leak drained it straight back out), that the surge leaves headroom below
+`BETA_CLAMP`, and an oscillation guard — `ANAPHYLAXIS_BRONCH_PROB` is 999, so
+without a one-shot latch the new release path and the co-trigger flip the event
+every tick until the heap dies.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed
