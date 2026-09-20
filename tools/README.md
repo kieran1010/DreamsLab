@@ -337,6 +337,27 @@ with `if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }` and
 short-circuits the spontaneous branch. The LAST scenario is live on that path.
 See CLAUDE.md's known items.
 
+| F26 | the UI showed version 4.15 for thirty-seven releases | 0/5 |
+
+F26 is the odd one out — not physiology, but the same failure shape. The About
+modal carried a hardcoded `<div class="version">Version 4.15</div>` from v4.15
+to v4.52, so anyone checking which build they had was told the wrong number.
+It had already gone stale once and been hand-corrected (v3.78: *"Also corrects
+the stale About-modal version"*), which is the tell: a literal buried in markup
+that nobody passes on the way to a physiology change rots again however often
+you fix it.
+
+v4.53 made it `APP_VERSION` in a `[VERSION]` block, stamped into the modal at
+startup. The probe anchors that constant to **the newest changelog banner** —
+the right anchor because bumping it is the first convention in CLAUDE.md, so
+it is the thing an author always touches. A forgotten constant now fails the
+suite instead of shipping quietly.
+
+Both failure modes were negative-tested and fail independently: drifting
+`APP_VERSION` trips check 2 only; re-adding a literal to the About markup trips
+check 4 only. `APP_VERSION` is published through `PUBLISH` in `harness.js` so
+the probe reads the runtime value rather than re-parsing the file for it.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

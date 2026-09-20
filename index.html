@@ -51,6 +51,53 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.53  ("The About box finally knows what version it is")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  The About modal had carried a hardcoded
+
+      <div class="version">Version 4.15</div>
+
+  since v4.15. Thirty-seven releases. Anyone opening About - a teacher checking
+  which build they had saved offline, someone reporting a bug - was told the
+  wrong number.
+
+  The part worth noticing is that this had already happened once and been fixed
+  by hand: v3.78's changelog says "Also corrects the stale About-modal version".
+  A literal buried in markup, which nobody passes on the way to a physiology
+  change, rots again however many times it is corrected. Bumping it to 4.53 and
+  moving on would just restart the clock.
+
+  So there is now one place it can be wrong:
+
+    - `const APP_VERSION` in a new [VERSION] block just above [CONFIG].
+    - The modal's div carries `id="about-version"` and the bare word "Version"
+      as a fallback; startup stamps it with `'Version ' + APP_VERSION`.
+    - Probe F26 asserts APP_VERSION equals the version in the newest changelog
+      banner at the top of this file, that the modal renders from it, and that
+      no hardcoded `Version N.NN` survives in the About markup.
+
+  The changelog banner is the right anchor because bumping it is the first
+  convention in CLAUDE.md - it is the thing an author always touches. So a
+  forgotten constant now fails the suite instead of shipping quietly. Both
+  failure modes were negative-tested: drifting APP_VERSION fails check 2 only,
+  and re-adding a literal to the markup fails check 4 only.
+
+  `APP_VERSION` is also published through the harness (added to PUBLISH in
+  tools/harness.js) so the probe can read the runtime value rather than
+  re-parsing the file for it.
+
+  No physiology, no styling. The div gains an id and its text is set at init;
+  the CSS rule `#about-modal .version` is untouched.
+
+  Tests: probes 138/138 across 25 findings (new F26, 5 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.52  ("Emergence: somebody has to take the tube out")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -5170,7 +5217,9 @@ input[type=range] {
     <div id="about-modal">
         <h2>Synapse</h2>
         <div class="author">An anaesthesia teaching simulator by Dr Kieran Gillick</div>
-        <div class="version">Version 4.15</div>
+        <!-- v4.52: filled from APP_VERSION at startup. The text here is only a
+             fallback for the case where the script fails before init. -->
+        <div class="version" id="about-version">Version</div>
 
         <h3>Clinical disclaimer</h3>
         <div class="disclaimer">
@@ -5886,6 +5935,29 @@ window.addEventListener('unhandledrejection', (e) => {
     const msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
     if (typeof log === 'function') log(`PROMISE ERROR: ${msg.slice(0, 120)}`);
 });
+/* =============================================================================
+   [VERSION]
+   -----------------------------------------------------------------------------
+   v4.52: the single source of truth for the version the UI shows.
+
+   The About modal carried a hardcoded "Version 4.15" from v4.15 until v4.52 -
+   thirty-seven releases of drift. It had gone stale once before and been
+   corrected by hand in v3.78 ("also corrects the stale About-modal version"),
+   which is the tell: a literal buried in markup that nobody passes on the way
+   to a physiology change WILL rot again.
+
+   So it is a constant now, read into the modal at startup, and probe F26
+   asserts it matches the newest changelog block at the top of this file. The
+   changelog banner is the thing an author always touches when bumping a
+   version (it is the first convention in CLAUDE.md), so tying the check to it
+   means the test fails the moment the two disagree rather than silently
+   shipping a wrong number for three years.
+
+   When you bump a version: edit the changelog banner and this constant. F26
+   fails if you forget the second one.
+   ============================================================================= */
+const APP_VERSION = '4.53';
+
 /* =============================================================================
    [CONFIG]  -- Tunable constants
    ============================================================================= */
@@ -14191,6 +14263,12 @@ entInit();
 {
     const btn = document.getElementById('brand-silence-btn');
     if (btn) btn.classList.add('audio-on');
+}
+// v4.52: stamp the About modal from APP_VERSION, so the displayed version has
+// exactly one place it can be wrong. See the [VERSION] block.
+{
+    const el = document.getElementById('about-version');
+    if (el) el.innerText = 'Version ' + APP_VERSION;
 }
 // v4.31: offline-copy notice. A copy saved via the Start-here Download link
 // (or "Save page as") runs from file:// - flag it and point at the live site,
