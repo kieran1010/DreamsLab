@@ -105,15 +105,16 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 133/133,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 138/138,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
 Two things to know before extending the harness:
 
 - Top-level `const`/`let` in `index.html` are **not** properties of the vm
-  global. To reach something new, add it to the `EPILOGUE` list in
-  `harness.js`.
+  global. To reach something new, add it to the `PUBLISH` list in
+  `harness.js` (which builds the `EPILOGUE`). `APP_VERSION` was added this way
+  in v4.53.
 - `requestAnimationFrame` is a no-op, so `animate()` never runs. **Nothing in
   the render path is covered** — verify waveform and canvas changes in a
   browser.
@@ -228,7 +229,12 @@ thresholds for anything where the resting value is not near an end.
 
 - **Changelog.** Each version gets an HTML comment block at the top of
   `index.html`, newest first: version, a short quoted title, then what changed
-  and why. Bump the version when you change behaviour.
+  and why. Bump the version when you change behaviour — **and bump
+  `APP_VERSION` in the `[VERSION]` block with it.** That constant is what the
+  About modal displays; probe F26 asserts it equals the newest changelog
+  banner, so forgetting it fails the suite. (It is a constant because the
+  modal's hardcoded literal sat at "Version 4.15" for thirty-seven releases,
+  having already been hand-corrected once in v3.78.)
 - **Inline comments carry the reasoning.** The codebase explains *why* a
   constant has its value and what was tried before — `// v3.37: 0.59->0.97
   (revert v3.36); calibrated for resting MAP 90`. Match that. When changing a

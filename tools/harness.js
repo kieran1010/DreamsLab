@@ -288,6 +288,7 @@ function boot(opts = {}) {
        adding a binding here used to silently break every older revision. A
        missing name is now simply absent from `dl`. */
     const PUBLISH = [
+        'APP_VERSION',
         'SCENARIOS', 'PHYS_GROUPS', 'physResolve', 'state', 'CONFIG', 'PROFILES', 'PK', 'drugDb',
         'loadScenario', 'scenarioReset', 'giveBolus', 'setInf', 'setVentParam', 'setVentMode',
         'setAirway', 'setNoci', 'toggleEvent', 'setBleed', 'setRhythm', 'calcMAP',

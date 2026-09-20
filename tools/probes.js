@@ -17,7 +17,7 @@
    ============================================================================= */
 'use strict';
 
-const { boot, resolve, give, gaugeSpecs } = require('./harness');
+const { boot, resolve, give, gaugeSpecs, HTML_PATH } = require('./harness');
 
 /* -----------------------------------------------------------------------------
    tiny check framework
@@ -2116,6 +2116,76 @@ probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
         'the scenario runs clean',
         `${un.errors.length + ex120.errors.length} tick errors, ${ex120.undone} undelivered actions`,
         'zero of each');
+});
+
+/* =============================================================================
+   F26  the UI showed version 4.15 for thirty-seven releases
+   -----------------------------------------------------------------------------
+   The About modal carried a hardcoded `<div class="version">Version 4.15</div>`
+   from v4.15 all the way to v4.52. Anyone who opened About - a teacher checking
+   which build they had saved, someone reporting a bug - was told the wrong
+   number for about three years of releases.
+
+   The interesting part is that it had already gone stale once and been fixed by
+   hand: v3.78's changelog says "Also corrects the stale About-modal version". A
+   literal buried in markup, which nobody passes on the way to a physiology
+   change, will rot again however many times it is corrected. So v4.52 made it a
+   constant (APP_VERSION) read into the modal at startup, and this probe ties
+   that constant to the changelog banner at the top of index.html.
+
+   The changelog banner is the right anchor because bumping it is the first
+   convention in CLAUDE.md - it is the thing an author always touches. Tying the
+   check to it means a forgotten APP_VERSION fails the suite immediately rather
+   than shipping silently.
+   ========================================================================== */
+probe('F26', 'The version the UI shows is the version that shipped', () => {
+
+    const html = require('fs').readFileSync(HTML_PATH, 'utf8');
+    const sim = boot();
+    const dl = sim.dl;
+
+    /* 1. The newest changelog banner is the source of truth for "what version
+          is this". Find the first one in the file - the convention is newest
+          first. */
+    const banner = html.match(/DREAMS LAB\s+v(\d+\.\d+)/);
+    note(`newest changelog banner: v${banner ? banner[1] : '(none found)'}; ` +
+         `APP_VERSION: ${dl.APP_VERSION}`);
+    expect(banner !== null,
+        'the changelog banner convention is intact',
+        `first "DREAMS LAB vN.NN" found: ${banner ? banner[1] : 'none'}`,
+        'a banner exists to anchor the version to');
+
+    /* 2. THE FINDING. The constant must match it. */
+    expect(dl.APP_VERSION === banner[1],
+        'APP_VERSION matches the newest changelog entry',
+        `APP_VERSION "${dl.APP_VERSION}" vs changelog "${banner[1]}"`,
+        'identical - if you bumped the changelog, bump the constant');
+
+    /* 3. And the modal must actually be stamped from it at startup, not carry
+          its own literal. A fallback string in the markup is fine; a version
+          number in the markup is the bug coming back. */
+    const el = sim.context.document.getElementById('about-version');
+    note(`About modal renders: "${el ? el.innerText : '(element missing)'}"`);
+    expect(el && el.innerText === 'Version ' + dl.APP_VERSION,
+        'the About modal is stamped from APP_VERSION at startup',
+        `modal shows "${el ? el.innerText : '(element missing)'}"`,
+        `"Version ${dl.APP_VERSION}"`);
+
+    /* 4. No hardcoded version number may survive in the About markup - that is
+          exactly what rotted twice. Checked against the markup only, since the
+          changelog legitimately contains dozens of version strings. */
+    const aboutBlock = html.slice(html.indexOf('<div id="about-modal">'),
+                                  html.indexOf('</div>', html.indexOf('<h3>Clinical disclaimer</h3>')));
+    const hardcoded = aboutBlock.match(/Version\s+\d+\.\d+/);
+    expect(hardcoded === null,
+        'the About markup carries no hardcoded version number',
+        `found: ${hardcoded ? '"' + hardcoded[0] + '"' : 'none'}`,
+        'none - it must come from APP_VERSION, which is how it went stale twice');
+
+    expect(sim.errors.length === 0,
+        'the page boots clean',
+        `${sim.errors.length} errors`,
+        'zero');
 });
 
 /* -----------------------------------------------------------------------------
