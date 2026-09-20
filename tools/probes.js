@@ -1328,6 +1328,151 @@ probe('F20', 'Post-induction hypotension actually sits at MAP 55', () => {
         'zero of each');
 });
 
+/* =============================================================================
+   F21  haemorrhage bled at a constant rate, whatever the pressure
+   -----------------------------------------------------------------------------
+   The September 2026 six-scenario audit. Two faults, one root cause.
+
+   The tick drained `p.bleedRate * dt` per tick regardless of the patient's
+   circulation, so a severe bleed was a fixed 25 mL/s tap. Consequences:
+
+     - The scenario emptied the patient to the 0.5 L centralVolume floor by
+       t=130 and then pinned MAP at 21-24 for the remaining 28 minutes.
+     - More importantly it made objective 2 ("recognise the limits of pressors
+       without volume; avoid masking under-resuscitation") and hints 4-5
+       unteachable. Raising the pressure with fluid and metaraminol cost the
+       patient nothing, because the hole leaked at the same rate whether MAP
+       was 25 or 95. Permissive hypotension is the whole point of the scenario
+       and the model could not express it.
+
+   Fixed by scaling the rate with MAP about BLEED_MAP_REF (75), clamped to
+   BLEED_MAP_MIN_FRAC..BLEED_MAP_MAX_FRAC. A named severity is a rate AT A
+   GIVEN PRESSURE, not a constant.
+
+   Separately, the briefing and setupBrief both promise "MAP 65" and the
+   scenario did not open there: MAP read 61 for one tick, climbed to 74.7 by
+   t=5 and only fell back through 65 at t=40 - the same structural-trap-1
+   startup transient that v4.47 fixed in post-induction hypotension. Here the
+   nociception is correct (the surgeon really is opening), so the fix seeds
+   alphaTone/betaTone at their settled values and drops centralVolume to the
+   fraction that then reads 65.
+   ========================================================================== */
+probe('F21', 'Haemorrhage scales with perfusion pressure, and opens at MAP 65', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('haemorrhage');
+        const specs = gaugeSpecs(dl);
+        const co = specs.find(g => g.key === 'co').spec;
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = []; let lost = 0;
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            lost += dl.state.patient.effectiveBleedRate;
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr, co: co.get(),
+                        vol: dl.state.patient.centralVolume, lost });
+        }
+        return { rows, at: t => rows[t - 1], lost, errors: sim.errors,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const FLU   = (t, d) => ({ t, do: dl => give(dl, 'flu', d) });
+    const METAR = (t, d) => ({ t, do: dl => give(dl, 'metar', d) });
+    /* Clicking the active severity toggles bleeding off, as the surgeon
+       controlling the source does in the UI. */
+    const SOURCE = t => ({ t, do: dl => { if (dl.state.bleedSeverity) dl.setBleed(dl.state.bleedSeverity); } });
+
+    const un = run(null, 600);
+
+    /* 1. The briefed opening pressure is a STATE, not a transient on the way
+          up to something else. Both briefing and setupBrief say MAP 65. */
+    const open = [1, 5, 10].map(t => un.at(t).map);
+    note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=5 ${un.at(5).map.toFixed(0)}, ` +
+         `t=10 ${un.at(10).map.toFixed(0)}, t=60 ${un.at(60).map.toFixed(0)}, ` +
+         `t=120 ${un.at(120).map.toFixed(0)}, t=300 ${un.at(300).map.toFixed(0)}`);
+    expect(Math.abs(open[0] - 65) <= 3,
+        'the scenario opens at the briefed MAP 65',
+        `MAP ${open[0].toFixed(1)} at t=1`,
+        'within 3 of 65 (it used to read 61 then climb to 74.7)');
+
+    /* 2. And it must fall from there, not rise. The old startup transient
+          showed a trainee an exsanguinating patient who appeared to improve
+          for the first half-minute. */
+    expect(open[1] < open[0] && open[2] < open[1],
+        'pressure falls from the opening value rather than climbing',
+        `MAP t=1 ${open[0].toFixed(1)} -> t=5 ${open[1].toFixed(1)} -> t=10 ${open[2].toFixed(1)}`,
+        'monotonically down (it used to rise to 74.7 by t=5)');
+
+    /* 3. The untreated bleed is still lethal in the direction the setupBrief
+          promises ("expect further blood loss until source is controlled"). */
+    expect(un.at(300).map < 35,
+        'an uncontrolled severe bleed produces profound shock',
+        `MAP ${un.at(300).map.toFixed(0)} and CO ${un.at(300).co.toFixed(1)} L/min at t=300`,
+        'MAP under 35');
+
+    /* 4. THE FINDING. Blood loss must depend on the pressure the trainee
+          maintains. Three plans, identical source control at t=180, differing
+          only in how hard the pressure was pushed beforehand. */
+    const permissive = run([FLU(20, 1.0), SOURCE(180)], 300);
+    const moderate   = run([FLU(20, 1.0), FLU(80, 1.0), SOURCE(180)], 300);
+    const aggressive = run([FLU(20, 1.0), FLU(50, 1.0), FLU(80, 1.0), METAR(60, 1),
+                            FLU(110, 1.0), METAR(150, 1), SOURCE(180)], 300);
+    const meanMap = r => r.rows.reduce((a, b) => a + b.map, 0) / r.rows.length;
+    note(`blood lost by t=300: permissive ${permissive.lost.toFixed(2)} L ` +
+         `(mean MAP ${meanMap(permissive).toFixed(0)}), moderate ${moderate.lost.toFixed(2)} L ` +
+         `(${meanMap(moderate).toFixed(0)}), aggressive ${aggressive.lost.toFixed(2)} L ` +
+         `(${meanMap(aggressive).toFixed(0)})`);
+    expect(permissive.lost < moderate.lost && moderate.lost < aggressive.lost,
+        'the harder the pressure is pushed, the more blood is lost',
+        `${permissive.lost.toFixed(2)} < ${moderate.lost.toFixed(2)} < ${aggressive.lost.toFixed(2)} L`,
+        'strictly increasing - objective 2 and hints 4-5 depend on this');
+    expect(aggressive.lost - permissive.lost > 0.75,
+        'the cost of over-resuscitation is large enough to teach',
+        `aggressive loses ${(aggressive.lost - permissive.lost).toFixed(2)} L more than permissive`,
+        'more than 0.75 L (it used to be exactly 0.00 - a constant rate)');
+
+    /* 5. The flip side, and the reason permissive hypotension is a strategy
+          rather than an end in itself: with the source NOT controlled,
+          aggressive resuscitation buys a good-looking pressure and then loses
+          it, because the volume went out of the hole. */
+    const aggrNoSource = run([FLU(20, 1.0), FLU(50, 1.0), FLU(80, 1.0), METAR(60, 1),
+                              FLU(110, 1.0), METAR(150, 1), FLU(140, 1.0)], 600);
+    note(`aggressive WITHOUT source control: MAP ${aggrNoSource.at(180).map.toFixed(0)} at t=180, ` +
+         `${aggrNoSource.at(300).map.toFixed(0)} at t=300, ${aggrNoSource.at(600).map.toFixed(0)} at t=600`);
+    expect(aggrNoSource.at(180).map > 70 && aggrNoSource.at(600).map < 40,
+        'resuscitating hard into an uncontrolled bleed looks good, then fails',
+        `MAP ${aggrNoSource.at(180).map.toFixed(0)} at t=180 -> ${aggrNoSource.at(600).map.toFixed(0)} at t=600`,
+        'above 70 early, below 40 by t=600');
+
+    /* 6. Hint 5 and objective 4: once the source is controlled, resuscitation
+          works and holds. This is the scenario's win condition. */
+    const good = run([SOURCE(60), FLU(20, 1.0), FLU(80, 1.0)], 600);
+    note(`early source control + 2 L: MAP ${good.at(180).map.toFixed(0)} at t=180, ` +
+         `${good.at(600).map.toFixed(0)} at t=600, volume ${good.at(600).vol.toFixed(2)} L`);
+    expect(good.at(600).map > 70 && good.at(600).vol > 2.5,
+        'early source control plus volume is a recoverable, held result',
+        `MAP ${good.at(600).map.toFixed(0)} and ${good.at(600).vol.toFixed(2)} L circulating at t=600`,
+        'MAP over 70, volume over 2.5 L');
+
+    /* 7. Hint 1 ("volume comes first") must be true, and its converse: stopping
+          the leak on an empty patient does nothing without filling them. */
+    const sourceOnly = run([SOURCE(400)], 600);
+    const fluidOnly  = run([FLU(400, 1.0), FLU(430, 1.0)], 600);
+    const both       = run([SOURCE(400), FLU(405, 1.0), FLU(435, 1.0)], 600);
+    note(`late rescue at t=400 -> MAP at t=600: source only ${sourceOnly.at(600).map.toFixed(0)}, ` +
+         `fluid only ${fluidOnly.at(600).map.toFixed(0)}, both ${both.at(600).map.toFixed(0)}`);
+    expect(both.at(600).map > 60 && sourceOnly.at(600).map < 30 && fluidOnly.at(600).map < 40,
+        'neither source control nor volume alone rescues - the pair does',
+        `source only ${sourceOnly.at(600).map.toFixed(0)}, fluid only ${fluidOnly.at(600).map.toFixed(0)}, ` +
+        `both ${both.at(600).map.toFixed(0)}`,
+        'only the combination exceeds MAP 60');
+
+    expect(un.errors.length === 0 && un.undone === 0 && aggressive.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length} tick errors, ${un.undone + aggressive.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

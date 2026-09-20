@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 78/78,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 87/87,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -219,6 +219,25 @@ thresholds for anything where the resting value is not near an end.
 
 ## Known open items
 
+- **The model has no perfusion-driven arrest pathway.** An exsanguinated
+  patient asymptotes at MAP ~22 with a cardiac output of ~1.1 L/min and stays
+  there indefinitely; the haemorrhage scenario runs its full 30 minutes without
+  the patient ever arresting. Only two pathways move `state.rhythm` on their
+  own - the LAST progression (sinus -> VT pulseless -> VF) and the hypoxic
+  arrest at `HYPOXIA_ARREST_SPO2` - and neither reads perfusion. The second
+  cannot rescue the first here, because of the SpO2 item below: at MAP 22 and
+  a cardiac output of 1.1 L/min, SpO2 is still 99, so the hypoxia branch never
+  arms. Surfaced by the v4.48 haemorrhage audit; left as-is deliberately, since
+  an arrest pathway is a sizeable piece of physiology and every other teaching
+  point in that scenario lands well before the patient would arrest.
+- **SpO2 is blind to circulatory collapse.** It reads 99 for the whole
+  haemorrhage scenario, including 30 minutes at a cardiac output of 1.0-1.3
+  L/min. `spo2Ceiling` is built from the shunt terms and the alveolar oxygen
+  path only - nothing in the SpO2 block reads cardiac output, circulating
+  volume or perfusion. Clinically a pulse oximeter on a patient at MAP 22 would
+  lose its trace or read low; here it stays reassuring. Same family as the FiO2
+  item below: a lever a trainee watches that the model does not connect.
+
 - The sepsis scenario's patient wakes (consciousness → 86) because nothing
   maintains anaesthesia and no objective tells the trainee to start it.
 - Emergence and sepsis fire spontaneous bronchospasm their briefings never
@@ -261,6 +280,14 @@ thresholds for anything where the resting value is not near an end.
   MAP ~91 from a 149/92 opening). Objective 1 names cardiogenic shock as the severe
   presentation, so v4.44 narrowed that gap without closing it.
   `ISCHAEMIA_CONTR_DROP` is the single constant that sets the depth.
+- The haemorrhage bleed rate scales with MAP (v4.48) between
+  `BLEED_MAP_MIN_FRAC` and `BLEED_MAP_MAX_FRAC` of nominal about
+  `BLEED_MAP_REF` 75. The floor means a bleed never quite stops, so an
+  untreated severe bleed still reaches the 0.5 L `centralVolume` floor - at
+  t~190 rather than the old t=130. That floor is what the no-arrest item above
+  is standing in for; the bleed itself is no longer inert, since late fluid,
+  late source control and the two together all give measurably different
+  outcomes from it.
 - Salbutamol (v4.38) raises MAP ~+15-18 at 250mcg where real salbutamol is
   roughly BP-neutral. `betaTone` drives contractility as well as HR, so creating
   the tachycardia unavoidably adds inotropy; the beta2 vasodilation term
