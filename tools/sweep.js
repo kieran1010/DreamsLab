@@ -190,8 +190,14 @@ const TREATMENTS = {
         { t: 30,  label: 'Sevoflurane off',   do: dl => V(dl, 'sevo', 0) },
         { t: 32,  label: 'Remifentanil off',  do: dl => dl.setInf('remi', 0) },
         { t: 35,  label: 'Sugammadex 200mg',  do: dl => give(dl, 'sug', 200) },
-        { t: 120, label: 'Extubate to mask',  do: dl => dl.setAirway('mask') },
-        { t: 121, label: 'Vent to Manual',    do: dl => dl.setVentMode('MANUAL') },
+        /* v4.56: 120/121 -> 60/61. The remifentanil seed was 2.8x the level
+           its own pump sustains, so the patient used to wake slowly and the
+           spasm fired at t=292; extubating at 120 comfortably beat it. With
+           the seed corrected the wake is faster and the spasm fires at t=91,
+           so a plan that extubates at 120 arrives after the hazard it is
+           meant to avoid. Extubating at 60 prevents it as before. */
+        { t: 60,  label: 'Extubate to mask',  do: dl => dl.setAirway('mask') },
+        { t: 61,  label: 'Vent to Manual',    do: dl => dl.setVentMode('MANUAL') },
     ],
     tiva: [],
     aneurysm: [

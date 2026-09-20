@@ -51,6 +51,76 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.56  ("The stable scenarios were not stable")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Every scenario that seeds a remifentanil effect-site level opened 2-3x above
+  what its own pump sustains, then lightened over ten minutes as the seed washed
+  out to the real steady state. Ten scenarios did this.
+
+  The source is a reference line in the [SCENARIOS] header comment, copied into
+  each setup in turn: "Remi 0.15 mcg/kg/min steady ~ remiCe 0.005". It is a
+  guess, and it is 2.3x too high. The PK block gives the true value in closed
+  form -- the tick adds (mgPerMin / (vd * wt * vdScale)) per minute and removes
+  Cp * k10 per minute, so
+
+      remiCe_ss = rate / (70 * vdScale)        rate in mcg/kg/min
+      propCe_ss = rate / (3.6 * vdScale)       rate in mg/kg/hr
+
+  -- both independent of weight, because mgPerMin and effVd both scale with it.
+  Measured against the sandbox, both formulae land on the fifth decimal.
+
+  What it cost. `maintenance` and `tiva` exist to be stable reference cases a
+  trainee can compare an emergency against. Untreated, with no user action at
+  all, maintenance ran analgesiaCover 4.2 -> 2.0, effectiveStimulus 0.8 -> 3.0
+  and MAP 62 -> 84 -> 89 over ten minutes; tiva ran MAP 68 -> 89. A 22-27 mmHg
+  climb in a scenario whose own hint says "this is a stable maintenance state -
+  no emergency to fix" is a bigger excursion than several of the actual
+  pathologies produce, and it sat underneath every attempt to measure when a
+  scenario starts to deteriorate. Both are now flat to within 1 mmHg for
+  fifteen minutes.
+
+  Corrected seeds (Cp and Ce together, all at the pump's own steady state):
+
+    maintenance, anaphBrewing, vagal, mh   remi 0.15  0.005  -> 0.00214
+    asthma, tiva                           remi 0.2   0.006  -> 0.00286
+    bronchospasm, emergence                remi 0.05  0.002  -> 0.00071
+    ischaemia (elderly, vdScale 0.8)       remi 0.05  0.0015 -> 0.00089
+    pulmEmbolism                           remi 0.08  0.0027 -> 0.00114
+    bronchospasm, tiva                     prop 8     2.5    -> 2.22
+
+  Scenarios that seed a drug with NO pump running are untouched: propCe 1.5 in
+  anaphylaxis, aspiration and haemorrhage, propCe 2.5 in sepsis and fentCe
+  everywhere are induction boluses that are supposed to be decaying.
+
+  Knock-on, and the one behaviour change a user will see. `emergence` now runs
+  on a faster clock: with the correct opioid burden the patient wakes sooner and
+  the post-extubation bronchospasm fires at t=91 rather than t=292. The v4.52
+  finding is unchanged -- extubating prevents it outright, opioid only delays it
+  (t=91 -> 92 -> 93 as remi goes up) -- but the window to act is now about 90
+  seconds rather than five minutes. Probe F25 extubated at 120/180/240, all of
+  which now land AFTER the spasm and so tested nothing; it extubates at 50/70/90
+  instead, and its note reports the measured timings rather than asserting
+  "never, never, never" in a string. sweep.js's emergence plan moves 120 -> 60
+  for the same reason. All ten F25 checks pass on merit: no spasm at any of the
+  three timings, SpO2 min 99, spontaneous Vt 372, etCO2 peaking 80 and settling
+  to 54.
+
+  Side effect on a known open item: anaphBrewing's baseline was MAP 53, which
+  the item called "either lift its baseline or accept it as the harder of the
+  two". Correcting its remi seed lifts it to MAP 71 on its own, so the reaction
+  now starts from a plausible maintenance pressure. Nadir 33 (was 32).
+
+  Baselines shifted by this change, measured at t=10s untreated:
+    maintenance  62 -> 79    tiva 68 -> 89    asthma 76 -> 92
+    bronchospasm 77 -> 90    vagal 46 -> 50   pulmEmbolism 43 -> 52
+    anaphBrewing 53 -> 71    ischaemia 115 -> 119
+  vagal moves TOWARD its own setupBrief, which promises "MAP to ~50".
+
+  probes 158/158, scan 0 BUG-level findings, 0 runtime errors.
+
+==================================================================================
   DREAMS LAB  v4.55  ("The monitor finally notices there is no circulation")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6177,7 +6247,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.55';
+const APP_VERSION = '4.56';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -10833,10 +10903,29 @@ function triggerAwareness(kind) {
    Cp >> Ce (still equilibrating). PK kinetics will continue from these
    values normally.
 
-   Steady-state Cp/Ce reference values (mcg/mL) for typical clinical use:
+   Steady-state Cp/Ce reference values (mcg/mL) for typical clinical use.
+   v4.56: these are now DERIVED from the PK block, not guessed. For an infusion
+   the tick adds (mgPerMin / (vd * wt * vdScale)) per minute and eliminates
+   Cp * k10 per minute, so the steady state is
+
+       remiCe_ss = rate / (70 * vdScale)          rate in mcg/kg/min
+       propCe_ss = rate / (3.6 * vdScale)         rate in mg/kg/hr
+
+   -- both independent of weight, since mgPerMin and effVd both scale with it.
+
+   The old line here read "Remi 0.15 mcg/kg/min steady ~ remiCe 0.005". The true
+   value is 0.00214, so every scenario that copied it opened 2.3x over-opioided
+   and then lightened as the seed washed out to what the pump actually sustains.
+   Ten scenarios did. In `maintenance`, which exists to be stable, that showed up
+   as analgesiaCover 4.2 -> 2.0 and MAP 62 -> 89 over ten untreated minutes -- a
+   bigger excursion than several of the actual pathologies produce, and it
+   contaminated every measurement of when a scenario starts to deteriorate.
+   Seed from the formula, or seed a deliberate non-steady state and say so.
+
      Sevo 1 MAC alone: pE not used; mac = 1.0 (etSEVO 2%)
-     Propofol TIVA  ~ propCe 3-4 (light), 4-6 (deep maintenance)
-     Remi 0.15 mcg/kg/min steady ~ remiCe 0.005
+     Propofol 8 mg/kg/hr steady ~ propCe 2.22 (adult); 3-4 light, 4-6 deep
+     Remi 0.05 / 0.08 / 0.15 / 0.2 mcg/kg/min steady ~ remiCe 0.00071 /
+       0.00114 / 0.00214 / 0.00286 (adult; divide by vdScale for others)
      Fentanyl 100 mcg ~ fentCe 0.002 (peak ~3 min after bolus)
      Roc 50mg @ 5min after bolus ~ rocCe 5-7 (full block)
    ============================================================================= */
@@ -11073,8 +11162,8 @@ const SCENARIOS = {
             state.mac = 1.0;
             // Remi infusion 0.15 mcg/kg/min, equilibrated to ~0.005 Ce
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             // Fentanyl induction dose still on board: ~0.002 Ce
             p.fentCp = 0.002;
             p.fentCe = 0.002;
@@ -11209,8 +11298,8 @@ const SCENARIOS = {
             state.circuitSevo = 2.0;
             state.mac = 1.0;
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             p.fentCp = 0.002;
             p.fentCe = 0.002;
             p.rocCp = 4.0;
@@ -11304,8 +11393,8 @@ const SCENARIOS = {
             state.mac = 1.0;
             // Remi infusion
             state.machine.pumps.remi = 0.2;
-            p.remiCp = 0.006;
-            p.remiCe = 0.006;
+            p.remiCp = 0.00286;
+            p.remiCe = 0.00286;
             // Paralysed with roc
             p.rocCp = 5.0;
             p.rocCe = 5.0;
@@ -11536,12 +11625,12 @@ const SCENARIOS = {
             state.machine.vent.fgf = 2;
             // Propofol TIVA already running. Calibrated for stable BIS ~40.
             state.machine.pumps.prop = 8;
-            p.propCp = 2.5;
-            p.propCe = 2.5;
+            p.propCp = 2.22;
+            p.propCe = 2.22;
             // Light remi for context
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.002;
-            p.remiCe = 0.002;
+            p.remiCp = 0.00071;
+            p.remiCe = 0.00071;
             // Paralysed
             p.rocCp = 5.0;
             p.rocCe = 5.0;
@@ -11724,8 +11813,8 @@ const SCENARIOS = {
             state.mac = 0.2;
             // Light remi
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.002;
-            p.remiCe = 0.002;
+            p.remiCp = 0.00071;
+            p.remiCe = 0.00071;
             // Fent on board from earlier
             p.fentCp = 0.0015;
             p.fentCe = 0.0015;
@@ -11780,12 +11869,12 @@ const SCENARIOS = {
             // MAP drop at any given propCe. 2.5 mcg/mL keeps BIS ~40 with MAP
             // in the low-60s, matching the previous behaviour of the scenario.
             state.machine.pumps.prop = 8;   // 8 mg/kg/hr maintains propCe ~2.5
-            p.propCp = 2.5;
-            p.propCe = 2.5;
+            p.propCp = 2.22;
+            p.propCe = 2.22;
             // Remi 0.2 mcg/kg/min
             state.machine.pumps.remi = 0.2;
-            p.remiCp = 0.006;
-            p.remiCe = 0.006;
+            p.remiCp = 0.00286;
+            p.remiCe = 0.00286;
             // Paralysed
             p.rocCp = 5.0;
             p.rocCe = 5.0;
@@ -11964,8 +12053,8 @@ const SCENARIOS = {
             state.mac = 0.9;
             // Remi maintenance
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             // Paralysed
             p.rocCp = 4.0;
             p.rocCe = 4.0;
@@ -12056,8 +12145,8 @@ const SCENARIOS = {
             // which is what "present but insufficient for the rising surgical
             // stimulus" was always supposed to mean.
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.0015;
-            p.remiCe = 0.0015;
+            p.remiCp = 0.00089;
+            p.remiCe = 0.00089;
             // Mid-case fentanyl on board, partially worn off
             p.fentCp = 0.0010;
             p.fentCe = 0.0010;
@@ -12137,8 +12226,8 @@ const SCENARIOS = {
             // number), so this scenario ran with no infusion. Cp/Ce seeded to
             // the steady state for 0.08 mcg/kg/min (0.15 -> 0.005, so 0.08 -> ~0.0027).
             state.machine.pumps.remi = 0.08;
-            p.remiCp = 0.0027;
-            p.remiCe = 0.0027;
+            p.remiCp = 0.00114;
+            p.remiCe = 0.00114;
             p.fentCp = 0.0008;
             p.fentCe = 0.0008;
             // Rocuronium worn off - end of case
@@ -12268,8 +12357,8 @@ const SCENARIOS = {
             // Some opioid on board
             p.fentCp = 0.002;
             p.fentCe = 0.002;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             state.machine.pumps.remi = 0.15;
             // Paralysed
             p.rocCp = 4.5;

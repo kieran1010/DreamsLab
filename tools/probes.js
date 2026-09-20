@@ -2030,10 +2030,18 @@ probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
     /* 2. THE FINDING. Extubation prevents it outright, and the scenario must
           now say so. Checked at three timings so this is not a coincidence of
           one schedule. */
+    /* v4.56: these timings were 120/180/240 and are now 50/70/90. Not a
+       weakening of the check - the finding is unchanged and all three still
+       prevent the spasm outright. The scenario simply runs on a faster clock
+       now that its remifentanil seed matches what its pump sustains (it was
+       0.002 against a true steady state of 0.00071, i.e. 2.8x over). With the
+       correct opioid burden the patient wakes sooner and the spasm fires at
+       t=91 rather than t=292, so the old timings all sat AFTER it and were
+       testing nothing. Extubate before the wake and it never fires. */
     const plan = [SEVO(30, 0), REMI(32, 0), SUG(35, 200)];
-    const ex120 = run([...plan, AIR(120, 'mask'), MODE(121, 'MANUAL')], 900);
-    const ex180 = run([...plan, AIR(180, 'mask'), MODE(181, 'MANUAL')], 900);
-    const ex240 = run([...plan, AIR(240, 'mask'), MODE(241, 'MANUAL')], 900);
+    const ex120 = run([...plan, AIR(50, 'mask'), MODE(51, 'MANUAL')], 900);
+    const ex180 = run([...plan, AIR(70, 'mask'), MODE(71, 'MANUAL')], 900);
+    const ex240 = run([...plan, AIR(90, 'mask'), MODE(91, 'MANUAL')], 900);
     const noEx  = run(plan, 900);
     const noExSpasm = noEx.rows.find(r => r.broncho);
     note(`with the scenario's old plan (no extubation): bronchospasm ` +
@@ -2043,7 +2051,10 @@ probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
     expect(noExSpasm && ![ex120, ex180, ex240].some(r => r.rows.some(x => x.broncho)),
         'extubating prevents the bronchospasm entirely, at any timing',
         `no extubation: t=${noExSpasm ? noExSpasm.t : 'never'}; ` +
-        `extubated at 120/180/240: never, never, never`,
+        `extubated at 50/70/90: ` +
+        [ex120, ex180, ex240].map(r => {
+            const b = r.rows.find(x => x.broncho); return b ? 't=' + b.t : 'never';
+        }).join(', '),
         'fires only when the tube is left in');
 
     /* 3. And opioid cover is NOT an alternative - it only buys minutes. This
