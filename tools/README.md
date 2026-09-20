@@ -358,6 +358,32 @@ Both failure modes were negative-tested and fail independently: drifting
 check 4 only. `APP_VERSION` is published through `PUBLISH` in `harness.js` so
 the probe reads the runtime value rather than re-parsing the file for it.
 
+| F27 | no airway device meant apnoea; an arrested patient kept breathing | 0/10 |
+
+F27 covers two bugs found one behind the other. The ventilation chain opened
+`if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }`, short-circuiting
+the spontaneous branch — so a patient with no airway device never breathed
+however strong their drive. (A second gate said the same independently: the FRC
+oxygen refill was `if (p.airway !== 'none' && ...)`.) Live in **LAST**, whose
+own objective says the patient is "breathing room air through an unprotected
+airway" while they measured `respDrive` 0.78 and **Vt 0 from t=1**.
+
+Fixing that immediately exposed the second: `respDrive` never read the
+circulation, so the LAST patient sat in **VF at MAP 0 ventilating at RR 11, Vt
+426, SpO₂ 99**. It had been masked by the first bug for exactly as long as both
+existed.
+
+The probe pins both, plus the boundary that keeps the fix honest: a device is
+still required to *deliver* a breath (VCV with no airway gives PIP 0 and only
+the patient's own tidal volume), room air applies whatever the FiO₂ dial says,
+securing the tube takes `inspiredFiO2` 0.21 → 1.00, and ROSC restores the drive
+because the cut-off is the pulse rather than a latch.
+
+Worth noting what did **not** need changing: the display side was right all
+along — etCO₂, RR, MAC, PIP and Vt already read `'--'` with no airway, alarms
+already suppressed, waveforms already skipped. Losing the monitoring is what
+happens when the circuit comes off; losing the physiology was the bug.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

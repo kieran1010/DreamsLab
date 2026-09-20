@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 138/138,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 148/148,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -167,6 +167,17 @@ beta *above* that target relieves anything. Adrenaline, ephedrine,
 noradrenaline, ketamine and salbutamol all push `betaTone` after the relaxation,
 so they are unaffected; the patient's own reflex is. Ask this of any new
 pathology whose own response feeds a term that treats it.
+
+**1c. A gate that means "cannot be measured" is not the same as "is not
+happening".** The ventilation chain opened `if (disconnected || !hasAirwayDevice)
+{ tidalVolume = 0 }` under the comment "no effective ventilation path", which
+short-circuited the spontaneous branch below — so for years a patient with no
+airway device never breathed whatever their respiratory drive (v4.54). The
+display side had it right all along: `etCO2`, RR, MAC, PIP and Vt already read
+`'--'` with no airway, their alarms were already suppressed, and the PAW/CO₂
+waveforms were already skipped. Losing the *monitoring* is what happens when you
+take the circuit away; losing the *physiology* is a different claim, and the
+model should keep simulating what it cannot show you.
 
 **2. Multiplying a tone per tick compounds.** `betaTone *= (1 - f)` at 10 Hz
 against a 0.05 relaxation settles at `0.05·T·(1-f) / (0.05 + 0.95f)` of target —
@@ -280,19 +291,18 @@ thresholds for anything where the resting value is not near an end.
   `TREATMENTS` extubates. The finding was that **extubating prevents it
   outright** at any timing, while opioid cover only delays it (t=292 → 407 →
   448 as remi goes up) — there is no dose that holds it off with the tube in.
-- **A patient with no airway device never breathes**, whatever their
-  respiratory drive. The ventilation block opens with
-  `if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }`, which
-  short-circuits the `else if (respDrive > RESP_DRIVE_GATE)` spontaneous branch
-  below it. "No effective ventilation path" conflates *no device to ventilate
-  through* with *no breathing at all*. Reachable and live: the **LAST**
-  scenario sets `airway: 'none'` and its own objective says the patient is
-  "breathing room air through an unprotected airway" — measured, they have
-  `respDrive` 0.78 and Vt 0 from t=1, so its desaturation is frank apnoea
-  rather than the sedation-related hypoventilation the text describes. F3 still
-  passes because the arrest happens, just by the wrong mechanism. Fixing it
-  moves LAST's whole desaturation timeline, so it wants its own change and its
-  own re-tune. Found during the v4.52 emergence pass.
+- **Fixed in v4.54.** A patient with no airway device now breathes room air
+  for themselves, and an arrested patient stops breathing. Both were live in
+  the LAST scenario. Mechanical and manual delivery still require a device;
+  a disconnected circuit still stops everything. `p.inspiredFiO2` is what the
+  patient inhales (0.21 with no device) as against `p.fio2`, the dial setting.
+  Probe F27 pins both halves.
+- The LAST scenario's `description` promises "seizure-like activity (brief BIS
+  spike)" during the CNS phase. There is no spike — BIS sits flat at 69–71 for
+  the whole run, peaking at 71.4. Noticed during the v4.54 pass and left alone:
+  fixing it means either adding a seizure BIS excursion to the LAST event block
+  or dropping the claim, and that is a content decision rather than a bug.
+  Same class as the text-vs-model findings the September 2026 audit chased.
 - **Seven of twenty scenarios have no `hints` array at all**: `anaphBrewing`,
   `paedLap`, `asthma`, `aneurysm`, `autonomicDysreflexia`, `last` and `mh`.
   (It was eight; emergence was the eighth until v4.52. `maintenance` has only
