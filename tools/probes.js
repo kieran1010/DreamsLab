@@ -2188,6 +2188,160 @@ probe('F26', 'The version the UI shows is the version that shipped', () => {
         'zero');
 });
 
+/* =============================================================================
+   F27  a patient with no airway device never breathed, and an arrested one
+        never stopped
+   -----------------------------------------------------------------------------
+   Two bugs, found one behind the other during the v4.52 emergence pass.
+
+   1. NO DEVICE MEANT APNOEA. The ventilation chain opened with
+      `if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }`, which
+      short-circuited the spontaneous branch below it. So a patient with no
+      airway device never breathed however strong their respiratory drive,
+      however awake, however unparalysed. The comment read "no effective
+      ventilation path" - conflating "nothing to ventilate THROUGH" with "not
+      breathing at all". A second gate said the same thing independently: the
+      FRC oxygen refill was `if (p.airway !== 'none' && ...)`.
+
+      Live, not theoretical: the LAST scenario sets airway 'none' and its own
+      objective says the patient is "breathing room air through an unprotected
+      airway", but measured they had respDrive 0.78 and Vt 0 from t=1.
+
+   2. AN ARRESTED PATIENT KEPT BREATHING. Fixing (1) exposed it: respDrive read
+      only the drug load, never the circulation, so the LAST patient sat in VF
+      at MAP 0 ventilating comfortably at RR 11, Vt 426, minute volume 4.9
+      L/min, SpO2 99. It had been masked by (1) for as long as both existed.
+
+   v4.54 fixes both. A device is still required for mechanical and manual
+   delivery - you cannot ventilate through a mask that is not on the face - and
+   a disconnected circuit still stops everything. With no device the patient
+   breathes room air: `inspiredFiO2` is 0.21 regardless of the FiO2 dial, since
+   the circuit is not connected to them.
+
+   The displayed numbers needed no change and never did: etCO2, RR, MAC, PIP
+   and Vt already read '--' when airway is 'none', their alarms are already
+   suppressed, and the PAW/CO2 waveforms are already skipped. The patient
+   breathes; you simply cannot measure any of it without a circuit.
+   ========================================================================== */
+probe('F27', 'No airway device means breathing room air, not apnoea', () => {
+
+    function run(key, acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(key);
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 300); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            const p = dl.state.patient;
+            rows.push({ t: s, spo2: dl.state.spo2, vt: dl.state.tidalVolume,
+                        mv: dl.state.minuteVent, rd: p.respDrive, rhythm: dl.state.rhythm,
+                        airway: p.airway, insp: p.inspiredFiO2, etco2: dl.state.etco2,
+                        map: mapOf(dl), pip: dl.state.peakPressure });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl, sim,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const AIRWAY = (t, a) => ({ t, do: dl => dl.setAirway(a) });
+    const MODE   = (t, m) => ({ t, do: dl => dl.setVentMode(m) });
+    const FIO2   = (t, v) => ({ t, do: dl => dl.setVentParam('fio2', v) });
+    const ADR    = t => ({ t, do: dl => give(dl, 'adr', 0.5) });
+
+    const un = run('last', null, 300);
+
+    /* 1. THE FIRST FINDING. Before the arrhythmia the patient has a pulse, a
+          respiratory drive and no device - so they must be breathing. */
+    const early = un.at(30);
+    note(`LAST at t=30: rhythm ${early.rhythm}, airway ${early.airway}, ` +
+         `respDrive ${early.rd.toFixed(2)}, Vt ${early.vt.toFixed(0)}, ` +
+         `minute volume ${early.mv.toFixed(2)} L/min, SpO2 ${early.spo2.toFixed(0)}`);
+    expect(early.airway === 'none' && early.rd > un.dl.CONFIG.RESP_DRIVE_GATE && early.vt > 200,
+        'a patient with no airway device breathes for themselves',
+        `airway '${early.airway}', respDrive ${early.rd.toFixed(2)}, Vt ${early.vt.toFixed(0)}`,
+        'a real tidal volume (it used to be exactly 0 with respDrive 0.78)');
+    expect(early.spo2 > 97,
+        'and they hold their saturation while their drive is adequate',
+        `SpO2 ${early.spo2.toFixed(0)} at t=30`,
+        'above 97 - the scenario text says they are breathing, so they should be');
+
+    /* 2. On room air, whatever the dial says - the circuit is not on the face. */
+    const dialled = run('last', [FIO2(10, 1.0)], 60);
+    note(`FiO2 dial turned to 1.0 at t=10 with no airway: inspiredFiO2 reads ` +
+         `${dialled.at(30).insp.toFixed(2)}`);
+    expect(Math.abs(early.insp - 0.21) < 0.001 && Math.abs(dialled.at(30).insp - 0.21) < 0.001,
+        'with no device they breathe room air whatever the FiO2 dial says',
+        `inspiredFiO2 ${early.insp.toFixed(2)} untouched, ${dialled.at(30).insp.toFixed(2)} with the dial at 1.0`,
+        '0.21 in both cases');
+
+    /* 3. THE SECOND FINDING, which the first was hiding. An arrested patient
+          does not breathe. */
+    const arrest = un.rows.find(r => r.rhythm !== 'sinus');
+    const after  = un.at(arrest.t + 10);
+    note(`arrest at t=${arrest.t} (${arrest.rhythm}); ten seconds later ` +
+         `respDrive ${after.rd.toFixed(2)}, Vt ${after.vt.toFixed(0)}, ` +
+         `minute volume ${after.mv.toFixed(2)}`);
+    expect(after.rd === 0 && after.vt === 0,
+        'an arrested patient stops breathing',
+        `respDrive ${after.rd.toFixed(2)}, Vt ${after.vt.toFixed(0)} at t=${arrest.t + 10}`,
+        'both zero (it used to be RR 11 and Vt 426 in VF at MAP 0)');
+
+    /* 4. Which is what makes objective 2 true: the hypoxia arrives WITH the
+          arrest, not before it, and it arrives fast. */
+    note(`untreated SpO2: ${un.at(arrest.t).spo2.toFixed(0)} at the arrest, ` +
+         `${un.at(arrest.t + 30).spo2.toFixed(0)} +30s, ${un.at(arrest.t + 60).spo2.toFixed(0)} +60s, ` +
+         `${un.at(arrest.t + 120).spo2.toFixed(0)} +120s`);
+    expect(un.at(arrest.t).spo2 > 97 && un.at(arrest.t + 60).spo2 < 70 &&
+           un.at(arrest.t + 120).spo2 < 45,
+        'the hypoxia arrives with the arrest and arrives fast',
+        `SpO2 ${un.at(arrest.t).spo2.toFixed(0)} -> ${un.at(arrest.t + 60).spo2.toFixed(0)} ` +
+        `-> ${un.at(arrest.t + 120).spo2.toFixed(0)}`,
+        'still 97+ at the arrest, under 70 a minute later, under 45 at two');
+
+    /* 5. And objective 2's instruction works: secure the airway early and the
+          saturation never moves. */
+    const secured = run('last', [AIRWAY(20, 'ett'), MODE(21, 'VCV'), FIO2(22, 1.0)], 300);
+    const minSpo2 = Math.min(...secured.rows.map(r => r.spo2));
+    note(`airway secured at t=20: SpO2 minimum over five minutes ${minSpo2.toFixed(0)}, ` +
+         `inspiredFiO2 ${secured.at(60).insp.toFixed(2)}`);
+    expect(minSpo2 > 95 && Math.abs(secured.at(60).insp - 1.0) < 0.001,
+        'securing the airway holds the saturation through the whole arrest',
+        `SpO2 never below ${minSpo2.toFixed(0)}, inspiredFiO2 ${secured.at(60).insp.toFixed(2)} once the tube is in`,
+        'above 95 throughout, and the dial takes effect once there is a circuit');
+
+    /* 6. A device is still required to DELIVER a breath. Ventilating a patient
+          through a mask that is not on their face must not work. */
+    const noDevice = run('last', [MODE(20, 'VCV'), FIO2(21, 1.0)], 120);
+    note(`VCV switched on at t=20 with no airway device: Vt ${noDevice.at(40).vt.toFixed(0)}, ` +
+         `PIP ${noDevice.at(40).pip.toFixed(0)}, respDrive ${noDevice.at(40).rd.toFixed(2)}`);
+    expect(noDevice.at(40).pip === 0 && Math.abs(noDevice.at(40).vt - un.at(40).vt) < 5,
+        'the ventilator cannot deliver a breath without an airway device',
+        `PIP ${noDevice.at(40).pip.toFixed(0)}, Vt ${noDevice.at(40).vt.toFixed(0)} ` +
+        `(spontaneous run gives ${un.at(40).vt.toFixed(0)})`,
+        'no pressure, and the tidal volume is the patient\'s own, not the ventilator\'s');
+
+    /* 7. Objective 4's bolus count, now that the objective states it. */
+    const rosc = run('last', [ADR(90), ADR(120), ADR(150)], 300);
+    const two  = run('last', [ADR(90), ADR(120)], 300);
+    note(`three 500mcg boluses: rhythm ${rosc.at(200).rhythm} at t=200; ` +
+         `two boluses: ${two.at(200).rhythm}`);
+    expect(rosc.at(200).rhythm === 'sinus' && two.at(200).rhythm !== 'sinus',
+        'three adrenaline boluses give ROSC and two do not',
+        `three -> ${rosc.at(200).rhythm}, two -> ${two.at(200).rhythm}`,
+        'exactly what objective 4 now states');
+
+    /* 8. And ROSC restores the drive, because the pulse is back. */
+    note(`after ROSC: respDrive ${rosc.at(200).rd.toFixed(2)}, Vt ${rosc.at(200).vt.toFixed(0)}`);
+    expect(rosc.at(200).rd > 0 && rosc.at(200).vt > 200,
+        'ROSC restores the respiratory drive, since the arrest is what removed it',
+        `respDrive ${rosc.at(200).rd.toFixed(2)}, Vt ${rosc.at(200).vt.toFixed(0)} at t=200`,
+        'breathing again - the cut-off is the pulse, not a one-way latch');
+
+    expect(un.errors.length === 0 && secured.errors.length === 0 && secured.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length + secured.errors.length} tick errors, ${secured.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

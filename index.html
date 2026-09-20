@@ -51,6 +51,112 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.54  ("No airway device is not the same as not breathing")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Two model bugs, found one behind the other, plus the scenario text that had
+  been describing their symptoms.
+
+  1. NO AIRWAY DEVICE MEANT APNOEA.
+
+  The ventilation chain opened with
+
+      if (disconnected || !hasAirwayDevice) { tidalVolume = 0; }
+
+  which short-circuited the spontaneous branch further down. So a patient with
+  no airway device never breathed - however strong their respiratory drive,
+  however awake, however unparalysed. The comment read "no effective
+  ventilation path", conflating "nothing to ventilate THROUGH" with "not
+  breathing at all". Every human being without an airway device in is breathing
+  through their own airway; that is the normal state of the species.
+
+  A second gate said the same thing independently: the FRC oxygen refill was
+  gated `if (p.airway !== 'none' && ...)`, so even a patient who did move gas
+  would never have refreshed their alveolar oxygen.
+
+  Live, not theoretical. The LAST scenario sets airway 'none' and its own
+  objective says the patient is "breathing room air through an unprotected
+  airway". Measured, they had respDrive 0.78 and Vt 0 from t=1: frank apnoea,
+  not the sedation-related hypoventilation the text described.
+
+  Now: a device is required for MECHANICAL and MANUAL delivery - you cannot
+  ventilate a patient through a mask that is not on their face - but the
+  spontaneous branch is reachable without one, and the FRC refills. A
+  disconnected circuit still stops everything, unchanged.
+
+  2. AN ARRESTED PATIENT KEPT BREATHING.
+
+  Fixing (1) exposed this immediately. respDrive read only the drug load, never
+  the circulation, so the LAST patient sat in VF at MAP 0 ventilating
+  comfortably at RR 11, Vt 426, minute volume 4.9 L/min, SpO2 99. It had been
+  masked by (1) for exactly as long as both existed.
+
+  `if (!hasPulse()) drive = 0;` now sits with the existing paralysis and
+  apnoea-event cut-offs. Agonal gasps are not modelled; it is a clean cut.
+  ROSC restores the drive, because the cut-off is the pulse and not a latch.
+
+  3. ROOM AIR.
+
+  With no device the circuit is not on the face, so the FiO2 dial is
+  irrelevant and the patient breathes room air. `p.inspiredFiO2` (new) is what
+  they are actually inhaling as against `p.fio2`, which is what the machine is
+  set to deliver; they differ in exactly that one case. The dial value is left
+  untouched, so putting a mask or tube back restores it immediately - verified
+  in probe F27, where securing the tube takes inspiredFiO2 from 0.21 to 1.00.
+
+  The Physiology gauge derives the value rather than reading the stored field,
+  so it cannot show the one-tick staleness `state.mac` has.
+
+  4. NOTHING ON THE DISPLAY SIDE NEEDED CHANGING, and that is worth recording
+  because it is the part that made the whole thing coherent. etCO2, RR, MAC,
+  PIP and Vt already read '--' when airway is 'none'; their alarms are already
+  suppressed; the PAW and CO2 waveforms are already skipped. The patient
+  breathes - you simply cannot measure any of it without a circuit, which is
+  exactly right.
+
+  5. THE LAST SCENARIO'S OBJECTIVE 2.
+
+  It said the patient was "already desaturating before the arrhythmia arrives"
+  and that "ROSC without oxygenation is temporary". Both were descriptions of
+  the bugs. What the scenario now does is better teaching:
+
+      t=1..59   sinus, breathing room air, SpO2 99
+      t=60      VT pulseless - an arrested patient does not breathe
+      t=90      SpO2 93     with no airway in place
+      t=120     SpO2 56
+      t=180     SpO2 40
+
+  Secure the airway at t=20 and the saturation never drops below 97 for the
+  whole five minutes. So the airway is urgent and causal rather than
+  background, which is what the old wording was reaching for.
+
+  The "adrenaline will not hold a rhythm in a hypoxic myocardium" claim moved
+  to the real-practice objective, because the sim does not model that
+  interaction - the arrest rescue is a pure bolus count and three 500 mcg
+  boluses give ROSC whether or not the patient is oxygenated. Better to say so
+  than imply a coupling that is not there. Objective 4 now states the count
+  (ARREST_REVIVE_THRESHOLD 3, ARREST_ADR_CREDIT_DOSE 0.5 mg) rather than
+  leaving it to be discovered by trial.
+
+  The patient's sedation is deliberately unchanged: midazolam only, no opioid.
+  That is why they breathe adequately before the arrest and can resume
+  afterwards, and the objective now says so rather than pretending otherwise.
+
+  BLAST RADIUS: confined to LAST. Every other scenario's sweep output is
+  unchanged - scan goes 247 -> 248 findings with BUG:0 and CLIN:30 both held,
+  and all four moved rows are LAST's (Vt and respDrive pinned for fewer
+  samples because the patient now breathes for the first minute; SpO2 pinned
+  at its floor for 80 samples rather than 89 because the desaturation starts
+  at the arrest rather than at t=1).
+
+  Tests: probes 148/148 across 26 findings (new F27, 10 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.53  ("The About box finally knows what version it is")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -5956,7 +6062,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.53';
+const APP_VERSION = '4.54';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -7074,6 +7180,13 @@ const state = {
         svrTone: 1.0,
 
         airway: 'mask',           // v3.34: was 'none'. Default to mask so gas analyser picks up etCO2/etSevo from sim start.
+        /* v4.54: what the patient is ACTUALLY inhaling, as opposed to `fio2`,
+           which is what the machine is set to deliver. They differ in exactly
+           one case: with no airway device the circuit is not on the face, so
+           the dial is irrelevant and the patient breathes room air. The tick
+           recomputes this every pass; the FiO2 gauge and the FRC oxygen refill
+           both read it rather than `fio2`. */
+        inspiredFiO2: 0.21,
         resistance: 5,
         bronchResistance: 5,   // smoothed effective bronchospasm resistance (v2.8)
         // v2.9 lung mechanics
@@ -7887,6 +8000,19 @@ setInterval(() => {
         );
         if (p.paralysis > CONFIG.PARALYSIS_RESP_THRESHOLD) drive = 0;
         if (state.events.apnoea) drive = 0;  // central apnoea event
+        /* v4.54: a patient in cardiac arrest does not breathe. respDrive read
+           only the drug load, never the circulation, so an arrested patient
+           kept a full respiratory drive indefinitely.
+
+           This was invisible until now because the only scenario that arrests
+           spontaneously (LAST) also had airway 'none', and the ventilation
+           block zeroed tidal volume for that case regardless - so the bug was
+           masked by the other bug this version fixes. With the airway fix in
+           and nothing else, the LAST patient sat in VF at MAP 0 breathing
+           comfortably at RR 11, Vt 426, minute volume 4.9 L/min, SpO2 99.
+
+           Agonal gasps are not modelled; this is a clean cut-off. */
+        if (!hasPulse()) drive = 0;
         p.respDrive = drive;
     }
 
@@ -8694,6 +8820,10 @@ setInterval(() => {
     const hasAirwayDevice = (p.airway !== 'none');
     // Mask and LMA both leak at the same threshold (~20 cmH2O)
     const hasLeakySeal = (p.airway === 'mask' || p.airway === 'lma');
+    /* v4.54: no device on the face means room air, whatever the vaporiser and
+       the FiO2 dial are set to. The dial value is kept in p.fio2 untouched, so
+       putting a mask or tube back restores it immediately. */
+    p.inspiredFiO2 = hasAirwayDevice ? p.fio2 : 0.21;
 
     /* --- v2.9 lung volume update (per-breath rising edge) ---
        Detects the start of a new mechanical breath (breathProgress wraps
@@ -8779,11 +8909,38 @@ setInterval(() => {
     // Mask/LMA leak threshold in cmH2O
     const LEAK_THRESHOLD = 20;
 
-    if (disconnected || !hasAirwayDevice) {
-        // No effective ventilation path
+    /* v4.54: "no airway device" is not apnoea.
+       This chain used to open `if (disconnected || !hasAirwayDevice)` and zero
+       the tidal volume, which short-circuited the spontaneous branch further
+       down - so a patient with no device never breathed however strong their
+       respiratory drive, however awake and however unparalysed. The comment
+       read "no effective ventilation path", conflating "nothing to ventilate
+       THROUGH" with "not breathing at all". Every human being with no airway
+       device in is breathing through their own airway; that is the normal
+       state of the species.
+
+       It was live, not theoretical: the LAST scenario sets airway 'none' and
+       its own objective says the patient is "breathing room air through an
+       unprotected airway", but measured they had respDrive 0.78 and Vt 0 from
+       t=1. Its desaturation was frank apnoea rather than the sedation-related
+       hypoventilation the text describes.
+
+       Now: a device is required for MECHANICAL and MANUAL delivery - you
+       cannot ventilate a patient through a mask that is not on their face -
+       but the spontaneous branch is reachable without one. A disconnected
+       circuit still stops everything, which is unchanged.
+
+       Note that the displayed numbers need no change and never did: etCO2,
+       RR, MAC, PIP and Vt already read '--' when airway is 'none', their
+       alarms are already suppressed, and the PAW/CO2 waveforms are already
+       skipped. The patient breathes; you simply cannot measure any of it
+       without a circuit, which is the point. */
+    const canDeliver = hasAirwayDevice && !disconnected;
+    if (disconnected) {
+        // Circuit disconnected - nothing moves
         state.tidalVolume = 0;
         state.peakPressure = 0;
-    } else if (state.machine.vent.mode === 'VCV') {
+    } else if (canDeliver && state.machine.vent.mode === 'VCV') {
         // Target delivered Vt, then calculate required PIP.
         // v2.9: PIP includes autoPEEP baseline (effPeep) because gas-trapped
         // lung starts each breath above set PEEP.
@@ -8814,7 +8971,7 @@ setInterval(() => {
         }
         state.tidalVolume = targetVt;
         state.peakPressure = requiredPIP;
-    } else if (state.machine.vent.mode === 'PCV') {
+    } else if (canDeliver && state.machine.vent.mode === 'PCV') {
         // Set Pinsp above PEEP; Vt = (Pinsp - PEEP) * compliance * equilibration.
         // v2.9: driving pressure above effPeep (set PEEP + autoPEEP). Gas trapping
         // reduces the effective driving pressure -> less Vt delivered for same Pinsp.
@@ -8832,13 +8989,14 @@ setInterval(() => {
         const PCV_EQUILIBRATION = 0.5;
         state.tidalVolume = Math.max(0, effectivePinsp) * compliance * PCV_EQUILIBRATION * resistanceVtFactor;
     } else if (p.respDrive > CONFIG.RESP_DRIVE_GATE) {
+        // v4.54: reachable with no airway device now - see the note above.
         // Spontaneous: Vt = 7 mL/kg * (0.40 + 0.60*respDrive), compliance-independent.
         // v3.84: tidal volume is part-preserved (40% floor) so the dominant effect
         // of respiratory depression falls on RATE (RR = 14*respDrive), not depth.
         // But if laryngospasm/kink, resistance chokes it
         state.tidalVolume = 7 * wt * (0.40 + 0.60 * p.respDrive) * resistanceVtFactor;
         state.peakPressure = 0;
-    } else if (state.machine.vent.mode === 'MANUAL' && p.bagPressure > 0.05) {
+    } else if (canDeliver && state.machine.vent.mode === 'MANUAL' && p.bagPressure > 0.05) {
         // Manual bag: bagPressure (0..1) maps to up to ~30 cmH2O at full squeeze
         const inspP = p.bagPressure * 30;
         let effectivePinsp = inspP;
@@ -9136,8 +9294,15 @@ setInterval(() => {
        adjacent tidal volumes. Scaling the rate linearly out of zero, and
        normalising against the patient's own resting minute ventilation rather
        than a fixed 5 L/min, gives a graded response at any body size. */
-    if (p.airway !== 'none' && !disconnected && state.minuteVent > 0) {
-        const target = state.profile.frc * p.fio2;
+    /* v4.54: `p.airway !== 'none'` dropped from this gate. A spontaneously
+       breathing patient refills their FRC with whatever they are inhaling,
+       device or not - this was the second, independent reason a patient with
+       no airway desaturated (the first being that they had no tidal volume at
+       all). `minuteVent > 0` already covers genuine apnoea, since an apnoeic
+       patient moves no gas whether or not they have a tube in.
+       The target uses inspiredFiO2, so with no device it is room air. */
+    if (!disconnected && state.minuteVent > 0) {
+        const target = state.profile.frc * p.inspiredFiO2;
         // Resting MV for this profile, from basal O2 consumption (~5 mL O2 per
         // mL/s of consumption gives 6 L/min for the 70 kg adult).
         const restingMV = state.profile.o2Consumption * 1.5;
@@ -9750,6 +9915,7 @@ function setProfile(key) {
     p.centralVolume = state.profile.centralVol * initFrac;
     p.preload = CONFIG.PRELOAD_BASELINE;
     p.frcO2 = state.profile.frc * p.fio2;
+    p.inspiredFiO2 = (p.airway === 'none') ? 0.21 : p.fio2;   // v4.54: seed; the tick recomputes it every pass
     p.airwayReactivity = state.profile.airwayReactivity;  // baseline; tick recomputes with boosts
     // v2.9: reset lung volume to new profile's FRC; clear any trapped gas
     p.lungVolume = state.profile.frc;
@@ -11814,12 +11980,51 @@ const SCENARIOS = {
         name: 'Local anaesthetic toxicity',
         briefing: 'Just finished a regional block (40mL of 0.5% bupivacaine). Patient has become acutely confused, with twitching. Watch for progression to cardiovascular collapse.',
         description: 'A 30-year-old healthy patient was having a brachial plexus block placed under sedation prior to elbow ORIF. The injection of bupivacaine has been followed by acute confusion, perioral tingling, then twitching. Concerning for systemic absorption. Over the next 1-2 minutes the patient is likely to progress to seizure-like activity (brief BIS spike), then ventricular tachycardia (pulseless), then VF if untreated. Treatment is the LIPID rescue protocol (intralipid 20% bolus 1.5 mL/kg then infusion) plus standard ACLS with adrenaline. NOTE: lipid emulsion is not modelled in this sim - manage as standard cardiac arrest with adrenaline boluses for now.',
+        /* v4.54: objective 2 rewritten to match the corrected respiratory model.
+
+           It used to say the patient was "already desaturating before the
+           arrhythmia arrives" and that "ROSC without oxygenation is temporary".
+           Both were artefacts of two bugs this version fixes, not of the
+           physiology:
+
+             - A patient with no airway device had tidal volume forced to zero
+               whatever their respiratory drive, so this one was frankly
+               apnoeic from t=1 with respDrive 0.78. That is what produced the
+               pre-arrest desaturation the old text described.
+             - respDrive never read the circulation, so once the bug above was
+               fixed the patient carried on breathing at RR 11 in VF at MAP 0.
+
+           With both fixed, what the scenario actually does - and it is better
+           teaching than the old text - is:
+
+               t=1..59   sinus, breathing room air, SpO2 99. Sedation is
+                         midazolam only, so the drive is adequate.
+               t=60      VT pulseless. An arrested patient does not breathe.
+               t=90      SpO2 93        no airway in place
+               t=120     SpO2 56
+               t=180     SpO2 40  (floor)
+
+           Secure the airway and ventilate before or during the arrest and the
+           saturation never leaves 99 for the whole resuscitation. So the
+           airway is urgent and causal rather than background, which is the
+           point the old wording was reaching for.
+
+           The "adrenaline will not hold a rhythm in a hypoxic myocardium" line
+           is moved to the real-practice objective, because this sim does not
+           model that interaction: the arrest rescue is a pure bolus count, and
+           three 500mcg boluses give ROSC whether or not the patient is
+           oxygenated. Better to say so than to imply a coupling that is not
+           there.
+
+           Objective 4 also now states the bolus count. ARREST_REVIVE_THRESHOLD
+           is 3 and ARREST_ADR_CREDIT_DOSE is 0.5 mg; "boluses of 500mcg or
+           more" left the number to be discovered by trial. */
         objectives: [
             'Recognise progressive LAST: CNS signs precede CVS collapse',
-            'Secure the airway and ventilate with oxygen. The patient was sedated for a block and is breathing room air through an unprotected airway - they are already desaturating before the arrhythmia arrives. Adrenaline will not hold a rhythm in a hypoxic myocardium, so ROSC without oxygenation is temporary',
+            'Secure the airway and ventilate with oxygen. The patient was sedated for a block and is breathing room air through an unprotected airway - adequately, for as long as they have a pulse. The moment the arrhythmia arrives that stops, because an arrested patient does not breathe: with no airway in place SpO2 falls from 99 to 56 within a minute of the arrest and to 40 within two. Get the airway in early and the saturation never leaves 99 for the whole resuscitation',
             'Initiate ACLS rapidly when arrhythmia develops',
-            'Adrenaline boluses of 500mcg or more for ROSC (smaller doses do not count toward the arrest rescue in this sim)',
-            'In real practice: lipid emulsion 20% IV is the specific antidote',
+            'Three adrenaline boluses of 500mcg or more are needed for ROSC in this sim - smaller doses do not count toward the arrest rescue at all',
+            'In real practice: lipid emulsion 20% IV is the specific antidote, and adrenaline will not hold a rhythm in a hypoxic myocardium - neither is modelled here, so the sim will give you ROSC on the bolus count alone. Do not read that as permission to leave the airway',
             'After ROSC, address ongoing risk - LAST can recur'
         ],
         setup() {
@@ -13299,7 +13504,14 @@ const PHYS_GROUPS = {
         { key:'autoPEEP',  label:'Auto-PEEP',         unit:'cmH₂O', min:0, max:20,
           base:()=>0,                        get:()=>state.patient.autoPEEP,      fmt:v=>v.toFixed(1), colour:'ceiling' },
         { key:'fio2',      label:'Inspired O₂ (FiO₂)', unit:'',   min:0.21, max:1.0,
-          base:()=>0.21,                     get:()=>state.patient.fio2,          fmt:v=>v.toFixed(2), colour:'none' },
+          /* v4.54: what the patient is actually inhaling, not what the dial says.
+             Derived here rather than reading p.inspiredFiO2 so it cannot be
+             stale: the stored field is only written by the tick, so a gauge
+             read on the very first sample of a scenario would otherwise show
+             the initial 0.21 before the first tick had run - the same one-tick
+             artefact `state.mac` has. */
+          base:()=>0.21,                     get:()=>state.patient.airway === 'none' ? 0.21 : state.patient.fio2,
+                                                                                  fmt:v=>v.toFixed(2), colour:'none' },
         { section: 'Outputs' },
         { key:'spo2',      label:'SpO₂',              unit:'%',   min:40,  max:100,
           base:()=>98,                       get:()=>state.spo2,                  fmt:v=>Math.round(v), colour:'alarm', alarm:'spo2' },
