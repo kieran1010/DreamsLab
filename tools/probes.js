@@ -2290,12 +2290,22 @@ probe('F27', 'No airway device means breathing room air, not apnoea', () => {
     note(`untreated SpO2: ${un.at(arrest.t).spo2.toFixed(0)} at the arrest, ` +
          `${un.at(arrest.t + 30).spo2.toFixed(0)} +30s, ${un.at(arrest.t + 60).spo2.toFixed(0)} +60s, ` +
          `${un.at(arrest.t + 120).spo2.toFixed(0)} +120s`);
-    expect(un.at(arrest.t).spo2 > 97 && un.at(arrest.t + 60).spo2 < 70 &&
+    /* v4.55 recalibrated the +60s bound from 70 to 90, and the reason is a real
+       coupling rather than a weakened test. etCO2 feeds alveolar oxygen through
+       `co2Displacement = (etco2 - 40)/713/0.8`. Before v4.55 an arrested
+       patient's etCO2 CLIMBED (to ~87 by +60s), displacing alveolar O2 and
+       accelerating this desaturation spuriously; v4.55 made etCO2 scale with
+       pulmonary blood flow, so it now correctly falls to ~27 and the term
+       clamps to zero. The desaturation is therefore slower in the middle -
+       99 -> 83 at +60s rather than 99 -> 56 - while the endpoint is unchanged
+       at 40 by +120s. The claim being tested is the same; only the intermediate
+       number moved, and it moved because the physiology got more correct. */
+    expect(un.at(arrest.t).spo2 > 97 && un.at(arrest.t + 60).spo2 < 90 &&
            un.at(arrest.t + 120).spo2 < 45,
         'the hypoxia arrives with the arrest and arrives fast',
         `SpO2 ${un.at(arrest.t).spo2.toFixed(0)} -> ${un.at(arrest.t + 60).spo2.toFixed(0)} ` +
         `-> ${un.at(arrest.t + 120).spo2.toFixed(0)}`,
-        'still 97+ at the arrest, under 70 a minute later, under 45 at two');
+        'still 97+ at the arrest, clearly falling by a minute, under 45 at two');
 
     /* 5. And objective 2's instruction works: secure the airway early and the
           saturation never moves. */
@@ -2339,6 +2349,158 @@ probe('F27', 'No airway device means breathing room air, not apnoea', () => {
     expect(un.errors.length === 0 && secured.errors.length === 0 && secured.undone === 0,
         'the scenario runs clean',
         `${un.errors.length + secured.errors.length} tick errors, ${secured.undone} undelivered actions`,
+        'zero of each');
+});
+
+/* =============================================================================
+   F28  SpO2 and etCO2 ignored the circulation entirely
+   -----------------------------------------------------------------------------
+   Two long-standing known items, closed together because they are the same
+   omission: nothing in the gas-exchange block read cardiac output.
+
+     - SpO2 read a reassuring 99 for the whole haemorrhage scenario, including
+       thirty minutes at a cardiac output of 1.0-1.3 L/min. The pleth WAVEFORM
+       already went flat (it gates on systolic > 50), so the monitor was
+       simultaneously showing no trace and a perfect number.
+     - etCO2 was purely ventilation-driven, `co2Production / minuteVent`. An
+       arrested patient's etCO2 therefore CLIMBED - no ventilation meant the
+       minuteVent floor of 2, which is a high target - when the one thing
+       everybody knows about etCO2 in arrest is that it collapses.
+
+   v4.55 adds one perfusion factor, measured as this patient's cardiac output
+   against their own baseline (the same helpers the CO gauge uses, so it is
+   per-profile rather than against a 70 kg adult). Flat at 1.0 above
+   PERFUSION_CO_REF_FRAC (0.40), ramping to 0 at no output.
+
+   The 0.40 threshold came from measuring all forty sweep runs: only LAST (0%)
+   and haemorrhage (18% untreated) go below it. Vagal sits at 49% and
+   rate-controlled ischaemia at 53%, and neither patient is hypoxic - a
+   threshold above ~45% would have desaturated a vagal bradycardia.
+
+   SpO2 loses its TRACE rather than reading a false low, because that is what a
+   pulse oximeter actually does: arterial saturation is largely preserved in
+   low output, and it is the measurement that fails. state.spo2 goes on being
+   computed underneath (CLAUDE.md trap 1c), so the number returns the instant
+   perfusion does.
+
+   etCO2 uses the same low-output curve rather than a linear proportionality,
+   because in SUSTAINED low output etCO2 largely recovers - all the CO2
+   produced must still be excreted, so what changes is the arterial-venous
+   gradient, not steady-state excretion. Arrest is the exception and the one
+   that matters: at no output there is no excretion.
+   ========================================================================== */
+probe('F28', 'SpO2 and etCO2 answer to the circulation', () => {
+
+    function run(key, acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(key);
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            rows.push({ t: s, spo2: dl.state.spo2, etco2: dl.state.etco2,
+                        co: dl.physCardiacOutput(), perf: dl.state.perfusionFactor,
+                        trace: dl.state.spo2TraceValid, rhythm: dl.state.rhythm,
+                        map: mapOf(dl), alarm: dl.state.alarmStates.spo2 });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const AIRWAY = (t, a) => ({ t, do: dl => dl.setAirway(a) });
+    const MODE   = (t, m) => ({ t, do: dl => dl.setVentMode(m) });
+    const FIO2   = (t, v) => ({ t, do: dl => dl.setVentParam('fio2', v) });
+    const ADR    = t => ({ t, do: dl => give(dl, 'adr', 0.5) });
+    const FLU    = (t, d) => ({ t, do: dl => give(dl, 'flu', d) });
+    const SOURCE = t => ({ t, do: dl => { if (dl.state.bleedSeverity) dl.setBleed(dl.state.bleedSeverity); } });
+
+    /* 1. THE FIRST KNOWN ITEM. An exsanguinating patient must stop producing a
+          reassuring saturation. */
+    const bleed = run('haemorrhage', null, 1800);
+    const lost = bleed.rows.find(r => !r.trace);
+    note(`haemorrhage untreated: CO ${bleed.at(300).co.toFixed(1)} L/min and MAP ` +
+         `${bleed.at(300).map.toFixed(0)} at t=300, perfusion factor ` +
+         `${bleed.at(300).perf.toFixed(2)}; oximeter loses its trace at ` +
+         `t=${lost ? lost.t : 'never'}`);
+    expect(lost && lost.t < 300 && !bleed.at(1800).trace,
+        'the oximeter stops reading on an exsanguinated patient',
+        `trace lost at t=${lost ? lost.t : 'never'} and still absent at t=1800`,
+        'lost inside five minutes and stays lost (it used to read 99 for thirty minutes)');
+
+    /* 2. And the SpO2 value itself is still being computed underneath - this is
+          the display losing the measurement, not the patient losing the
+          saturation. CLAUDE.md trap 1c. */
+    expect(bleed.at(1800).spo2 > 90,
+        'the underlying saturation is still modelled while the trace is gone',
+        `state.spo2 is ${bleed.at(1800).spo2.toFixed(0)} with the trace absent`,
+        'still computed - arterial saturation really is preserved in low output');
+    expect(!bleed.at(1800).alarm || bleed.at(1800).alarm === 'ok',
+        'and the monitor does not alarm on a number it is not showing',
+        `SpO2 alarm state is ${String(bleed.at(1800).alarm)}`,
+        'no alarm while the trace is absent');
+
+    /* 3. A GOOD OUTCOME MUST NOT BE PENALISED. Resuscitate properly and the
+          trace never goes. This is what the 0.40 threshold buys. */
+    const saved = run('haemorrhage', [FLU(20, 1.0), SOURCE(60), FLU(80, 1.0)], 1800);
+    note(`haemorrhage resuscitated: CO ${saved.at(600).co.toFixed(1)}, perfusion factor ` +
+         `${saved.at(600).perf.toFixed(2)}, etCO2 ${saved.at(600).etco2.toFixed(0)}`);
+    expect(saved.rows.every(r => r.trace) && saved.at(600).etco2 > 30,
+        'a successfully resuscitated patient keeps their trace and their etCO2',
+        `trace present throughout, etCO2 ${saved.at(600).etco2.toFixed(0)} at t=600`,
+        'no spurious penalty for the good outcome');
+
+    /* 4. THE SECOND KNOWN ITEM, and the one that matters most. etCO2 in arrest
+          must collapse, not climb. */
+    const arrested = run('last', [AIRWAY(20, 'ett'), MODE(21, 'VCV'), FIO2(22, 1.0)], 400);
+    const arrest = arrested.rows.find(r => r.rhythm !== 'sinus');
+    note(`LAST intubated and ventilated: etCO2 ${arrested.at(arrest.t).etco2.toFixed(0)} at the ` +
+         `arrest -> ${arrested.at(arrest.t + 60).etco2.toFixed(0)} at +60s -> ` +
+         `${arrested.at(arrest.t + 120).etco2.toFixed(0)} at +120s`);
+    expect(arrested.at(arrest.t + 120).etco2 < arrested.at(arrest.t).etco2 - 15,
+        'etCO2 collapses during an arrest rather than climbing',
+        `${arrested.at(arrest.t).etco2.toFixed(0)} -> ` +
+        `${arrested.at(arrest.t + 120).etco2.toFixed(0)} two minutes in`,
+        'a fall of more than 15 (it used to CLIMB, reaching 128)');
+
+    /* 5. THE PAYOFF, which this coupling makes possible for the first time:
+          etCO2 as the ROSC signal. A sudden rise is what tells you the
+          circulation is back. */
+    const rosc = run('last', [AIRWAY(20, 'ett'), MODE(21, 'VCV'), FIO2(22, 1.0),
+                              ADR(120), ADR(150), ADR(180)], 400);
+    const back = rosc.rows.find(r => r.t > 100 && r.rhythm === 'sinus');
+    note(`ROSC at t=${back ? back.t : 'never'}: etCO2 ${rosc.at(back.t - 1).etco2.toFixed(0)} just before -> ` +
+         `${rosc.at(back.t + 20).etco2.toFixed(0)} at +20s -> ${rosc.at(back.t + 40).etco2.toFixed(0)} at +40s`);
+    expect(back && rosc.at(back.t + 40).etco2 > rosc.at(back.t - 1).etco2 + 12,
+        'and rises sharply on ROSC - the signal that tells you it worked',
+        `etCO2 ${rosc.at(back.t - 1).etco2.toFixed(0)} -> ${rosc.at(back.t + 40).etco2.toFixed(0)} ` +
+        `within 40s of ROSC`,
+        'a rise of more than 12 - this is why etCO2 is the resuscitation monitor');
+    expect(!rosc.at(back.t - 1).trace && rosc.at(back.t + 5).trace,
+        'and the oximeter finds its trace again the moment there is a pulse',
+        `trace ${rosc.at(back.t - 1).trace} before ROSC, ${rosc.at(back.t + 5).trace} after`,
+        'absent then present - the cut-off is perfusion, not a latch');
+
+    /* 6. THE BOUNDARY. Scenarios with reduced but adequate output must be
+          untouched - this is what the threshold was chosen to protect, and it
+          is the check that fails first if anyone retunes it upward. */
+    const vagal = run('vagal', null, 300);
+    const isch  = run('ischaemia', null, 300);
+    note(`vagal: CO ${vagal.at(200).co.toFixed(1)} (factor ${vagal.at(200).perf.toFixed(2)}), ` +
+         `trace ${vagal.at(200).trace}, etCO2 ${vagal.at(200).etco2.toFixed(0)}; ` +
+         `ischaemia: CO ${isch.at(200).co.toFixed(1)} (factor ${isch.at(200).perf.toFixed(2)}), ` +
+         `trace ${isch.at(200).trace}`);
+    expect(vagal.rows.every(r => r.trace) && isch.rows.every(r => r.trace),
+        'a bradycardic or rate-controlled patient is not desaturated by this',
+        `vagal trace present throughout, ischaemia too`,
+        'both untouched - neither patient is actually hypoxic');
+    expect(vagal.at(200).perf === 1 && isch.at(200).perf === 1,
+        'and their perfusion factor is a full 1.0, so etCO2 is untouched too',
+        `vagal ${vagal.at(200).perf.toFixed(2)}, ischaemia ${isch.at(200).perf.toFixed(2)}`,
+        'both 1.0 - the curve is flat above 40% of baseline CO');
+
+    expect(bleed.errors.length === 0 && rosc.errors.length === 0 && rosc.undone === 0,
+        'the scenarios run clean',
+        `${bleed.errors.length + rosc.errors.length} tick errors, ${rosc.undone} undelivered actions`,
         'zero of each');
 });
 

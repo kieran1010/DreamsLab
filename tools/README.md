@@ -384,6 +384,37 @@ along — etCO₂, RR, MAC, PIP and Vt already read `'--'` with no airway, alarm
 already suppressed, waveforms already skipped. Losing the monitoring is what
 happens when the circuit comes off; losing the physiology was the bug.
 
+| F28 | SpO₂ and etCO₂ ignored the circulation entirely | 0/10 |
+
+F28 closes two known items at once, because they were the same omission —
+nothing in the gas-exchange block read cardiac output. SpO₂ read a reassuring
+99 through thirty minutes at CO 1.0–1.3 L/min (while the pleth **waveform** had
+already gone flat, so the monitor showed no trace and a perfect number at the
+same time), and etCO₂ was purely ventilation-driven, so an arrested patient's
+etCO₂ *climbed* to 128 when the one thing everyone knows is that it collapses.
+
+`state.perfusionFactor` now drives both: this patient's CO against their own
+baseline, flat above 0.40 and ramping to 0. **The threshold was measured, not
+guessed** — across all forty sweep runs only LAST (0%) and haemorrhage (18%)
+fall below it, while vagal sits at 49% and rate-controlled ischaemia at 53%.
+The probe's last two checks pin exactly that boundary, so it fails first if
+anyone raises the threshold and starts desaturating bradycardias.
+
+SpO₂ **loses its trace** rather than reading a false low — arterial saturation
+really is preserved in low output, and it is the measurement that fails. The
+probe checks that `state.spo2` is still being computed underneath while the
+display blanks (CLAUDE.md trap 1c), and that the alarm doesn't fire on a number
+the monitor isn't showing.
+
+The payoff check is etCO₂ as the **ROSC signal**, which this coupling makes
+possible for the first time: 15 → 33 → 47 within forty seconds of ROSC, with
+the oximeter finding its trace again the moment there's a pulse.
+
+**Note for anyone diffing sweep output:** haemorrhage doesn't move in `scan.js`,
+because scan samples `state.spo2` (still 99, correctly) and the trace loss is a
+display-layer change the sweep doesn't record. That's precisely why this probe
+exists.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed
