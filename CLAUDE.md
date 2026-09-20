@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 166/166,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 173/173,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 
 `sweep.js` shifts every treatment plan by `ONSET_LEAD_IN` (see `planFor()`), so
@@ -334,6 +334,15 @@ it and say so.
   disagree, fix one or the other — do not leave them inconsistent.
 
 ## Known open items
+
+- **The eye-opening alarm is gated on intent, not just depth** (v4.58). It
+  fires only when a hypnotic is actually acting (`consciousness` below
+  `CONFIG.BIS_BASE`) **or** there is surgical stimulus. An awake undrugged
+  patient with nothing being done to them gets the event and the log entry but
+  no alarm — the sim used to shriek at the `induction` scenario's own opening
+  state, which trains students to ignore the one alarm that should never be
+  ignored. If you add another hypnotic, make sure it feeds the BIS `pushDown`
+  term, or the gate will read your anaesthetised patient as merely awake.
 
 - **Three scenarios cannot hold their etCO₂, independent of any pathology.**
   Found during the v4.57 onset audit and deliberately not fixed, because it is
