@@ -51,6 +51,156 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.43  ("Anaphylaxis: a reaction worth treating")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Audit of the anaphylaxis scenario, measured against an identical run with the
+  event forced off so every number is the reaction's OWN contribution. The whole
+  untreated reaction was worth MAP -15.5, HR +5.5 and SpO2 -3.3 at its worst
+  (nadir MAP 74, HR 102), then cleared itself by t=145s and drifted up to MAP 107
+  by 20 minutes. Doing nothing was the winning strategy. Treating it correctly
+  made the monitor worse. Five causes, all now fixed, plus a bounded rework of
+  how treatment resolves the reaction.
+
+  1. The sympathetic surge was structural trap #1.
+     `state.alphaTone += 0.03 * dt` and the same on betaTone: against
+     TONE_DECAY_TAU that settles 0.06 above target, measured +0.046 once the
+     baroreflex answers - so the "catecholamine surge" was +2.2 bpm. Worse,
+     alphaTone raises SVR, so the reaction's opening act LIFTED MAP by 5.5. And
+     it ran only between SYMP_START and VASOPLEGIA_START, so what little
+     tachycardia there was decayed away exactly as the hypotension arrived.
+     Now a sustained drive on alphaTarget/betaTarget (ANAPHYLAXIS_SYMP_BETA 0.40,
+     SYMP_ALPHA 0.05), beta-dominant because the tachycardia is the sign and
+     alpha-mediated vasoconstriction is what histamine overwhelms. Split into a
+     small early component (SYMP_EARLY 0.15, the recognition cue) and a larger
+     one tracking mediator burden, because driving it all off the early clock put
+     MAP at 150 and HR at 132 by t=20s - the same failure, louder.
+     Same family as F6 (aneurysm) and F7 (MH); this one was missed.
+
+  2. The vasoplegia depth had drifted a whole model generation.
+     v3.75 cut the peak 1.25 -> 0.25 to lift the nadir from MAP 22 to ~48. The
+     model was then recalibrated - this scenario's own baseline rose from MAP 65
+     to 90 - and nobody re-measured. Sensitivity sweep today: 0.25 -> nadir 74,
+     0.55 -> 62, 0.90 -> 53, 1.25 -> 48. So the pre-v3.75 value is what now
+     delivers the number v3.75 was aiming for. Restored to 1.25, as
+     ANAPHYLAXIS_VASOPLEGIA_PEAK in [CONFIG] rather than a literal in the tick.
+
+  3. There was no capillary leak at all.
+     Circulating volume sat at 5.00 L for the whole run while objective 3 and
+     hint 4 both taught "aggressive volume resuscitation (capillary leak +
+     vasodilation)". With nothing to replace, 2L of crystalloid could only
+     overload: it left MAP 90 against 100 for doing nothing, CO 6.1 against 6.9
+     and SpO2 90 against 96 - the scenario's own recommended treatment measurably
+     harmed the patient. Now a bounded leak (LEAK_RATE 0.018 L/s at full
+     severity, LEAK_MAX 0.24 of anatomic central volume) taking ~1.2 L over ~70s.
+     First attempt expressed the bound as a floor on centralVolume, which made
+     the floor an attractor - a litre went in, the leak took it straight back
+     out, and fluids were as futile as before. Capping the total loss fixes it:
+     1L now buys +9 mmHg and stays in.
+
+  4. Adrenaline transiently made the patient worse.
+     The v3.63 hook advanced anaphylaxisTimer to `max(timer, decayStart) +
+     dose*100`, on the stated grounds that adrenaline must never pull a patient
+     backward through the rising vasoplegia. For anyone still ON the rising limb
+     it pushed them forward to near the peak instead: 100 mcg at t=30s moved the
+     timer 30 -> 70 and the vasoplegia drive 0.042 -> 0.208, dropping MAP 86 ->
+     70 within five seconds. 10 mcg was pure harm. The faster a trainee
+     recognised the reaction and treated it correctly, the worse the monitor got.
+     The timer no longer responds to treatment at all. Adrenaline now earns
+     state.anaphResolution from adrCe exposure (ADR_RESOLVE_GAIN 0.28, ~0.20 per
+     100 mcg), so a bolus, a repeat bolus and an infusion all count, the credit
+     arrives with the drug's effect rather than with the click, and the response
+     is monotonic by construction. Gain was calibrated against the MEASURED
+     exposure integral - PK `vd` is L/kg, not L, and deriving it on paper gives a
+     number ~70x out, which is exactly how v4.38's SALB_BRONCHO_GAIN went wrong.
+
+  5. The co-triggered bronchospasm was a quarter of the model's own, and
+     permanent.
+     It reached resistance 21 of a possible 80 - 26% of what the bronchospasm
+     scenario delivers (49, PIP 27, SpO2 90) - because bronchoRelaxFactor is
+     attenuated by 0.6 MAC of sevo and by betaTone before the spasm even starts.
+     "Rising airway pressures" was PIP 12 -> 20. Two changes: the patient's own
+     anaphylactic surge no longer counts as bronchodilator relief (the endogenous
+     surge is already maximal and is not enough - that is why exogenous
+     adrenaline is first-line, and without this discount fixing the tachycardia
+     would have abolished the spasm), and ANAPHYLAXIS_BRONCH_SEVERITY 3.3 scales
+     the target with severity. Untreated now reaches resistance 49, PIP 36,
+     SpO2 89 - matched to the bronchospasm scenario - and 3x100 mcg of adrenaline
+     takes it to 26. A spasm the reaction started is also released once the
+     reaction resolves, latched via anaphBronchFired so it fires once per
+     reaction: BRONCH_PROB is 999 (deterministic since v3.63), so without the
+     latch the release and the co-trigger flip the event every tick and the log
+     grows until the heap dies. Before v4.43 nothing released the spasm, so the
+     co-trigger was one-shot by accident.
+
+  6. Untreated reactions no longer resolve themselves.
+     v3.63 added a 90s mediator-clearance decay to stop a treated patient
+     rebounding once the adrenaline washed out. Sound motive, wrong mechanism: it
+     ran on the clock, so it cleared the untreated patient too. Severity now
+     rises over VASOPLEGIA_RISE and HOLDS; the rebound it guarded against is
+     handled by anaphResolution being permanent treatment credit.
+
+  Structurally: the reaction is one 0..1 severity (state.anaphSeverity) that the
+  vasoplegia, the surge, the leak and the bronchospasm all read, exactly as
+  mhSeverity works, computed near the TOP of the tick so everything downstream
+  resolves within the same tick instead of trailing by 100 ms. Every tunable is
+  in [CONFIG]; the shape used to be literals in the tick body, which is how it
+  came to be mistuned without anyone noticing.
+
+  Verified, adult profile, seeded harness:
+   - Untreated: MAP 88 -> 94 (t=25) -> 59 (t=55) -> nadir 44 (t=107), holds
+     44-51. HR 72 -> 101 -> 130 (t=55) -> 140. Resistance 5 -> 49, PIP 12 -> 36,
+     SpO2 99 -> 89, circulating volume 5.00 -> 3.80 L. Against the event-off
+     control: MAP -47, HR +40, SpO2 -9.8, resistance +44.
+   - 10 mcg adrenaline: nadir 48 vs 44. A response, not a rescue, and no longer
+     harmful.
+   - 100 mcg at t=45: MAP 64 -> 85 by t=90, holds ~85 for two minutes, wanes to
+     52 by t=600 as the drug clears and the untreated reaction reasserts.
+   - 3x100 mcg + 1L (the sweep's plan): resolution 0.59, MAP 84, resistance 28,
+     SpO2 94 at t=600. Partial, which is what "titrate to response" should feel
+     like.
+   - 5x100 mcg: resolution 0.96, MAP 110, resistance 5 - reaction resolved.
+   - Fluid alone, 1L: MAP 51 -> 60, retained. 2L: 67.
+   - Bare event (toggleEvent on a profile, no anaesthesia, no airway support):
+     resistance caps at BRONCH_RESISTANCE 80 on every profile. Adult, elderly and
+     obese ride it out desaturating (SpO2 61-78, sinus); paed arrests at t=154s
+     and sepsis at t=214s, both via the v4.29 hypoxia route with SpO2 at its 40
+     floor. Clinically right - untreated anaphylaxis with severe bronchospasm and
+     an unsupported airway kills, and kills a 20 kg child fastest - but teachers
+     driving the event manually should know it now gets there.
+
+  Known, and deliberately not chased here:
+   - Repeated adrenaline boluses still overshoot: five 100 mcg doses peak MAP at
+     180 with alphaTone and betaTone pinned at their 1.4 clamps. This is the
+     drug's own calibration, not the scenario's - 100 mcg IV in a stable
+     maintenance patient takes MAP 66 -> 152 - and retuning it would move every
+     pressor in the sim. The reaction being deeper already pulled the treated
+     peak down from 180 to 143 for a comparable plan.
+   - anaphBrewing shares the event and so gets the same deeper reaction, but its
+     baseline is already MAP 53 (sevo 1.0 MAC + remifentanil maintenance), so it
+     now bottoms out near 32 rather than 38. The reaction is behaving identically
+     in both scenarios; what differs is that scenario's starting pressure, which
+     its own briefing calls "currently stable". Left as a content decision.
+   - FiO2 cannot improve SpO2 anywhere in the model: spo2Ceiling is shunt-driven
+     and FiO2 only enters below SPO2_DESAT_THRESHOLD_FIO2 (0.13). FiO2 1.0 and
+     0.21 give identical saturations under bronchospasm. A gas-exchange design
+     decision, not an anaphylaxis one, but it removes a lever a trainee reaches
+     for.
+
+  tools/probes.js gains F18 (13 checks) covering all of the above, including the
+  oscillation guard. tools/sweep.js TREATMENTS retimed: the old plan gave its
+  first bolus at t=30, before anything was visible on the monitor, and 2L into a
+  patient whose volume never moved.
+
+  Baseline: probes 58/58, voucher-probe 15/15, scan 0 BUG-level findings, 0
+  runtime errors. Every non-anaphylaxis row of scan's treatment-effect table is
+  unchanged.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.42  ("Voucher system goes live; Resources tab fully verified")
   ---------------------------------------------------------------------------------
   ENT_CONFIG.redeemUrl filled in (the redeem Edge Function is deployed - via
@@ -5414,6 +5564,96 @@ const CONFIG = {
     ANAPHYLAXIS_VASOPLEGIA_START: 25, // SVR starts crashing (was 10)
     ANAPHYLAXIS_BRONCH_START: 50,     // bronchospasm co-triggers (was 15)
     ANAPHYLAXIS_BRONCH_PROB: 999,     // v3.63: deterministic - always fires (was probabilistic)
+    /* v4.43: the shape of the reaction, lifted out of the tick body where it
+       had been sitting as inline literals since v3.63 - which is how it came
+       to be mistuned without anyone noticing.
+
+       Severity is now one 0..1 number (state.anaphSeverity) that the vasoplegia,
+       the sympathetic surge, the capillary leak and the bronchospasm all read,
+       exactly as mhSeverity works. It rises over VASOPLEGIA_RISE and then HOLDS:
+       the v3.63 automatic 90s decay is gone. That decay existed to stop a
+       post-adrenaline rebound, but it applied to the untreated patient too, so
+       an anaphylaxis nobody treated resolved itself in 145s and then drifted up
+       to MAP 107 - doing nothing was the winning move. Resolution is now earned
+       (state.anaphResolution, driven by adrenaline exposure), which removes the
+       rebound without rewarding inaction. */
+    ANAPHYLAXIS_VASOPLEGIA_RISE: 30,  // sec from VASOPLEGIA_START to full vasoplegia
+    /* svrPushDown at full severity. v3.75 cut this 1.25 -> 0.25 to lift the MAP
+       nadir from 22 to ~48. The rest of the model was then recalibrated (this
+       scenario's own baseline rose from MAP 65 to 90), and nobody re-measured:
+       by v4.42 the nadir was 74, i.e. a 15 mmHg dip, which no trainee would
+       call anaphylaxis on. Measured today, 1.25 lands the nadir at 48 and 0.90
+       at 53 - so v4.43 restores the pre-v3.75 magnitude and gets the number
+       v3.75 was aiming for. */
+    ANAPHYLAXIS_VASOPLEGIA_PEAK: 1.25,
+    /* Sympathetic surge. v3.63-v4.42 did this as a per-tick push on alphaTone
+       and betaTone (0.03*dt each) - structural trap #1. Against TONE_DECAY_TAU
+       that settles 0.06 above target, measured +0.046 after the baroreflex
+       answers: +2.2 bpm, and because alphaTone raises SVR it also lifted MAP
+       +5.5, so the reaction's opening act made the patient look better. Now a
+       sustained drive on the targets, like sahSurge and MH_BETA_DRIVE.
+       Beta-dominant on purpose: the tachycardia is the sign, and alpha-mediated
+       vasoconstriction is precisely what histamine overwhelms in anaphylaxis -
+       a big alpha drive would have the reaction defending its own blood
+       pressure. Tuned for HR ~130 at full severity.
+
+       The surge has two components. A small early one on its own clock, which is
+       the teaching cue - an unexplained tachycardia is often the first sign of
+       intra-operative anaphylaxis, before the pressure moves - and a larger one
+       that tracks the mediator burden, because the rest of the tachycardia is
+       compensatory to the vasodilation and must not precede it. Driving the whole
+       surge off the early clock put MAP at 150 and HR at 132 by t=20s, which is
+       the old "reaction opens by making the patient look better" failure in a
+       louder register. SYMP_BETA is also deliberately kept where betaTarget lands
+       below BETA_CLAMP: saturating the clamp would flatten the response to every
+       beta drug and beta blocker given afterwards (structural trap #1's subtler
+       half, and the v4.36 parasympTone finding). */
+    ANAPHYLAXIS_SYMP_BETA:  0.40,     // added to betaTarget at full surge
+    ANAPHYLAXIS_SYMP_ALPHA: 0.05,     // added to alphaTarget at full surge (token)
+    ANAPHYLAXIS_SYMP_RISE:  20,       // sec from SYMP_START to full early surge
+    ANAPHYLAXIS_SYMP_EARLY: 0.15,     // fraction of the surge on the early clock
+    /* Capillary leak. There was none before v4.43: circulating volume sat at
+       5.00 L for the whole run while objective 3 and hint 4 both taught
+       "aggressive volume resuscitation (capillary leak + vasodilation)". With
+       nothing to replace, 2 L of crystalloid could only overload - it left MAP
+       90 against 100 for doing nothing, and SpO2 90 against 96. Rate is L/sec
+       at full severity; the floor is a fraction of the profile's anatomic
+       central volume, so fluid resuscitation expands back toward normal the
+       same way it does for the sepsis profile's initialVolumeFraction.
+
+       LEAK_MAX caps the TOTAL volume the leak removes, tracked in
+       state.anaphLeakTotal - not the volume it will leave behind. Expressing it
+       as a floor on centralVolume instead made the floor an attractor: a litre
+       of crystalloid lifted the patient above it, the leak resumed at full rate
+       and took the litre straight back out again, so fluids were exactly as
+       futile as they were before the leak existed. Capping the loss means the
+       leak stops once it has taken its 1.2 L and anything given afterwards
+       stays in. */
+    ANAPHYLAXIS_LEAK_RATE:  0.018,    // L/sec at full severity (~1.2L over ~70s)
+    ANAPHYLAXIS_LEAK_MAX:   0.24,     // total fraction of centralVol lost to the leak
+    /* Bronchospasm severity multiplier on BRONCH_RESISTANCE for an
+       anaphylaxis-triggered spasm. The co-triggered spasm used to reach
+       resistance 21 of a possible 80 - 26% of what the model's own
+       bronchospasm scenario delivers (49, PIP 27, SpO2 90, etCO2 88) - because
+       bronchoRelaxFactor is attenuated by 0.6 MAC of sevo and by betaTone
+       before the spasm even starts. "Rising airway pressures" was PIP 12->20.
+       See the endogenous-surge discount in the hysteresis block for the other
+       half of this fix. Clamped to the resistance gauge's 100 ceiling. */
+    ANAPHYLAXIS_BRONCH_SEVERITY: 3.3,
+    /* Resolution earned per unit of adrenaline effect-site exposure per second.
+       Driven from adrCe rather than from the bolus click so a bolus, a repeat
+       bolus and an infusion all count, and so there is no discontinuity for the
+       patient at the moment of the click - which is what the v3.63 timer
+       advancement produced (see the note on its removal in giveBolus).
+       Calibrated against the MEASURED exposure integral rather than a derived
+       one, for the reason v4.38 found the hard way with SALB_BRONCHO_GAIN: PK
+       `vd` here is L/kg, not L, so working the integral out on paper gives a
+       number ~70x too big and the effect comes out ~70x too weak. Measured, one
+       100 mcg bolus delivers peak adrCe 0.0030 and integral adrCe.dt = 0.708
+       units.s, so 0.28 buys ~0.20 of resolution per 100 mcg - five titrated
+       boluses to full resolution, on top of adrenaline's own pressor effect.
+       If the adrenaline PK is ever retuned, re-measure this. */
+    ANAPHYLAXIS_ADR_RESOLVE_GAIN: 0.28,
 
     // Surgical events
     TOURNIQUET_DURATION: 180,         // sim-sec; event auto-resolves at this point
@@ -5808,6 +6048,28 @@ const state = {
     arrestRescueCredits: 0,
     // Anaphylaxis progression (sim-sec into the reaction; 0 if inactive)
     anaphylaxisTimer: 0,
+    /* v4.43: the reaction's shape, derived from the timer each tick.
+       anaphSeverity (0..1) is the mediator burden - it drives the vasoplegia,
+       the capillary leak and the bronchospasm severity. anaphSurge (0..1) is the
+       compensatory catecholamine surge, on its own earlier clock, and feeds the
+       alpha/beta TARGETS (never the tones - see structural trap #1).
+       anaphResolution (0..1) is treatment credit earned from adrenaline
+       exposure; it is the only thing that brings severity down, so an untreated
+       reaction no longer resolves itself. anaphBronchOwned records that the
+       reaction is what triggered the bronchospasm event, so resolving the
+       reaction can release it again without clearing a spasm the user or
+       another event started, and anaphBronchFired latches the co-trigger to
+       once per reaction. That latch is load-bearing: ANAPHYLAXIS_BRONCH_PROB is
+       999 (v3.63 made the co-trigger deterministic), so without it the release
+       below and the co-trigger above flip the event on and off every tick, each
+       flip writing a log line, until the heap runs out. Before v4.43 nothing
+       ever released the spasm, so the co-trigger was one-shot by accident. */
+    anaphSeverity: 0,
+    anaphSurge: 0,
+    anaphResolution: 0,
+    anaphBronchOwned: false,
+    anaphBronchFired: false,
+    anaphLeakTotal: 0,
 
     // v4.29: subarachnoid-haemorrhage catecholamine surge (0..1). Feeds the
     // alpha and parasympathetic tone TARGETS so it survives the tone
@@ -6383,6 +6645,64 @@ setInterval(() => {
         }
     }
 
+    /* --- v4.43: anaphylaxis envelopes ---
+       Deliberately here, near the top of the tick, rather than with the other
+       event blocks further down. Everything that consumes the reaction - the
+       bronchospasm hysteresis immediately below, the capillary leak, the
+       autonomic targets, the SVR formula and the HR calculation - is downstream
+       of this point, so the whole reaction resolves within one tick instead of
+       trailing the rest of the model by 100 ms. The event block further down
+       keeps only what genuinely belongs with the other events: co-triggering
+       and releasing the bronchospasm.
+
+       Three envelopes off one clock:
+         anaphResolution  treatment credit from adrenaline exposure (monotonic)
+         anaphSeverity    mediator burden: rises over VASOPLEGIA_RISE, then holds
+         anaphSurge       compensatory catecholamine surge, on the earlier clock
+       Severity and surge are both scaled by (1 - resolution), so adrenaline
+       lifts the whole syndrome together rather than one limb at a time. */
+    if (state.events.anaphylaxis) {
+        state.anaphylaxisTimer += dt;
+        const t = state.anaphylaxisTimer;
+        // Adrenaline exposure buys resolution. Monotonic - it is never given
+        // back, which is what makes a treated reaction stay treated once the
+        // drug washes out (the v3.63 automatic decay used to do that job, at
+        // the cost of doing it for the untreated patient too).
+        state.anaphResolution = Math.min(1,
+            state.anaphResolution + p.adrCe * CONFIG.ANAPHYLAXIS_ADR_RESOLVE_GAIN * dtPharm);
+        const relief = 1 - state.anaphResolution;
+        // Mediator burden.
+        const tVaso = t - CONFIG.ANAPHYLAXIS_VASOPLEGIA_START;
+        const burden = clamp(tVaso / CONFIG.ANAPHYLAXIS_VASOPLEGIA_RISE, 0, 1);
+        state.anaphSeverity = burden * relief;
+        // Compensatory surge - starts earlier and, unlike v3.63-v4.42, does not
+        // switch off when the vasoplegia starts. A real anaphylactic
+        // tachycardia persists for as long as the reaction does; the old code
+        // ran the push only between SYMP_START and VASOPLEGIA_START, so what
+        // little tachycardia there was decayed away exactly as the hypotension
+        // arrived.
+        const tSymp = t - CONFIG.ANAPHYLAXIS_SYMP_START;
+        const early = clamp(tSymp / CONFIG.ANAPHYLAXIS_SYMP_RISE, 0, 1);
+        const eFrac = CONFIG.ANAPHYLAXIS_SYMP_EARLY;
+        state.anaphSurge = (eFrac * early + (1 - eFrac) * burden) * relief;
+        // Capillary leak. A bounded total loss rather than a floor on the
+        // volume (see LEAK_MAX), so a fluid bolus genuinely refills a depleted
+        // circulation instead of being drained straight back out.
+        const leakCap = state.profile.centralVol * CONFIG.ANAPHYLAXIS_LEAK_MAX;
+        if (state.anaphLeakTotal < leakCap) {
+            const drain = Math.min(
+                CONFIG.ANAPHYLAXIS_LEAK_RATE * state.anaphSeverity * dt,
+                leakCap - state.anaphLeakTotal);
+            p.centralVolume -= drain;
+            state.anaphLeakTotal += drain;
+        }
+    } else {
+        state.anaphylaxisTimer = 0;
+        state.anaphSeverity = 0;
+        state.anaphSurge = 0;
+        state.anaphResolution = 0;
+    }
+
     /* --- v2.8 hysteresis: smooth bronchospasm resistance ---
        Event flips are binary, but airway constriction takes 10-30s to peak and
        minutes to resolve. Here p.bronchResistance eases toward the high value
@@ -6405,14 +6725,44 @@ setInterval(() => {
             //   ketamine really is a strong bronchodilator)
             // v3.60: salbutamol (direct beta2, strong) and magnesium (smooth
             // muscle Ca antagonism, modest) added.
+            /* v4.43: the patient's OWN anaphylactic catecholamine surge does not
+               count as bronchodilator relief. Discounting it is the point of the
+               scenario: the endogenous surge is already maximal and is not
+               enough, which is exactly why exogenous adrenaline is first-line.
+               Without the discount the fix for the missing tachycardia would
+               have abolished the bronchospasm - driving betaTone to 1.25 puts
+               2.0*(beta - BETA_REST) at 2.1 on its own, taking the resistance
+               target from 21 to 9 and making the respiratory limb disappear
+               entirely. Subtracting the surge's own contribution to betaTarget
+               leaves beta relief coming only from DRUG beta activity
+               (adrenaline, salbutamol, ketamine), which is the behaviour that
+               was wanted all along: the spasm is severe until treated, and
+               adrenaline reverses it. betaTone tracks betaTarget within ~2s so
+               the subtraction is a close approximation, and it is floored at 0. */
+            const endogenousSurgeBeta = state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_BETA;
             const bronchoRelaxFactor =
-                  2.0 * Math.max(0, state.betaTone - CONFIG.BETA_REST)
+                  2.0 * Math.max(0, state.betaTone - CONFIG.BETA_REST - endogenousSurgeBeta)
                 + 1.5 * state.mac
                 + 1.0 * (p.ketCe / 2.0)
                 + CONFIG.SALB_BRONCHO_GAIN * (p.salbCe / CONFIG.SALB_CE_REF)   // v4.38: was 3.0*(Ce/0.05); the 0.05 reference was ~37x too high (real peak Ce ~0.00134), so this term was near-inert
                 + CONFIG.MAG_BRONCHO_GAIN * (p.magCe / CONFIG.MAG_CE_REF);   // v4.38/v4.39 magnesium - modest adjunct; was 0.5*(Ce/0.5) but real peak Ce ~0.088 (not 0.5), so it contributed ~0.088 and was near-inert
             const attn = Math.exp(-bronchoRelaxFactor);   // 0..1; 1 = no relief
-            bronchTarget = CONFIG.BRONCH_RESISTANCE * attn + 5 * (1 - attn);
+            /* v4.43: an anaphylaxis-driven spasm is more severe than the reflex
+               spasm the bare event models - histamine and leukotriene rather
+               than airway irritation. Scales in and out with anaphSeverity so
+               treating the reaction treats the airway too.
+
+               Clamped to BRONCH_RESISTANCE itself: the multiplier exists to
+               overcome attenuation, not to invent a spasm worse than the model's
+               own definition of a full one. The clamp does not bind inside the
+               scenario (which lands at 49 against a 0.6 MAC sevo background),
+               but it binds hard the moment the event is toggled onto a patient
+               with no volatile on board - `attn` then approaches 1 and the raw
+               product is 264, which pinned the resistance gauge at its 100
+               ceiling on every profile. */
+            const sevMult = 1 + (CONFIG.ANAPHYLAXIS_BRONCH_SEVERITY - 1) * state.anaphSeverity;
+            bronchTarget = Math.min(CONFIG.BRONCH_RESISTANCE,
+                CONFIG.BRONCH_RESISTANCE * sevMult * attn + 5 * (1 - attn));
         } else {
             bronchTarget = 5;
         }
@@ -6690,14 +7040,16 @@ setInterval(() => {
     }
     const alphaTarget = alphaRest + alphaNociDrive
                       + state.sahSurge  * CONFIG.SAH_SURGE_ALPHA
-                      + state.mhSeverity * CONFIG.MH_ALPHA_DRIVE;   // v4.29
+                      + state.mhSeverity * CONFIG.MH_ALPHA_DRIVE    // v4.29
+                      + state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_ALPHA;  // v4.43
     /* Beta blockade scales the target rather than the tone (see the esmolol
        note further down). bbBlockFraction is computed later in this same tick,
        so this uses the previous tick's value - a 100 ms lag, immaterial here.
        The 0.05 floor preserves the "never total beta loss" behaviour. */
     const betaTarget  = Math.max(0.05,
                         (betaRest + betaNociDrive
-                         + state.mhSeverity * CONFIG.MH_BETA_DRIVE)   // v4.29
+                         + state.mhSeverity * CONFIG.MH_BETA_DRIVE    // v4.29
+                         + state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_BETA)  // v4.43
                         * (1 - (state.bbBlockFraction || 0)));
     /* v4.36: parasympathetic target. The opioids' central vagal drive is a
        SUSTAINED state (present as long as the drug is), so - like alpha/beta's
@@ -6927,33 +7279,47 @@ setInterval(() => {
        target makes the reduction genuinely proportional to the fraction. */
     state.bbBlockFraction = 1 - Math.exp(-p.esmoCe / CONFIG.ESMO_BLOCK_K);
 
-    /* --- Anaphylaxis progression ---
-       Three-phase reaction over ~60-90 seconds:
-         Phase 1 (0-30s):  sympathetic surge (catecholamine release, tachycardia)
-         Phase 2 (30-60s): SVR collapse (vasoplegia, histamine-mediated)
-         Phase 3 (60s+):   may trigger bronchospasm (separate event co-activated)
-       Treatment: adrenaline + fluids. Giving adrenaline 500 mcg during anaphylaxis
-       halves the anaphylaxisTimer (simulates clinical stabilisation). */
-    if (state.events.anaphylaxis) {
-        state.anaphylaxisTimer += dt;
-        const t = state.anaphylaxisTimer;
-        // Phase 1: symp surge
-        if (t > CONFIG.ANAPHYLAXIS_SYMP_START && t < CONFIG.ANAPHYLAXIS_VASOPLEGIA_START) {
-            state.alphaTone += 0.03 * dt;
-            state.betaTone  += 0.03 * dt;
-        }
-        // Phase 2 vasoplegia: SVR drop is applied in the SVR formula below
-        // (see svrTone calculation). Kept separate so the formula stays
-        // authoritative and can't be overwritten.
+    /* --- Anaphylaxis: bronchospasm co-trigger and release ---
+       Timing, from CONFIG: the surge starts at SYMP_START (2s) and builds over
+       SYMP_RISE; the vasoplegia starts at VASOPLEGIA_START (25s) and builds over
+       VASOPLEGIA_RISE; the bronchospasm joins at BRONCH_START (50s). Everything
+       else about the reaction - the three envelopes, the resolution credit and
+       the capillary leak - is computed near the top of the tick, upstream of the
+       bronchospasm hysteresis and the autonomic targets that read it. Only the
+       event co-activation lives here, with the other events.
 
-        // Phase 3: bronchospasm (one-shot trigger)
-        if (t > CONFIG.ANAPHYLAXIS_BRONCH_START && !state.events.bronchospasm
+       v4.43: the comment this replaces described phases at 0-30 / 30-60 / 60s+,
+       a "may trigger" bronchospasm and a 500 mcg dose that halves the timer.
+       All three had been wrong since v3.63: the constants are 2 / 25 / 50, the
+       trigger is deterministic, and the timer arithmetic changed in v3.63 and is
+       gone in v4.43. */
+    if (state.events.anaphylaxis) {
+        const t = state.anaphylaxisTimer;
+        if (t > CONFIG.ANAPHYLAXIS_BRONCH_START && !state.anaphBronchFired
+            && !state.events.bronchospasm
             && Math.random() < CONFIG.ANAPHYLAXIS_BRONCH_PROB * dt) {
             toggleEvent('bronchospasm');
+            state.anaphBronchFired = true;
+            state.anaphBronchOwned = true;
             log('ANAPHYLAXIS: bronchospasm co-triggered');
         }
+        /* v4.43: release a spasm the reaction itself started once the reaction is
+           essentially resolved. Before this the co-triggered bronchospasm was
+           permanent - an untreated patient recovered their blood pressure (the
+           old automatic decay) and was left ventilating against resistance 21
+           for the rest of the case, and a fully treated one kept the event flag
+           forever. Only ever releases a spasm anaphBronchOwned says we started,
+           so a spasm the user or another event triggered is left alone. */
+        if (state.anaphBronchOwned && state.events.bronchospasm
+            && state.anaphSeverity < 0.05 && state.anaphResolution > 0.9) {
+            toggleEvent('bronchospasm');
+            state.anaphBronchOwned = false;
+            log('ANAPHYLAXIS: bronchospasm resolving');
+        }
     } else {
-        state.anaphylaxisTimer = 0;
+        state.anaphBronchOwned = false;
+        state.anaphBronchFired = false;
+        state.anaphLeakTotal = 0;
     }
 
     /* --- Tourniquet release ---
@@ -7226,32 +7592,20 @@ setInterval(() => {
                      + state.mac * hSens * CONFIG.SVR_SEVO_DROP    // v3.48: hSens for mac
                      + dexE      * CONFIG.SVR_DEX_DROP;
 
-        // Anaphylaxis vasoplegia: progressive drive matching old "target 0.3" behaviour.
-        // v2.8: persistent drive - continues to decay after event is cleared (tau ~ 30s)
-        // instead of cutting instantly. Tracks current drive into state.anaphExitPushdown.
-        // v3.63: ramp shortened from 30s to 20s for the tightened build timing.
-        // v3.63: natural decay phase added - after peaking, vasoplegia regresses
-        // over ~90s representing mediator clearance. Without this, the patient
-        // would rebound deteriorating once adrenaline PK washes out even after
-        // aggressive treatment. Adrenaline boluses reduce anaphylaxisTimer which
-        // moves the patient backward through the decay curve.
-        // v3.75: soften the peak (1.25 -> 0.55) so MAP nadir lands in the 50s
-        // rather than the 20s. Also stretch the rise phase 20s -> 30s for a
-        // gentler trajectory. Decay phase stays at 90s.
-        if (state.events.anaphylaxis && state.anaphylaxisTimer > CONFIG.ANAPHYLAXIS_VASOPLEGIA_START) {
-            const tSince = state.anaphylaxisTimer - CONFIG.ANAPHYLAXIS_VASOPLEGIA_START;
-            let phase;
-            if (tSince < 30) {
-                // Rising phase: 0 -> 1 over 30s
-                phase = tSince / 30;
-            } else if (tSince < 120) {
-                // Decay phase: 1 -> 0 over next 90s (mediator clearance)
-                phase = 1 - (tSince - 30) / 90;
-            } else {
-                // Resolved
-                phase = 0;
-            }
-            state.anaphExitPushdown = 0.25 * Math.max(0, phase);
+        // Anaphylaxis vasoplegia: histamine-mediated SVR collapse, driven by the
+        // single severity envelope computed at the top of the tick.
+        // v2.8: persistent drive - continues to decay after the event is cleared
+        // (tau ~ 30s) instead of cutting instantly, via state.anaphExitPushdown.
+        // v4.43: the shape moved into CONFIG and the automatic mediator-clearance
+        // decay came out. v3.63 added that decay so a treated patient would not
+        // rebound once the adrenaline washed out, but it ran on the clock rather
+        // than on treatment: an untreated reaction cleared itself in 145s
+        // whatever the trainee did, then drifted up to MAP 107 by 20 min. The
+        // rebound it was guarding against is now handled properly, by
+        // anaphResolution - adrenaline exposure buys permanent credit, so a
+        // treated reaction stays treated and an untreated one does not resolve.
+        if (state.events.anaphylaxis) {
+            state.anaphExitPushdown = CONFIG.ANAPHYLAXIS_VASOPLEGIA_PEAK * state.anaphSeverity;
         } else {
             // Event inactive - decay any persistent drive from an earlier reaction
             const blend = 1 - Math.exp(-dtPharm / CONFIG.TAU_ANAPH_EXIT);
@@ -8743,22 +9097,20 @@ function giveBolus(drug, dose, btn) {
                 log('ROSC! Rhythm reverted to sinus.');
             }
         }
-        // Anaphylaxis: adrenaline accelerates recovery proportional to dose.
-        // v3.63: changed from "500mcg threshold halves timer" to proportional
-        // advancement. Each dose pushes the patient forward through the
-        // reaction toward resolution. Adrenaline never pulls the patient
-        // backward through the rising vasoplegia phase (that would cause
-        // MAP overshoot artefacts). Implementation: ensure the new timer is
-        // at least at the start of the decay phase (VASOPLEGIA_START + 20),
-        // then advance further by dose * 100 seconds.
-        if (state.events.anaphylaxis && dose.d > 0) {
-            // v3.75: rise phase is now 30s (was 20s)
-            const decayStart = CONFIG.ANAPHYLAXIS_VASOPLEGIA_START + 30;
-            const advancement = dose.d * 100;   // mg * 100 = sec of resolution
-            const newTimer = Math.max(state.anaphylaxisTimer, decayStart) + advancement;
-            state.anaphylaxisTimer = newTimer;
-            log(`Anaphylaxis: timer advanced to ${newTimer.toFixed(0)}s from adrenaline`);
-        }
+        /* v4.43: no anaphylaxis hook here any more. Adrenaline now resolves the
+           reaction through state.anaphResolution, accumulated from adrCe in the
+           tick, so a bolus, a repeat bolus and an infusion all count and the
+           credit arrives with the drug's effect rather than with the click.
+
+           What this replaces was inverted teaching. v3.63 advanced the timer to
+           `max(timer, VASOPLEGIA_START + 30) + dose*100` on the stated grounds
+           that adrenaline must never pull a patient backward through the rising
+           vasoplegia - but for anyone still ON that rising limb it pushed them
+           forward to near the peak instead. 100 mcg at t=30s jumped the timer
+           30 -> 70 and the vasoplegia drive 0.042 -> 0.208, dropping MAP from 86
+           to 70 within five seconds: the faster a trainee recognised the
+           reaction and treated it correctly, the worse the monitor got. 10 mcg
+           was pure harm, with barely any pressor effect to cover the drop. */
     }
 }
 
@@ -10476,6 +10828,15 @@ function scenarioReset() {
     state.lastTimer = 0;
     state.lastArrested = false;
     state.sahSurge = 0;
+    // v4.43: anaphylaxis envelopes. The tick clears these whenever the event is
+    // off, but scenarioReset() runs before the next scenario's setup() may turn
+    // it straight back on, so clear them here too rather than rely on ordering.
+    state.anaphSeverity = 0;
+    state.anaphSurge = 0;
+    state.anaphResolution = 0;
+    state.anaphBronchOwned = false;
+    state.anaphBronchFired = false;
+    state.anaphLeakTotal = 0;
     // (v4.29: the autonomicDysreflexia flag no longer needs clearing here -
     // setProfile() now hands out a copy, so scenario tweaks cannot outlive
     // the scenario that made them.)
@@ -10840,7 +11201,12 @@ function disableEvent(key) {
     }
     if (state.events[key]) toggleEvent(key);
     switch (key) {
-        case 'anaphylaxis':      state.anaphylaxisTimer = 0; break;
+        case 'anaphylaxis':      state.anaphylaxisTimer = 0;
+                                 state.anaphSeverity = 0; state.anaphSurge = 0;
+                                 state.anaphResolution = 0;
+                                 state.anaphBronchOwned = false;
+                                 state.anaphBronchFired = false;
+                                 state.anaphLeakTotal = 0; break;   // v4.43
         case 'tourniquetRelease': state.tourniquetTimer = 0; break;
         case 'vagal':            state.vagalTimer = 0; break;
         case 'movement':         state.movementTimer = 0; break;
@@ -10943,6 +11309,12 @@ function resolveAllEvents() {
     // Resolving also resets rhythm to sinus and clears event timers
     setRhythm('sinus');
     state.anaphylaxisTimer = 0;
+    state.anaphSeverity = 0;          // v4.43
+    state.anaphSurge = 0;
+    state.anaphResolution = 0;
+    state.anaphBronchOwned = false;
+    state.anaphBronchFired = false;
+    state.anaphLeakTotal = 0;
     state.tourniquetTimer = 0;
     state.vagalTimer = 0;
     state.movementTimer = 0;

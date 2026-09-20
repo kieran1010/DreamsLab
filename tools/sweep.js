@@ -118,12 +118,18 @@ const TREATMENTS = {
     ],
     paedLap: [],
     asthma: [],
+    // v4.43: retimed and re-dosed for the reworked reaction. The old plan
+    // started at t=30, before there was anything on the monitor to react to,
+    // and gave 2L into a patient whose circulating volume never moved. The
+    // reaction now declares itself from ~t=30 (MAP falling, HR climbing), so
+    // first bolus at 50 is a fast-but-plausible recognition; 1L answers the
+    // capillary leak, which takes ~1.2L out; and the boluses are spaced 40s to
+    // match the hints' "titrated to response" rather than stacked.
     anaphylaxis: [
-        { t: 30,  label: 'Adrenaline 100mcg',  do: dl => give(dl, 'adr', 0.1) },
-        { t: 35,  label: 'Crystalloid 1000mL', do: dl => give(dl, 'flu', 1.0) },
-        { t: 60,  label: 'Adrenaline 100mcg',  do: dl => give(dl, 'adr', 0.1) },
+        { t: 50,  label: 'Adrenaline 100mcg',  do: dl => give(dl, 'adr', 0.1) },
+        { t: 55,  label: 'Crystalloid 1000mL', do: dl => give(dl, 'flu', 1.0) },
         { t: 90,  label: 'Adrenaline 100mcg',  do: dl => give(dl, 'adr', 0.1) },
-        { t: 120, label: 'Crystalloid 1000mL', do: dl => give(dl, 'flu', 1.0) },
+        { t: 130, label: 'Adrenaline 100mcg',  do: dl => give(dl, 'adr', 0.1) },
     ],
     aspiration: [
         { t: 20, label: 'FiO2 1.0',               do: dl => V(dl, 'fio2', 1.0) },
