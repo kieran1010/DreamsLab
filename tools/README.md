@@ -238,6 +238,29 @@ control plus volume holds, and that late rescue discriminates - source control
 alone leaves MAP 22, fluid alone gives a transient that drains back out, only
 the pair recovers.
 
+| F22 | the septic patient woke up, and nothing in the scenario mentioned it | 0/12 |
+
+F22 is the third of that audit and the first with **no physiology change at
+all** — the model was right, the instructions were missing. The setup leaves
+`vent.sevo = 0` and none of the three objectives mentioned anaesthesia, so a
+trainee who did everything asked still watched BIS go 43 → 86. That wake then
+caused an unannounced bronchospasm at t=431 (VT 450 → 67, etCO₂ 60 → 106) —
+causation, not coincidence: sevo 1.5% from t=30 holds BIS at 33–41 and it never
+fires. The septic profile's `airwayReactivity` 0.3 plus a light patient is
+exactly what should spasm. Separately RR 14 × VT 450 could not hold etCO₂ at
+`metabolicMultiplier` 1.5 (38 → 60 by t=420, before any spasm). Fixed with two
+new objectives, four new hints, a corrected briefed BP (75/45 → the 70/43 it
+actually holds), and sevo + RR added to sweep's `TREATMENTS`.
+
+This is the probe class that guards **scenario text against the model**, which
+is what CLAUDE.md's "scenario text is part of the model's contract" asks for —
+several of its checks assert on `SCENARIOS.sepsis.objectives` and `.hints`
+directly, so deleting the new text fails the probe. It also pins the causal
+link (spasm fires untreated, never when anaesthetised), the trade-off that
+makes objective 3 worth teaching (MAP 66 untreated vs 52 on sevo — if keeping
+them asleep were free the objective would be empty), and that the full
+recommended management now yields peak BIS 44, no spasm, etCO₂ 46 and MAP 92.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

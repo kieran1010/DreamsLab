@@ -113,6 +113,11 @@ const TREATMENTS = {
     ],
     maintenance: [],   // stable-baseline scenario; nothing to treat
     sepsis: [
+        // v4.49: sevo and RR added to match the new objectives 3 and 4. Without
+        // them the "treated" run woke the patient (BIS 86) and was bronchospasming
+        // by t=431 while the sweep recorded it as the recommended management.
+        { t: 30, label: 'Sevoflurane 1.5%',           do: dl => V(dl, 'sevo', 1.5) },
+        { t: 32, label: 'RR up to 20',                do: dl => V(dl, 'rr', 20) },
         { t: 60, label: 'Metaraminol 1mg',            do: dl => give(dl, 'metar', 1) },
         { t: 61, label: 'Crystalloid 500mL',          do: dl => give(dl, 'flu', 0.5) },
         { t: 90, label: 'Noradrenaline infusion 0.1', do: dl => dl.setInf('nor', 0.1) },

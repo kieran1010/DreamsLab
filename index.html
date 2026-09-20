@@ -51,6 +51,83 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.49  ("Sepsis: someone has to keep this patient asleep")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Third of the six-scenario audit. Unlike v4.47 and v4.48 this one changes no
+  physiology at all - the model was right and the instructions were missing.
+
+  THE CHAIN.
+
+  The setup leaves `vent.sevo = 0`, commented "just induced, sevo not started
+  yet". That is realistic for the instant the scenario opens. But nothing ever
+  started it, and none of the three objectives mentioned anaesthesia. So a
+  trainee who did everything the scenario asked - recognised the vasoplegia,
+  ran a pressor, anticipated the surgical stimulus - still watched BIS climb
+  43 -> 86, crossing 60 at t=202.
+
+  That wake then caused a second event the scenario never mentioned anywhere: a
+  bronchospasm at t=431, VT 450 -> 67 and etCO2 60 -> 106. Causation, not
+  coincidence, and measured as such - sevo 1.5% from t=30 holds BIS at 33-41
+  and the spasm never fires at all. The septic profile carries
+  airwayReactivity 0.3, so a light patient with reactive airways spasming is
+  the model doing its job.
+
+  Separately, the setup's own RR 14 x VT 450 cannot hold etCO2 for a patient
+  the profile gives metabolicMultiplier 1.5. Untreated, etCO2 climbed 38 -> 60
+  by t=420 BEFORE the bronchospasm contributed anything.
+
+  THE FIX, entirely in scenario text.
+
+  Two new objectives:
+    3. "Start and maintain anaesthesia - nothing is keeping this patient
+       asleep, and accept that doing so will drop the pressure further"
+    4. "Match minute ventilation to the septic metabolic rate"
+
+  Objective 3 carries the tension the original three did not state between
+  them: maintaining anaesthesia makes the hypotension WORSE. Measured at t=600,
+  MAP is 66 untreated, 52 on sevo 1.5%, 47 on sevo 2%. The trainee cannot
+  satisfy objective 3 without doing objective 2 properly, which is the lesson
+  of a septic laparotomy and was previously unreachable - the scenario rewarded
+  leaving the patient light.
+
+  Four new hints: the vaporiser is at zero and BIS will climb into the 60s
+  within ~3 minutes; volatile costs roughly 66 -> 52 of MAP and the answer is a
+  pressor, not staying light; a light septic patient can bronchospasm, so
+  keeping them asleep is airway management too; and RR 14 x VT 450 will not
+  hold etCO2.
+
+  Also: the briefed BP goes 75/45 -> 70/43 in both briefing and setupBrief,
+  which is what the scenario actually opens at and holds. Unlike v4.48's
+  haemorrhage this was never a startup transient - the setup already seeds
+  alphaTone/betaTone at the septic profile's rest values, so there is nothing
+  to settle. The text was simply wrong.
+
+  sweep.js `TREATMENTS` for sepsis now starts sevo 1.5% at t=30 and raises RR
+  to 20 at t=32, to match the new objectives. Without them the "treated" run
+  was recorded as the recommended management while waking the patient to BIS 86
+  and bronchospasming from t=431. With them, the recommended management gives
+  peak BIS 44, no spasm at all, etCO2 46 and MAP 75 at t=180 - and a dip to
+  MAP 41 at t=60 as the sevo lands before the pressor does, which is the
+  trade-off objective 3 now names.
+
+  Treatment effect over the sweep: MAP 66 -> 92, SpO2 92 -> 99, etCO2 106 -> 46,
+  BIS 86 -> 41.
+
+  Two scan CLIN findings remain on the sepsis UNTREATED run - consciousness 84
+  and etCO2 89. Both are correct: that is what happens to a septic patient
+  nobody anaesthetises or ventilates adequately, and it is now what the
+  scenario's own text warns about. The two that used to sit on the TREATED run
+  are gone.
+
+  Tests: probes 99/99 across 21 findings (new F22, 12 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.48  ("Haemorrhage: a bleed that knows what the pressure is")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -10231,17 +10308,51 @@ const SCENARIOS = {
 
     sepsis: {
         name: 'Septic laparotomy',
-        briefing: 'Septic 70kg, urgent laparotomy for perforated viscus. Just induced. BP 75/45.',
-        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. Initial BP 75/45. Drapes going on, surgeon about to start.',
+        /* v4.49: BP 75/45 -> 70/43 in both texts. The scenario measures a
+           stable 70/43 (MAP 54) from t=1 and holds it; 75/45 was never what
+           it did. Unlike v4.48's haemorrhage this is not a startup transient -
+           the setup already seeds alphaTone/betaTone at the septic profile's
+           rest values, so there is nothing to settle. Text corrected to the
+           model rather than the other way round: MAP 54 against the profile's
+           mapTarget of 65 is the vasoplegia the scenario is about. */
+        briefing: 'Septic 70kg, urgent laparotomy for perforated viscus. Just induced, no volatile started yet. BP 70/43.',
+        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. Initial BP 70/43. Sevoflurane is not running yet. Drapes going on, surgeon about to start.',
+        /* v4.49: objectives 3 and 4 are new. The scenario ran for ten minutes
+           with nothing maintaining anaesthesia and no objective that mentioned
+           it, so the "correct" trainee - one who did everything the three
+           original objectives asked - still woke the patient (BIS 43 -> 86,
+           crossing 60 at t=202) and was then ambushed by a bronchospasm at
+           t=431 that no text anywhere mentioned. The spasm is not a physiology
+           bug: a light patient with the septic profile's airwayReactivity 0.3
+           is exactly what should trigger it, and it is caused by the wake, not
+           merely coincident with it - sevo 1.5% from t=30 holds BIS at 33-41
+           and the spasm never fires. What was missing was the instruction.
+
+           Objective 3 also carries the scenario's real tension, which the
+           original three between them did not state: maintaining anaesthesia
+           makes the hypotension WORSE. Measured at t=600, MAP is 66 untreated,
+           52 on sevo 1.5%, 47 on sevo 2%. A trainee cannot satisfy objective 3
+           without also doing objective 2 properly, which is the lesson.
+
+           Objective 4: the setup's own RR 14 x VT 450 cannot hold etCO2 for a
+           patient the profile gives metabolicMultiplier 1.5. Untreated etCO2
+           climbs 38 -> 60 by t=420 BEFORE the bronchospasm contributes
+           anything. RR 20 holds it at 40-41. */
         objectives: [
             'Recognise the haemodynamic profile of sepsis (low SVR, mild tachycardia)',
             'Use vasopressors to restore perfusion pressure while assessing volume status',
+            'Start and maintain anaesthesia - nothing is keeping this patient asleep, and accept that doing so will drop the pressure further',
+            'Match minute ventilation to the septic metabolic rate',
             'Anticipate the impact of surgical stimulus on a hypotensive patient'
         ],
         hints: [
             'Septic patients have low SVR - they need vasopressor support, not just fluids',
             'Metaraminol or noradrenaline infusion for sustained pressor support',
-            'Modest fluid bolus may help but be cautious of capillary leak'
+            'Modest fluid bolus may help but be cautious of capillary leak',
+            'Check the vaporiser - sevoflurane is at 0. The induction dose is wearing off and BIS will climb into the 60s within about three minutes',
+            'Volatile will drop the MAP further (roughly 66 to 52 at 1.5%). That is the trade-off, not a reason to leave them light - support the pressure with a pressor instead',
+            'A light patient with septic, reactive airways can bronchospasm. Keeping them asleep is airway management as well as awareness prevention',
+            'Fever and inflammation raise CO2 production by about half. RR 14 x VT 450 will not hold etCO2 - it climbs into the 60s over ten minutes'
         ],
         setup() {
             // (scenario reset already cleared events)

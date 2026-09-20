@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 87/87,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 99/99,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -238,11 +238,18 @@ thresholds for anything where the resting value is not near an end.
   lose its trace or read low; here it stays reassuring. Same family as the FiO2
   item below: a lever a trainee watches that the model does not connect.
 
-- The sepsis scenario's patient wakes (consciousness → 86) because nothing
-  maintains anaesthesia and no objective tells the trainee to start it.
-- Emergence and sepsis fire spontaneous bronchospasm their briefings never
-  mention. The physiology is now coherent; whether they should fire it is a
-  content decision.
+- **Resolved in v4.49 for sepsis.** The sepsis patient still wakes if left
+  alone (consciousness → 86 by t=600) and the wake still triggers a
+  bronchospasm at t=431, but both are now covered by the scenario's own
+  objectives and hints rather than being unannounced. The physiology was never
+  the bug: the septic profile's `airwayReactivity` 0.3 plus a light patient is
+  exactly what should spasm, and sevo 1.5% from t=30 prevents both. Text-only
+  fix — new objectives 3 and 4, four new hints, and sweep's `TREATMENTS` now
+  starts sevo and raises RR.
+- **Emergence** still fires a spontaneous bronchospasm its briefing never
+  mentions. The physiology is coherent; whether it should fire it is a content
+  decision, and the sepsis half of this item is now answered (announce it in
+  the text rather than remove it).
 - `state.mac` reads 0.00 for one tick after loading scenarios that set
   `etSevo` but not `mac`.
 - The aneurysm scenario opens at ~170/105 rather than a textbook 200/110.

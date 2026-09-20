@@ -1473,6 +1473,158 @@ probe('F21', 'Haemorrhage scales with perfusion pressure, and opens at MAP 65', 
         'zero of each');
 });
 
+/* =============================================================================
+   F22  the septic patient woke up, and nothing in the scenario mentioned it
+   -----------------------------------------------------------------------------
+   The September 2026 six-scenario audit. Not a physiology bug - a contract one.
+
+   The setup leaves `vent.sevo = 0` ("just induced, sevo not started yet"),
+   which is realistic for that instant, but nothing maintained anaesthesia and
+   none of the three objectives mentioned it. So a trainee who did everything
+   the scenario asked still watched BIS go 43 -> 86, crossing 60 at t=202.
+
+   The wake then CAUSED a second, entirely unannounced event: a bronchospasm at
+   t=431 (VT 450 -> 67, etCO2 60 -> 106). Causation, not coincidence - sevo
+   1.5% from t=30 holds BIS at 33-41 and the spasm never fires at all. The
+   septic profile's airwayReactivity is 0.3, so a light patient spasming is the
+   model behaving correctly.
+
+   Separately, the setup's own RR 14 x VT 450 cannot hold etCO2 for a patient
+   the profile gives metabolicMultiplier 1.5: untreated it climbed 38 -> 60 by
+   t=420 before the bronchospasm contributed anything.
+
+   Fixed in TEXT ONLY (v4.49) - the physiology is right, the instructions were
+   missing. New objective 3 (start and maintain anaesthesia, and accept it will
+   drop the pressure further), new objective 4 (match minute ventilation to the
+   septic metabolic rate), four new hints, and the briefed BP corrected from
+   75/45 to the 70/43 the scenario actually holds.
+
+   This probe therefore guards the scenario TEXT against the model, which is
+   what CLAUDE.md's "scenario text is part of the model's contract" asks for.
+   ========================================================================== */
+probe('F22', 'The septic laparotomy tells the trainee to keep the patient asleep', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('sepsis');
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr, bis: dl.state.bis,
+                        etco2: dl.state.etco2, sys: dl.state.sys, dia: dl.state.dia,
+                        broncho: !!dl.state.events.bronchospasm });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const SEVO  = (t, v) => ({ t, do: dl => dl.setVentParam('sevo', v) });
+    const RR    = (t, v) => ({ t, do: dl => dl.setVentParam('rr', v) });
+    const METAR = (t, d) => ({ t, do: dl => give(dl, 'metar', d) });
+    const FLU   = (t, d) => ({ t, do: dl => give(dl, 'flu', d) });
+    const NOR   = (t, r) => ({ t, do: dl => dl.setInf('nor', r) });
+
+    const un = run(null, 600);
+    const sc = un.dl.SCENARIOS.sepsis;
+
+    /* 1. The briefed opening pressure is what the scenario holds. It is a
+          steady state here, not a transient - the setup seeds alphaTone and
+          betaTone at the septic profile's rest values, so nothing settles. */
+    const o = un.at(1);
+    note(`opening BP ${o.sys.toFixed(0)}/${o.dia.toFixed(0)} (MAP ${o.map.toFixed(0)}), ` +
+         `holding ${un.at(60).sys.toFixed(0)}/${un.at(60).dia.toFixed(0)} at t=60`);
+    expect(/70\/43/.test(sc.briefing) && /70\/43/.test(sc.setupBrief) &&
+           Math.abs(o.sys - 70) <= 3 && Math.abs(o.dia - 43) <= 3,
+        'both briefing texts quote the pressure the scenario actually opens at',
+        `texts say 70/43, model gives ${o.sys.toFixed(0)}/${o.dia.toFixed(0)}`,
+        'agreement within 3 mmHg (the texts used to say 75/45)');
+
+    /* 2. THE FINDING. Untreated, the patient wakes - so there must be an
+          objective that tells the trainee to prevent it. */
+    const wake = un.rows.find(r => r.bis > 60);
+    note(`untreated BIS: t=1 ${un.at(1).bis.toFixed(0)}, t=300 ${un.at(300).bis.toFixed(0)}, ` +
+         `t=600 ${un.at(600).bis.toFixed(0)}; crosses 60 at t=${wake ? wake.t : 'never'}`);
+    expect(wake && un.at(600).bis > 80,
+        'the untreated patient really does wake, so there is something to teach',
+        `BIS crosses 60 at t=${wake ? wake.t : 'never'}, reaching ${un.at(600).bis.toFixed(0)} at t=600`,
+        'a genuine wake - this is the behaviour the new objective covers');
+    const objText = sc.objectives.join(' | ').toLowerCase();
+    const hintText = sc.hints.join(' | ').toLowerCase();
+    expect(/anaesthes|asleep|volatile|sevo/.test(objText),
+        'an objective tells the trainee to maintain anaesthesia',
+        `objectives mention it: ${/anaesthes|asleep|volatile|sevo/.test(objText)}`,
+        'true - three objectives used to run for ten minutes without saying so');
+    expect(/sevo|vaporiser/.test(hintText),
+        'a hint points at the vaporiser being at zero',
+        `hints mention sevoflurane or the vaporiser: ${/sevo|vaporiser/.test(hintText)}`,
+        'true');
+
+    /* 3. The bronchospasm is CAUSED by the wake, not merely coincident with
+          it. This is the check that says the physiology was never the bug. */
+    const spasm = un.rows.find(r => r.broncho);
+    const kept  = run([SEVO(30, 1.5)], 600);
+    const keptSpasm = kept.rows.find(r => r.broncho);
+    note(`untreated bronchospasm at t=${spasm ? spasm.t : 'never'}; ` +
+         `with sevo 1.5% from t=30, BIS peaks ${Math.max(...kept.rows.map(r => r.bis)).toFixed(0)} ` +
+         `and bronchospasm fires ${keptSpasm ? 't=' + keptSpasm.t : 'never'}`);
+    expect(spasm && !keptSpasm,
+        'the unannounced bronchospasm is downstream of the wake, not independent',
+        `untreated t=${spasm ? spasm.t : 'never'}, anaesthetised: never`,
+        'fires untreated, never when the patient is kept asleep');
+    expect(/bronchospasm|airway/.test(hintText),
+        'a hint warns that a light septic patient can spasm',
+        `hints mention it: ${/bronchospasm|airway/.test(hintText)}`,
+        'true - it used to ambush the trainee with no text anywhere');
+
+    /* 4. Objective 3's trade-off must be real: maintaining anaesthesia has to
+          COST pressure, otherwise the objective is free and teaches nothing. */
+    note(`MAP at t=600: untreated ${un.at(600).map.toFixed(0)}, ` +
+         `sevo 1.5% ${kept.at(600).map.toFixed(0)}`);
+    expect(un.at(600).map - kept.at(600).map > 8,
+        'keeping the patient asleep genuinely worsens the hypotension',
+        `MAP ${un.at(600).map.toFixed(0)} untreated vs ${kept.at(600).map.toFixed(0)} on sevo`,
+        'more than 8 mmHg apart - this is the tension objective 3 names');
+
+    /* 5. Objective 4: the setup's own ventilation cannot hold etCO2 for this
+          patient's metabolic rate, and that is true BEFORE any bronchospasm. */
+    const preSpasm = spasm ? spasm.t - 1 : 420;
+    note(`untreated etCO2 ${un.at(1).etco2.toFixed(0)} at t=1 -> ` +
+         `${un.at(preSpasm).etco2.toFixed(0)} at t=${preSpasm}, before any bronchospasm`);
+    expect(un.at(preSpasm).etco2 > 55,
+        'the scenario\'s own RR x VT cannot hold etCO2 at the septic metabolic rate',
+        `etCO2 reaches ${un.at(preSpasm).etco2.toFixed(0)} by t=${preSpasm} with no spasm yet`,
+        'above 55 - objective 4 exists because of this');
+    const vent = run([SEVO(30, 1.5), RR(32, 20)], 600);
+    expect(vent.at(600).etco2 < 46,
+        'and raising the rate fixes it, so the objective is achievable',
+        `etCO2 ${vent.at(600).etco2.toFixed(0)} at t=600 on RR 20`,
+        'under 46');
+    expect(/ventilation|etco2|co2|rr /.test(objText + ' ' + hintText),
+        'an objective or hint points at minute ventilation',
+        `texts mention it: ${/ventilation|etco2|co2|rr /.test(objText + ' ' + hintText)}`,
+        'true');
+
+    /* 6. The whole recommended management, as sweep.js now runs it, must give
+          a patient who is asleep, ventilated and perfused. */
+    const plan = run([SEVO(30, 1.5), RR(32, 20), METAR(60, 1), FLU(61, 0.5), NOR(90, 0.1)], 600);
+    const maxBis = Math.max(...plan.rows.map(r => r.bis));
+    const planSpasm = plan.rows.find(r => r.broncho);
+    note(`recommended management: peak BIS ${maxBis.toFixed(0)}, ` +
+         `etCO2 ${plan.at(600).etco2.toFixed(0)}, MAP ${plan.at(180).map.toFixed(0)} at t=180 ` +
+         `and ${plan.at(600).map.toFixed(0)} at t=600, bronchospasm ${planSpasm ? 'YES' : 'never'}`);
+    expect(maxBis < 60 && !planSpasm && plan.at(600).etco2 < 50 && plan.at(600).map > 65,
+        'the scenario\'s own recommended management now produces a safe anaesthetic',
+        `peak BIS ${maxBis.toFixed(0)}, no spasm, etCO2 ${plan.at(600).etco2.toFixed(0)}, ` +
+        `MAP ${plan.at(600).map.toFixed(0)}`,
+        'asleep throughout, no spasm, etCO2 under 50, MAP above the profile target');
+
+    expect(un.errors.length === 0 && plan.errors.length === 0 && plan.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length + plan.errors.length} tick errors, ${plan.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
