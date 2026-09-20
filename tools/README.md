@@ -285,6 +285,29 @@ It also pins the mode arithmetic — peak PIP stays under 32 in PCV at `pinsp`
 PCV/VCV split, and that gas trapping has a reachable haemodynamic cost (RR 8 →
 autoPEEP 1.25 / MAP 93 vs RR 30 + pinsp 30 → autoPEEP 8.68 / MAP 75).
 
+| F24 | the vagal scenario taught trainees to distrust atropine | 0/12 |
+
+F24 closes the audit, and is the smallest — no physiology changed. The
+best-calibrated presentation in the set (briefed HR ~48 / MAP ~50, measured
+48.2 / 50.0, correctly not self-resolving over 30 minutes) was attached to a
+hint that contradicted it: *"Atropine alone doesn't fix it"*. It does — 0.6 mg
+with the event still running gives HR 79 / MAP 82 by t=180, **above** the
+no-event control of 78/61.
+
+The model turns out to be subtler than either the old hint or the complaint
+against it: atropine works and then *stops* working (t=600 → 71/77, t=1200 →
+48/50) because the stimulus is still applied, while release alone holds at
+78/61 to t=1800. So objective 4 ("both source control AND pharmacology may be
+needed") was right all along and only hint 4's phrasing was wrong. The probe
+pins **both arms** — that atropine corrects, and that it then wears off — plus
+the permanence of source control, the overshoot when both are done (peak HR
+101), that hint 3 names a dose the cabinet actually offers, and that the dead
+`VAGAL_DURATION` constant is gone.
+
+It also serves as the **calibration target for a future refactor**: the vagal
+block keeps a knowing instance of structural trap 2 (see CLAUDE.md), and this
+probe's first two checks are what any retune has to reproduce.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

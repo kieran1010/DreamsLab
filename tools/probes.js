@@ -1804,6 +1804,160 @@ probe('F23', 'Severe bronchospasm stays severe until something treats it', () =>
         'zero of each');
 });
 
+/* =============================================================================
+   F24  the vagal scenario taught trainees to distrust atropine
+   -----------------------------------------------------------------------------
+   The September 2026 six-scenario audit. The best-calibrated presentation in
+   the set, attached to a hint that contradicted it.
+
+   Hint 4 read "Atropine alone doesn't fix it - the central reflex continues
+   while stretch is applied". A trainee reads that as "atropine will not work
+   here". It does, completely: 0.6 mg with the event still running takes HR
+   48 -> 79 and MAP 50 -> 82 by t=180, which is not merely adequate but ABOVE
+   the no-event control (78/61).
+
+   What the model actually does is better than either reading:
+
+       t=180   HR 79  MAP 82     atropine fully effective
+       t=600   HR 71  MAP 77     wearing off
+       t=1200  HR 48  MAP 50     reflex fully returned
+
+   Atropine works and then stops working, because the stimulus is still there.
+   Release alone is definitive and holds at 78/61 out to t=1800. So objective 4
+   ("both source control AND pharmacology may be needed") was right all along -
+   only hint 4's phrasing contradicted it. v4.51 keeps and sharpens objective 4
+   and rewrites hint 4 to describe the actual time course.
+
+   Two smaller things: hint 3 said "0.6mg or larger" when the cabinet offers
+   only 0.3 and 0.6, so "larger" meant clicking 0.6 twice (which does work -
+   HR 94 / MAP 86); and CONFIG.VAGAL_DURATION (30, commented "event
+   auto-resolves") was dead code whose comment contradicted the setupBrief's
+   correct "not self-resolving".
+
+   No physiology changed. The `betaTone *= (1 - sympWithdraw*dt)` line remains
+   a knowing, calibrated instance of structural trap 2 - see the long note at
+   that line. This probe pins the presentation it produces so a future refactor
+   has a target.
+   ========================================================================== */
+probe('F24', 'Vagal hyperreflexia teaches atropine correctly', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('vagal');
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr,
+                        parasymp: dl.state.parasympTone, beta: dl.state.betaTone });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const ATROP   = (t, d) => ({ t, do: dl => give(dl, 'atrop', d) });
+    const RELEASE = t => ({ t, do: dl => { if (dl.state.events.vagal) dl.toggleEvent('vagal'); } });
+
+    const un = run(null, 1800);
+    const sc = un.dl.SCENARIOS.vagal;
+
+    /* 1. The presentation is on contract and stays there. The setupBrief
+          promises "HR to ~48 and MAP to ~50. Not self-resolving." */
+    note(`untreated HR/MAP: t=55 ${un.at(55).hr.toFixed(1)}/${un.at(55).map.toFixed(1)}, ` +
+         `t=300 ${un.at(300).hr.toFixed(1)}/${un.at(300).map.toFixed(1)}, ` +
+         `t=1800 ${un.at(1800).hr.toFixed(1)}/${un.at(1800).map.toFixed(1)}`);
+    expect(Math.abs(un.at(55).hr - 48) <= 3 && Math.abs(un.at(55).map - 50) <= 3,
+        'the scenario presents at the briefed HR 48 / MAP 50',
+        `HR ${un.at(55).hr.toFixed(1)}, MAP ${un.at(55).map.toFixed(1)} at t=55`,
+        'both within 3 of the briefed values');
+    expect(Math.abs(un.at(1800).hr - un.at(55).hr) < 2 &&
+           Math.abs(un.at(1800).map - un.at(55).map) < 2,
+        'and it does not self-resolve, over a full thirty minutes',
+        `HR ${un.at(55).hr.toFixed(1)} -> ${un.at(1800).hr.toFixed(1)}, ` +
+        `MAP ${un.at(55).map.toFixed(1)} -> ${un.at(1800).map.toFixed(1)}`,
+        'unchanged - the setupBrief says "not self-resolving"');
+
+    /* 2. THE FINDING. Atropine alone must work, and the hints must say so. */
+    const atrop = run([ATROP(60, 0.6)], 1800);
+    note(`atropine 0.6mg alone (event never released): t=180 ` +
+         `${atrop.at(180).hr.toFixed(0)}/${atrop.at(180).map.toFixed(0)}, ` +
+         `t=600 ${atrop.at(600).hr.toFixed(0)}/${atrop.at(600).map.toFixed(0)}, ` +
+         `t=1200 ${atrop.at(1200).hr.toFixed(0)}/${atrop.at(1200).map.toFixed(0)}`);
+    expect(atrop.at(180).hr > 70 && atrop.at(180).map > 75,
+        'atropine alone genuinely corrects the bradycardia and the pressure',
+        `HR ${atrop.at(180).hr.toFixed(0)}, MAP ${atrop.at(180).map.toFixed(0)} at t=180`,
+        'HR over 70 and MAP over 75 - the old hint 4 said this would not happen');
+    const hint4 = sc.hints[3].toLowerCase();
+    expect(/does work|works/.test(hint4) && !/alone doesn't fix it|alone does not fix it/.test(hint4),
+        'hint 4 no longer tells the trainee atropine will not work',
+        `hint 4 now reads: "${sc.hints[3].slice(0, 60)}..."`,
+        'it affirms that atropine works');
+
+    /* 3. And the other half, which is what makes objective 4 true: it wears
+          off while the stimulus is still applied, and the reflex returns. */
+    expect(Math.abs(atrop.at(1200).hr - un.at(1200).hr) < 3 &&
+           Math.abs(atrop.at(1200).map - un.at(1200).map) < 3,
+        'but it wears off and the reflex returns in full',
+        `HR ${atrop.at(1200).hr.toFixed(0)}/MAP ${atrop.at(1200).map.toFixed(0)} at t=1200, ` +
+        `against untreated ${un.at(1200).hr.toFixed(0)}/${un.at(1200).map.toFixed(0)}`,
+        'back to the untreated state - the stimulus never went away');
+    expect(/wears off|temporary|comes back|ten minutes/.test(hint4) &&
+           /definitive|only source control|wears off/.test(sc.objectives[3].toLowerCase()),
+        'hint 4 and objective 4 both describe that time course',
+        'both mention the wear-off',
+        'true - this is why source control is the definitive treatment');
+
+    /* 4. Source control alone must be definitive, and hold. */
+    const rel = run([RELEASE(60)], 1800);
+    note(`release alone: t=180 ${rel.at(180).hr.toFixed(0)}/${rel.at(180).map.toFixed(0)}, ` +
+         `t=1800 ${rel.at(1800).hr.toFixed(0)}/${rel.at(1800).map.toFixed(0)}`);
+    expect(rel.at(1800).hr > 70 && Math.abs(rel.at(1800).hr - rel.at(300).hr) < 3,
+        'releasing the insufflation fixes it permanently',
+        `HR ${rel.at(300).hr.toFixed(0)} at t=300 -> ${rel.at(1800).hr.toFixed(0)} at t=1800`,
+        'recovered and stable, unlike the atropine arm');
+
+    /* 5. Both together - the scenario's own recommended management - works,
+          and the overshoot hint 6 now warns about is real. */
+    const both = run([ATROP(60, 0.6), RELEASE(60)], 1800);
+    note(`both: peak HR ${Math.max(...both.rows.map(r => r.hr)).toFixed(0)}, ` +
+         `peak MAP ${Math.max(...both.rows.map(r => r.map)).toFixed(0)}, ` +
+         `settling to ${both.at(1800).hr.toFixed(0)}/${both.at(1800).map.toFixed(0)}`);
+    expect(both.at(180).hr > atrop.at(180).hr && both.at(180).hr > rel.at(180).hr,
+        'doing both beats either alone in the short term',
+        `both ${both.at(180).hr.toFixed(0)}, atropine ${atrop.at(180).hr.toFixed(0)}, ` +
+        `release ${rel.at(180).hr.toFixed(0)} at t=180`,
+        'the combination is highest');
+    expect(Math.max(...both.rows.map(r => r.hr)) > 95 && /overshoot/i.test(sc.hints[4]),
+        'and a hint warns about the overshoot it causes',
+        `peak HR ${Math.max(...both.rows.map(r => r.hr)).toFixed(0)}, hint 5 mentions overshoot: ` +
+        `${/overshoot/i.test(sc.hints[4])}`,
+        'a real overshoot, and the text says so');
+
+    /* 6. Hint 3 must name a dose the drug cabinet actually offers, and the
+          escalation it suggests must do something. */
+    const doses = un.dl.drugDb.cvs.find(d => d.type === 'atrop').doses.map(x => x.d);
+    const twice = run([ATROP(60, 0.6), ATROP(62, 0.6)], 600);
+    note(`atropine doses in the cabinet: ${doses.join(', ')} mg; ` +
+         `0.6 gives HR ${atrop.at(180).hr.toFixed(0)}, 1.2 gives ${twice.at(180).hr.toFixed(0)}`);
+    expect(doses.includes(0.6) && !/or larger/i.test(sc.hints[2]) &&
+           twice.at(180).hr > atrop.at(180).hr + 8,
+        'hint 3 names a clickable dose, and the second dose does more',
+        `cabinet has ${doses.join('/')}, hint says "or larger": ${/or larger/i.test(sc.hints[2])}, ` +
+        `1.2mg gives HR ${twice.at(180).hr.toFixed(0)} vs ${atrop.at(180).hr.toFixed(0)}`,
+        'no unreachable dose named, and doubling helps');
+
+    /* 7. The dead constant is gone and its wrong comment with it. */
+    expect(un.dl.CONFIG.VAGAL_DURATION === undefined,
+        'the dead VAGAL_DURATION constant is removed',
+        `CONFIG.VAGAL_DURATION is ${String(un.dl.CONFIG.VAGAL_DURATION)}`,
+        'undefined - nothing read it, and its "auto-resolves" comment was wrong');
+
+    expect(un.errors.length === 0 && both.errors.length === 0 && both.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length + both.errors.length} tick errors, ${both.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

@@ -23,7 +23,7 @@ Two angles (see the audit report and `tools/probes.js` F16/F17 for the pattern):
 - **Effect audit:** give a clinical dose, measure the change in what the drug
   targets (HR / MAP / BIS / analgesia cover / …) vs the intent stated in comments.
 
-Baseline to keep green: **probes 111/111, voucher-probe 15/15, scan 0 BUG.**
+Baseline to keep green: **probes 123/123, voucher-probe 15/15, scan 0 BUG.**
 
 ## Open items
 
