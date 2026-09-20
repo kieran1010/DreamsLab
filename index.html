@@ -180,6 +180,26 @@
   and descriptions were rewritten to describe what the trainee now sees rather
   than what they used to inherit.
 
+  The pre-roll calls physiologyTick() DIRECTLY rather than through the 100 ms
+  setInterval, and a throw there is not contained the way a throw in the
+  interval is - the interval keeps firing and the sim limps on, but an
+  unguarded pre-roll propagates out of loadScenario() and half-loads the
+  scenario: stimulus synced, briefing never shown, dropdown pointing at a case
+  the model is not running. It is wrapped in try/catch/finally so it degrades
+  exactly as the interval does. Found by a deliberate negative test against the
+  new CI workflow, not by the suite.
+
+  CI, finally. .github/workflows/physiology.yml runs probes, voucher-probe,
+  sweep and scan on every push and pull request - the repo had none, so the
+  suite only ran when somebody remembered to. scan.js and sweep.js gain the
+  DL_STRICT=1 exit code probes.js and voucher-probe.js already had, without
+  which the workflow could not fail on a BUG-level finding or a throwing tick.
+  scan gates on BUG only: CLIN, WARN and INFO describe sick patients behaving
+  correctly, and gating on those would require the patients to be well for the
+  build to go green. All four gates were negative-tested - a broken
+  ONSET_LEAD_IN fails probes, an injected tick throw fails sweep, a nulled
+  gauge fails scan.
+
   New probe F29 pins the contract in both directions - a flat lead-in for all
   twenty, a declaration from all seventeen pathology scenarios, fifteen minutes
   of stillness from the three controls, and the ownership rule - so this cannot

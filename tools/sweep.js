@@ -306,6 +306,16 @@ function main() {
     console.log(`runtime errors across all runs: ${totalErrors}`);
     console.log(`wrote ${path.relative(process.cwd(), OUT)}`);
     console.log('next: node tools/scan.js');
+
+    /* v4.57: DL_STRICT=1 exits non-zero if any run threw, matching probes.js
+       and voucher-probe.js, so CI can gate on it. A tick that throws is always
+       a defect - the sandbox catches it and the run continues, so without this
+       a broken tick still exits 0 and writes a plausible-looking results.json
+       for scan.js to read. */
+    if (process.env.DL_STRICT === '1' && totalErrors > 0) {
+        console.error(`\nDL_STRICT: ${totalErrors} runtime error(s) across the sweep`);
+        process.exit(1);
+    }
 }
 
 if (require.main === module) main();

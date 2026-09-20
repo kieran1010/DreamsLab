@@ -46,13 +46,12 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `[PK MODEL]` | 4865 | Per-drug `vd` / `k10` / `ke0` |
 | `state` | 4904 | The single mutable state object |
 | `[DRUG DB]` | 5188 | Bolus library; drives the drug buttons |
-| `[PHYSIOLOGY TICK]` | 5486–7102 | **The model.** One 100 ms `setInterval` |
+| `[PHYSIOLOGY TICK]` | 5486–7102 | **The model.** `physiologyTick()`, on a 100 ms `setInterval`. Named since v4.57 so `loadScenario()` can pre-roll it |
 | `animate()` | 7124 | 60 fps waveform render, `requestAnimationFrame` |
 | `[SCENARIOS]` | 8247 | The twenty scenarios, each `{name, briefing, objectives, hints, setup}` |
 | `scenarioReset()` | 9512 | Clears state between scenarios |
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
-| `physiologyTick()` | ~7990 | The tick body, named since v4.57 so `loadScenario()` can pre-roll it |
 | `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating (live v4.42): `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
 | `[RESOURCES]` | 11910 | v4.40/v4.41 Resources tab: fetches `resources/manifest.json` at runtime |
 
@@ -113,6 +112,21 @@ voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 the treated runs treat a pathology that has actually declared. `induction` is
 exempt — nothing is wrong with that patient.
 `tools/README.md` has the detail.
+
+**CI runs all four on every push and pull request** —
+`.github/workflows/physiology.yml`, added v4.57. Nothing to install: no build
+step, no dependencies, just Node 20. All four honour `DL_STRICT=1` to exit
+non-zero (`scan` gates on BUG-level findings only; `CLIN`/`WARN`/`INFO`
+describe sick patients behaving correctly, and gating on those would require
+the patients to be well for the build to go green). The workflow does not
+deploy — Pages publishes from `main` separately.
+
+What CI does **not** cover is worth knowing. The render path is invisible to it
+for the reason below. And nothing asserts that a scenario still uses the
+anaesthetic its own text describes: during v4.57 a scripted edit aimed at
+`asthma` silently changed `maintenance`'s sevoflurane from 2% to 0.8%, and it
+was caught by reading the diff, not by a probe. Green CI means no *known*
+regression, not a correct scenario.
 
 Two things to know before extending the harness:
 
@@ -241,7 +255,7 @@ patient's gauge read amber. `physStatus()` now re-measures the ceiling rule
 against the headroom above `base` when that happens, but prefer explicit
 thresholds for anything where the resting value is not near an end.
 
-**9. A scenario that opens at its final presentation has no onset to teach.**
+**10. A scenario that opens at its final presentation has no onset to teach.**
 Before v4.57 each scenario started its pathology whenever its own `setup()`
 happened to. `bronchospasm` assigned `p.bronchResistance = 80`, so SpO₂ read 86
 and Vt 127 *before the first tick ran*; `last` sat flat for 60 s and then
@@ -266,7 +280,7 @@ event from it. Get this wrong and the window reaches into every probe and every
 Events-panel toggle — it did, and F15/F16/F17/F23 all measured a hand-toggled
 bronchospasm at resistance 12 instead of 80.
 
-**10. A lead-in is worthless if the first ten seconds are a loading artefact.**
+**11. A lead-in is worthless if the first ten seconds are a loading artefact.**
 `scenarioReset()` leaves the tones at rest and the tick then relaxes them to
 target (~2 s), equilibrates preload (`TAU_FLUID_BUFFER` 30 s) and settles the
 stimulus lag. Measured, 8–12 s, during which MAP moved 16 mmHg in `maintenance`
@@ -281,7 +295,7 @@ a different problem, and it cost `maintenance` 32 mmHg. `ONSET_SETTLE` must also
 stay below `ONSET_LEAD_IN`, or the pathology starts during the pre-roll; F29
 checks it.
 
-**11. A seeded drug level that is not its infusion's steady state makes the
+**12. A seeded drug level that is not its infusion's steady state makes the
 scenario drift.** v4.56 found ten scenarios seeding remifentanil 2–3× what their
 own pump sustains, from a guessed reference line; `maintenance` ran MAP 62 → 89
 over ten untreated minutes as it washed out. v4.57 found the same thing in that

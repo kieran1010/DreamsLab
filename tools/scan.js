@@ -119,3 +119,15 @@ findings.forEach(f => console.log(`[${f.sev.padEnd(4)}] ${(f.scen + '/' + f.run)
 const tally = findings.reduce((a, f) => (a[f.sev] = (a[f.sev] || 0) + 1, a), {});
 console.log(`\n${findings.length} findings  ` +
     Object.keys(ORDER).map(k => `${k}:${tally[k] || 0}`).join('  '));
+
+/* v4.57: DL_STRICT=1 exits non-zero on any BUG-level finding, matching the
+   convention probes.js and voucher-probe.js already use, so CI can gate on it.
+   Only BUG counts. CLIN, WARN and INFO are observations about what the model
+   does - "MAP settles at 22 mmHg (shock territory)" is an untreated
+   haemorrhage behaving correctly - and gating on those would mean a green
+   build required the patients to be well. BUG is the class that means a gauge
+   read NaN or clipped its own declared range. */
+if (process.env.DL_STRICT === '1' && (tally.BUG || 0) > 0) {
+    console.error(`\nDL_STRICT: ${tally.BUG} BUG-level finding(s)`);
+    process.exit(1);
+}

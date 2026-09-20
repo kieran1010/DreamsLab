@@ -1,0 +1,79 @@
+# Runs the physiology harness on every push and pull request.
+#
+# The sim has no build step and no dependencies, so there is nothing to install
+# and nothing to lint - `tools/` IS the test suite. It drives the real
+# `index.html` headlessly in a Node vm sandbox, so what CI checks here is what
+# a browser would do, with one documented exception: `requestAnimationFrame` is
+# a no-op in the sandbox, so `animate()` never runs and NOTHING IN THE RENDER
+# PATH IS COVERED. Waveform and canvas changes still have to be opened in a
+# browser. See tools/README.md.
+#
+# Why this exists (v4.57): the repo had no CI at all, so the suite only ran
+# when someone remembered to run it. During the v4.57 work a scripted edit
+# aimed at one scenario silently changed a different scenario's sevoflurane
+# from 2% to 0.8%; it was caught by reading the diff, not by a test. CI would
+# not have caught that particular slip either - no probe asserts which
+# anaesthetic a scenario uses - but it does catch every regression the 166
+# probe checks cover, which is most of what past releases have broken.
+#
+# This does not deploy anything. Pages publishes from `main` separately.
+name: Physiology
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # tools/README.md: Node 18+. No dependencies, so no cache and no install.
+          node-version: '20'
+
+      # Targeted checks, one per known bug. Fastest and the most likely to
+      # catch a regression, so it runs first.
+      - name: Probes
+        run: node tools/probes.js
+        env:
+          DL_STRICT: '1'
+
+      # Entitlement sign/verify/gating. Offline - generates its own keys.
+      - name: Voucher probe
+        run: node tools/voucher-probe.js
+        env:
+          DL_STRICT: '1'
+
+      # All 20 scenarios, untreated and treated. Seeded, so byte-identical
+      # between runs; writes tools/results.json for the scan below. ~2 min.
+      - name: Sweep
+        run: node tools/sweep.js
+        env:
+          DL_STRICT: '1'
+
+      # Reads what the sweep recorded and flags anomalies. Gates on BUG-level
+      # findings only - CLIN/WARN/INFO describe sick patients behaving
+      # correctly.
+      - name: Scan
+        run: node tools/scan.js
+        env:
+          DL_STRICT: '1'
+
+      # The sweep's recording, kept so a failure can be diagnosed without
+      # re-running it locally. Generated and git-ignored, hence the upload.
+      - name: Upload sweep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-results
+          path: tools/results.json
+          if-no-files-found: ignore
+          retention-days: 14
