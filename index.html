@@ -51,6 +51,99 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.52  ("Emergence: somebody has to take the tube out")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  The emergence half of the item v4.49 answered for sepsis, and the last loose
+  end of the six-scenario audit. No physiology changed.
+
+  THE PROBLEM, AND WHY IT GOT URGENT.
+
+  This scenario fired a bronchospasm at t=145 untreated that no text anywhere
+  mentioned. v4.50's global severity increase made it materially worse:
+  resistance now holds near 50 rather than 40, so the scenario's OWN
+  recommended plan - sevo off, remi off, sugammadex - ended with an awake
+  patient (BIS 98) at SpO2 88.8, etCO2 54.5 and MAP 133.
+
+  The physiology was never the bug, and is in fact rather good. The reactivity
+  block fires on `isLight && hasReactiveAirway && blunting > 0`: a patient
+  above REACTIVITY_LIGHT_CONSC with an ETT still in and the opioid gone. That
+  is exactly the emergence hazard, and this scenario constructs it perfectly -
+  consciousness reaches 98 by t=100 with the tube still in place.
+
+  What was missing was any instruction to take the tube out. The scenario's own
+  description says "smooth emergence AND EXTUBATION", and its recommended
+  management stopped at sugammadex.
+
+  THE FINDING: EXTUBATION PREVENTS IT COMPLETELY.
+
+      no extubation            bronchospasm t=292, SpO2 min 85, MAP 133
+      extubate to mask t=120   never fires,  SpO2 min 99, MAP 112
+      extubate to mask t=180   never fires,  SpO2 min 99
+      extubate to mask t=240   never fires,  SpO2 min 99
+
+  And opioid cover is NOT an alternative - it only buys minutes, because
+  consciousness keeps climbing as the sevo goes:
+
+      remi off at t=32         spasm at t=292
+      remi kept at 0.05        spasm at t=407
+      remi raised to 0.08      spasm at t=448
+
+  There is no dose that holds it off with the tube in. Which is the right
+  answer clinically too: the tube comes out. Worth stating explicitly in the
+  text, because a trainee who sees an airway reaction reasonably reaches for
+  more opioid, and here that is the slower road to the same place.
+
+  THE FIX, entirely in scenario text.
+
+  New objective 5: get the tube out, expect cough and bronchospasm if you
+  leave it, and note that opioid cover delays but never prevents it.
+
+  Seven new hints - the scenario previously had NONE. (It was one of eight
+  such scenarios; seven remain - anaphBrewing, paedLap, asthma, aneurysm,
+  autonomicDysreflexia, last and mh. A separate gap, not addressed here.) They cover closing the vaporiser, checking twitches
+  before reversal, extubating to Mask as the step the scenario is really
+  about, what leaving the tube in costs and when, why turning the
+  remifentanil off early makes it worse rather than better, switching to
+  Manual afterwards and watching the etCO2, and the bronchospasm playbook if
+  one happens anyway.
+
+  Briefing and description corrected. Both said "sevo washing out"; the
+  vaporiser sits at 0.4% and STAYS there until the trainee closes it, so
+  nothing washes out and BIS reads a flat 80.2 for fifteen minutes. They now
+  say the vaporiser is still running.
+
+  sweep.js TREATMENTS now extubates to Mask at t=120 and switches to Manual at
+  t=121. The resulting run is a proper emergence: BIS 80 -> 98, TOF 4,
+  paralysis 0, eye opening at t=120, extubated, breathing spontaneously at Vt
+  344 -> 435, SpO2 99 throughout, no bronchospasm at all. etCO2 peaks at 79
+  and settles to 54 by t=900 as the fentanyl redistributes - real
+  post-extubation hypoventilation, which hint 6 now points at.
+
+  Treatment effect over the sweep: MAP 98 -> 112, SpO2 88 -> 99, etCO2
+  119 -> 67, BIS 80 -> 98. scan CLIN falls 32 -> 30; the two that cleared were
+  emergence/treated's MAP 134 and SpO2 89. emergence/treated etCO2 still reads
+  70 at the 600 s mark, which is the deliberate post-extubation rise, still on
+  its way down.
+
+  SEPARATELY FOUND, NOT FIXED - see the new CLAUDE.md known item. A patient
+  with no airway device never breathes, whatever their respiratory drive:
+  the ventilation block opens with `if (disconnected || !hasAirwayDevice) {
+  tidalVolume = 0 }`, which short-circuits the spontaneous branch below it.
+  Reachable: the LAST scenario sets `airway: 'none'` and its own objective
+  says the patient is "breathing room air through an unprotected airway",
+  but measured they have respDrive 0.78 and Vt 0 from t=1 - frank apnoea, not
+  the sedation-related hypoventilation the text describes. It needs its own
+  change, since it moves LAST's whole desaturation timeline.
+
+  Tests: probes 133/133 across 24 findings (new F25, 10 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.51  ("Vagal: atropine does work, and then it stops working")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -11136,13 +11229,61 @@ const SCENARIOS = {
 
     emergence: {
         name: 'Routine emergence',
-        briefing: 'End of lap chole, sevo washing out, remi running low, roc largely worn off. Aim for smooth wake.',
-        description: 'Adult, end of an elective laparoscopic cholecystectomy. ETT, surgeon closing skin. Sevoflurane down to 0.4%, remifentanil 0.05 mcg/kg/min. Rocuronium largely worn off. Aim for smooth emergence and extubation in the next 5-10 minutes.',
+        /* v4.52: the emergence half of the item v4.49 answered for sepsis.
+
+           This scenario fired a bronchospasm at t=145 that no text anywhere
+           mentioned, and v4.50 made it worse - resistance now holds near 50
+           rather than 40, so the scenario's own recommended plan (sevo off,
+           remi off, sugammadex) ended with an awake patient at SpO2 88.8,
+           etCO2 54.5 and MAP 133.
+
+           The physiology was never the bug. The reactivity block fires on
+           `isLight && hasReactiveAirway && blunting > 0` - a patient above
+           REACTIVITY_LIGHT_CONSC with an ETT still in and the opioid gone.
+           That is exactly the emergence hazard, and this scenario constructs
+           it perfectly: consciousness reaches 98 by t=100 with the tube still
+           in place. What was missing was any instruction to take the tube out.
+
+           Measured, and this is the whole finding: EXTUBATING PREVENTS IT
+           COMPLETELY, at any timing tested.
+
+               no extubation          bronchospasm t=292, SpO2 min 85, MAP 133
+               extubate to mask t=120 never fires, SpO2 min 99, MAP 112
+               extubate to mask t=180 never fires, SpO2 min 99
+               extubate to mask t=240 never fires, SpO2 min 99
+
+           Opioid cover only DELAYS it - keeping remifentanil running pushes
+           the spasm from t=292 out to t=407, and raising it to 0.08 to t=448,
+           because consciousness keeps climbing as the sevo goes. There is no
+           dose that holds it off indefinitely with the tube in. That is the
+           right answer clinically too: the tube comes out.
+
+           So objective 5 is new, and the scenario gains hints (it had none -
+           eight of twenty still do not, which is a separate gap). Objective 3
+           already mentioned "the closing and extubation phase" but nothing
+           told the trainee that leaving the tube in is what bites them.
+
+           The briefing's "sevo washing out" is also corrected: the vaporiser
+           sits at 0.4% and STAYS there, so nothing washes out until the
+           trainee turns it off. BIS reads a flat 80.2 for fifteen minutes
+           otherwise. */
+        briefing: 'End of lap chole. Sevo dialled down to 0.4% but still running, remi running low, roc largely worn off. Aim for smooth wake and extubation.',
+        description: 'Adult, end of an elective laparoscopic cholecystectomy. ETT, surgeon closing skin. Sevoflurane turned down to 0.4% but the vaporiser is still on - nothing washes out until you close it. Remifentanil 0.05 mcg/kg/min. Rocuronium largely worn off. Aim for smooth emergence and extubation in the next 5-10 minutes.',
         objectives: [
             'Balance hypnotic washout against analgesic cover for a smooth wake',
             'Time reversal of residual paralysis if needed',
             'Manage surgical stimulus during the closing and extubation phase',
-            'Recognise awareness risk as anaesthesia lightens'
+            'Recognise awareness risk as anaesthesia lightens',
+            'Get the tube out. A waking patient with an ETT still in and the opioid switched off will react - expect cough and bronchospasm if you leave it, and note that opioid cover delays that but never prevents it'
+        ],
+        hints: [
+            'Close the vaporiser - it is still delivering 0.4% and nothing washes out while it is open',
+            'Check the twitches before you reverse: roc is mostly gone, so sugammadex 200mg (or neostigmine + glycopyrrolate) fully reverses within a minute or two',
+            'Extubate once the patient is awake and reversed - switch the airway to Mask. This is the step the scenario is really about',
+            'If you leave the tube in, expect trouble at around 2-5 minutes: a light patient with an ETT and no opioid coughs, then bronchospasms. Tidal volume collapses and etCO2 climbs into the 50s',
+            'Turning the remifentanil off early makes that worse, not better - the opioid is what was blunting the airway. Keeping it running only buys a few more minutes',
+            'After extubation, switch the ventilator to Manual and watch them breathe. Expect etCO2 to rise into the 60s-70s on residual fentanyl before it settles - that is the post-extubation hypoventilation to keep an eye on',
+            'If a spasm does happen, the bronchospasm playbook still applies: oxygen, deepen if they are still intubated, salbutamol'
         ],
         setup() {
             setProfile('adult');

@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 123/123,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 133/133,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -268,13 +268,32 @@ thresholds for anything where the resting value is not near an end.
   exactly what should spasm, and sevo 1.5% from t=30 prevents both. Text-only
   fix — new objectives 3 and 4, four new hints, and sweep's `TREATMENTS` now
   starts sevo and raises RR.
-- **Emergence** still fires a spontaneous bronchospasm its briefing never
-  mentions, and **v4.50 made it materially worse** — resistance now holds at
-  ~50 rather than ~40, so the scenario's *own* recommended plan ends with an
-  awake patient (BIS 98) at SpO₂ 88.8, etCO₂ 54.5 and MAP 133. This is the
-  emergence half of the item v4.49 answered for sepsis and it needs the same
-  text-only pass: an objective and hints that name the spasm, plus a treatment
-  plan that addresses it. **Next thing to do in this series.**
+- **Resolved in v4.52 for emergence**, completing the item v4.49 answered for
+  sepsis. The spasm still fires if the tube is left in, but the scenario now
+  says so: new objective 5, seven new hints (it had none), and sweep's
+  `TREATMENTS` extubates. The finding was that **extubating prevents it
+  outright** at any timing, while opioid cover only delays it (t=292 → 407 →
+  448 as remi goes up) — there is no dose that holds it off with the tube in.
+- **A patient with no airway device never breathes**, whatever their
+  respiratory drive. The ventilation block opens with
+  `if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }`, which
+  short-circuits the `else if (respDrive > RESP_DRIVE_GATE)` spontaneous branch
+  below it. "No effective ventilation path" conflates *no device to ventilate
+  through* with *no breathing at all*. Reachable and live: the **LAST**
+  scenario sets `airway: 'none'` and its own objective says the patient is
+  "breathing room air through an unprotected airway" — measured, they have
+  `respDrive` 0.78 and Vt 0 from t=1, so its desaturation is frank apnoea
+  rather than the sedation-related hypoventilation the text describes. F3 still
+  passes because the arrest happens, just by the wrong mechanism. Fixing it
+  moves LAST's whole desaturation timeline, so it wants its own change and its
+  own re-tune. Found during the v4.52 emergence pass.
+- **Seven of twenty scenarios have no `hints` array at all**: `anaphBrewing`,
+  `paedLap`, `asthma`, `aneurysm`, `autonomicDysreflexia`, `last` and `mh`.
+  (It was eight; emergence was the eighth until v4.52. `maintenance` has only
+  two, which is thin but not empty.) Not a bug, but the hints are where a
+  scenario's teaching actually lives — every text-vs-model finding in the
+  September 2026 audit came from reading objectives and hints against measured
+  behaviour, and a scenario without them cannot be checked that way.
 - `state.mac` reads 0.00 for one tick after loading scenarios that set
   `etSevo` but not `mac`.
 - The aneurysm scenario opens at ~170/105 rather than a textbook 200/110.
