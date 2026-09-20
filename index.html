@@ -51,6 +51,78 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.47  ("Post-induction hypotension: a MAP that actually sits at 55")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  First of the six-scenario audit (sepsis, bronchospasm, vagal, haemorrhage,
+  induction, post-induction hypotension). This scenario's entire teaching
+  premise did not exist.
+
+  Briefing and setupBrief both promise "MAP sitting at 55 and not improving".
+  Measured: MAP 56 at t=1, 70 by t=10, 83 by t=600. It self-corrected in ten
+  seconds.
+
+  MAP 55 was a startup TRANSIENT, not a state. scenarioReset() snaps BP to the
+  elderly profile's mapTarget, alphaTone starts at ALPHA_REST (0.2), and the
+  tick drives it to its nociception-4 target over about two seconds. t=1 caught
+  the trough on the way up. Everything downstream followed from that:
+    - objective 1 ("recognise the hypotension") had nothing to recognise by the
+      time the briefing modal was read;
+    - objective 5 ("aim for MAP > 65 within 1-2 minutes") was already met,
+      untreated, at t=10;
+    - hint 5's "5-10 minutes at MAP 55 is too long for an elderly patient"
+      described ten seconds;
+    - and the scenario's own recommended metaraminol + fluid landed on an
+      already-recovered patient and drove MAP to 108-118. Treating the briefed
+      problem produced hypertension.
+
+  Fix: nociception 4 -> 2. That is what objective 3 already claimed as one of
+  the four contributors ("no surgical stimulus yet to drive sympathetic tone")
+  and what the setup's own comment already claimed ("not yet enough to drive a
+  clinically useful sympathetic response") - at 4 neither was true, the stimulus
+  was driving a large sympathetic response. Volume stays at 0.92: nociception,
+  not hypovolaemia, was the lever holding the pressure up. No CONFIG change, no
+  physiology change, one number in one scenario setup.
+
+  Verified, elderly profile, seeded harness:
+    untreated   MAP 54 (t=5) -> 55 (t=30) -> 56 (t=60) -> 57 (t=120) -> 62
+                (t=300) -> 68 (t=600); first exceeds objective 1's 65 target at
+                t=453. BIS 22 against a briefed 25, SpO2 99, etCO2 38, PIP 13 -
+                the other four briefed numbers were already right and are
+                unchanged.
+    The slow creep is retained on purpose: hint 5 says MAP "will slowly creep up
+    as propofol redistributes", and it now does that over minutes instead of
+    seconds.
+
+  All four of objective 4's options ("Options that all work in this scenario")
+  now do, and in the order hints 2-4 rank them - time to MAP > 65:
+    metaraminol 0.5mg  81s      ephedrine 6mg  76s
+    crystalloid 500mL 194s      sevo 2.0->1.5% 126s
+  and the two pressors separate on heart rate the way hints 6 and 7 explain:
+  at t=300 metaraminol HR 83 (baroreflex slowing) against ephedrine HR 106
+  (direct beta), from an untreated 86.
+
+  tools/sweep.js TREATMENTS dosed down to the bottom of objective 4's own stated
+  ranges (metaraminol 0.5-1mg -> 0.5, crystalloid 250-500mL -> 250). The old
+  full-dose pair is what produced MAP 106, but only because it was treating a
+  patient who had already recovered; against a patient genuinely at 55 the lower
+  doses reach the target and peak at 88.
+
+  tools/probes.js gains F20 (8 checks): that the scenario sits at 55 rather than
+  passing through it, that it does not recover past the target for minutes, that
+  it still creeps up as hint 5 says, that all four listed options work, that the
+  pressors outpace fluid, that the pressors differ on HR in opposite directions,
+  and that the recommended management corrects without overshooting.
+
+  Baseline: probes 78/78, voucher-probe 15/15, scan 0 BUG-level findings, 0
+  runtime errors, and every other scenario's row in scan's treatment-effect
+  table unchanged.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.46  ("Anaphylaxis: routine baseline FiO2")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -9930,10 +10002,31 @@ const SCENARIOS = {
             p.rocCp = 4;
             p.rocCe = 4;
             p.paralysis = 0.85;
-            // Drapes going on, modest stimulus building - but not yet
-            // enough to drive a clinically useful sympathetic response
-            state.nociception = 4;
-            state.nociceptionTarget = 4;
+            /* Surgeon still draping - minimal stimulus, which objective 3 names
+               as one of the four contributors ("no surgical stimulus yet to
+               drive sympathetic tone").
+
+               v4.47: 4 -> 2. At 4 the comment below was simply untrue: the
+               stimulus WAS enough to drive a sympathetic response, and a large
+               one. scenarioReset() leaves alphaTone at ALPHA_REST (0.2), the
+               tick then drives it to its nociception-4 target over ~2s, and MAP
+               went 56 at t=1 -> 70 by t=10 -> 83 by t=600. So the briefed
+               "MAP sitting at 55 and not improving" existed for about one
+               second: it was the startup transient on the way up, not a state.
+               A trainee who read the briefing modal found MAP 70 and nothing to
+               treat, and the scenario's own recommended metaraminol + fluid then
+               drove an already-recovered patient to MAP 108-118.
+
+               At 2 the patient genuinely sits there: MAP 54 at t=5, 55 through
+               t=30, 56 at t=60, 57 at t=120, and only crosses objective 1's
+               65 target around t=320. That slow creep is exactly what hint 5
+               describes ("MAP will slowly creep up as propofol redistributes.
+               But 5-10 minutes at MAP 55 is too long"), which was previously
+               describing something the model did in ten seconds.
+               Volume stays at 0.92 - nociception, not hypovolaemia, was the
+               lever holding the pressure up. */
+            state.nociception = 2;
+            state.nociceptionTarget = 2;
             // Mild hypovolaemia from 8 hours NPO. CentralVol at 92% of
             // normal. Combined with the anaesthetic vasodilation this is
             // what tips MAP into the 50s.

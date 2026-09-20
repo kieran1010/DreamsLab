@@ -197,6 +197,22 @@ remifentanil rate of 0.5 at t=0: it proved the model *could* be healed while the
 scenario's documented treatment left it pinned at 1.00. A cautionary example of a
 probe that passes without testing the thing the scenario actually teaches.
 
+| F20 | post-induction hypotension self-corrects in ten seconds | 0/8 |
+
+F20 is the first of the v4.47+ six-scenario audit. The scenario's whole premise
+did not exist: briefing and setupBrief promise "MAP sitting at 55 and not
+improving", but MAP was 56 at t=1, 70 by t=10 and 83 by t=600. MAP 55 was a
+startup transient - `scenarioReset()` snaps BP to the profile's `mapTarget`,
+`alphaTone` starts at `ALPHA_REST`, and the tick drives it to its nociception-4
+target over ~2s, so t=1 caught the trough on the way up. Objective 5's ">65
+within 1-2 minutes" was met untreated at t=10, and the scenario's own
+metaraminol + fluid then drove an already-recovered patient to MAP 108-118.
+Fixed with nociception 4 -> 2, which is what objective 3 and the setup comment
+both already claimed. The probe pins the pressure being a state rather than a
+transient, the slow creep hint 5 promises, all four of objective 4's options
+working, their speed ranking, the metaraminol-vs-ephedrine HR split, and that
+the recommended management does not overshoot.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

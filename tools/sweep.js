@@ -101,9 +101,15 @@ const TREATMENTS = {
         { t: 345, label: 'Ventilator -> VCV',                do: dl => dl.setVentMode('VCV') },
         { t: 350, label: 'Sevoflurane 1.5%',                 do: dl => V(dl, 'sevo', 1.5) },
     ],
+    // v4.47: dosed down to the bottom of objective 4's stated ranges
+    // ("Metaraminol 0.5-1mg", "Crystalloid 250-500mL"). The old full-dose pair
+    // was landing MAP at 106 - but that was treating a patient who had already
+    // self-corrected to 70 before the treatment fired. With the scenario now
+    // genuinely sitting at 55, the lower doses reach objective 5's ">65 within
+    // 1-2 minutes" without overshooting into hypertension.
     hypotensionPostInd: [
-        { t: 60, label: 'Metaraminol 1mg',   do: dl => give(dl, 'metar', 1) },
-        { t: 61, label: 'Crystalloid 500mL', do: dl => give(dl, 'flu', 0.5) },
+        { t: 60, label: 'Metaraminol 0.5mg',  do: dl => give(dl, 'metar', 0.5) },
+        { t: 61, label: 'Crystalloid 250mL',  do: dl => give(dl, 'flu', 0.25) },
     ],
     maintenance: [],   // stable-baseline scenario; nothing to treat
     sepsis: [
