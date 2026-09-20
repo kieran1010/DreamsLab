@@ -833,6 +833,191 @@ probe('F17', 'Neostigmine, dexmedetomidine and magnesium work', () => {
 });
 
 /* =============================================================================
+   F18  the anaphylaxis scenario barely presents, and treating it made it worse
+   -----------------------------------------------------------------------------
+   The September 2026 audit. Measured against an identical run with the event
+   forced off, the whole untreated reaction was worth MAP -15.5, HR +5.5 and
+   SpO2 -3.3 at its worst, and it then cleared itself in 145s and drifted up to
+   MAP 107 - so doing nothing was the winning move. Five separate causes:
+
+     - the "sympathetic surge" was a per-tick push on alphaTone/betaTone
+       (structural trap #1), worth +0.046 of tone, i.e. +2.2 bpm - and because
+       alphaTone raises SVR it lifted MAP +5.5, so the reaction opened by making
+       the patient look better. It also ran only between SYMP_START and
+       VASOPLEGIA_START, so it decayed away as the hypotension arrived.
+     - the vasoplegia peak was cut 1.25 -> 0.25 in v3.75 to lift the nadir from
+       22 to ~48, and was never re-measured after the model's baseline rose
+       ~25 mmHg. By v4.42 the nadir was 74.
+     - no capillary leak existed at all, while objective 3 and hint 4 both
+       taught volume resuscitation. 2L of crystalloid left MAP 90 against 100
+       for doing nothing, and SpO2 90 against 96.
+     - adrenaline advanced anaphylaxisTimer to max(timer, decayStart)+dose*100,
+       which for a patient still on the rising limb jumped them FORWARD to near
+       peak vasoplegia: 100 mcg at t=30s dropped MAP 86 -> 70 within 5s. The
+       faster a trainee treated correctly, the worse the monitor got.
+     - the co-triggered bronchospasm reached resistance 21 of 80 - 26% of what
+       the model's own bronchospasm scenario delivers - and never resolved.
+   ========================================================================== */
+probe('F18', 'Anaphylaxis presents dramatically, and treatment helps', () => {
+
+    /** Run the scenario, optionally with the event suppressed, sampling 1 Hz. */
+    function runAnaph(opts) {
+        opts = opts || {};
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('anaphylaxis');
+        if (opts.noEvent) { dl.state.events.anaphylaxis = false; dl.state.anaphExitPushdown = 0; }
+        const acts = (opts.acts || []).slice();
+        const rows = [];
+        for (let s = 1; s <= (opts.dur || 600); s++) {
+            while (acts.length && acts[0].t === s) acts.shift().do(dl);
+            sim.advance(1000);
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr,
+                        raw: dl.state.patient.bronchResistance,
+                        vol: dl.state.patient.centralVolume,
+                        beta: dl.state.betaTone, spo2: dl.state.spo2,
+                        sev: dl.state.anaphSeverity, res: dl.state.anaphResolution,
+                        bronch: !!dl.state.events.bronchospasm });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors,
+                 minMap: Math.min(...rows.map(r => r.map)),
+                 maxHr:  Math.max(...rows.map(r => r.hr)),
+                 maxRaw: Math.max(...rows.map(r => r.raw)),
+                 maxBeta: Math.max(...rows.map(r => r.beta)) };
+    }
+    const ADR = (t, d) => ({ t, do: dl => give(dl, 'adr', d) });
+    const FLU = (t, d) => ({ t, do: dl => give(dl, 'flu', d) });
+
+    const un   = runAnaph();
+    const ctrl = runAnaph({ noEvent: true });
+
+    /* 1. The reaction is worth something. Both limbs, against the control. */
+    const dMap = ctrl.at(120).map - un.at(120).map;
+    const dHr  = un.at(120).hr - ctrl.at(120).hr;
+    note(`untreated vs event-off control at t=120s: MAP ${un.at(120).map.toFixed(0)} vs ` +
+         `${ctrl.at(120).map.toFixed(0)} (-${dMap.toFixed(0)}), HR ${un.at(120).hr.toFixed(0)} vs ` +
+         `${ctrl.at(120).hr.toFixed(0)} (+${dHr.toFixed(0)}), nadir MAP ${un.minMap.toFixed(0)}`);
+    expect(un.minMap <= 55 && dMap >= 30,
+        'the untreated reaction produces real hypotension',
+        `nadir MAP ${un.minMap.toFixed(0)}, ${dMap.toFixed(0)} mmHg below the event-off control`,
+        'MAP nadir <= 55 and >= 30 mmHg of it attributable to the reaction (was 74 and 15)');
+    expect(un.maxHr >= 125 && dHr >= 25,
+        'the untreated reaction produces real tachycardia',
+        `peak HR ${un.maxHr.toFixed(0)}, ${dHr.toFixed(0)} bpm above the event-off control`,
+        'HR >= 125 with >= 25 bpm from the reaction (the trap #1 push gave +2.2)');
+
+    /* 2. The early phase must not make the patient look BETTER. */
+    const earlyRise = un.at(25).map - ctrl.at(25).map;
+    expect(earlyRise < 6,
+        'the early surge does not raise MAP appreciably',
+        `MAP at t=25s is ${earlyRise.toFixed(1)} above the event-off control`,
+        'under 6 mmHg - a beta-dominant surge, not an alpha one that defends the BP');
+
+    /* 3. It must not resolve itself. This is the one that made doing nothing
+          the winning move. */
+    expect(un.at(600).map <= 60 && un.at(600).sev > 0.9,
+        'an untreated reaction does not resolve on its own',
+        `at t=600s MAP ${un.at(600).map.toFixed(0)}, severity ${un.at(600).sev.toFixed(2)}`,
+        'MAP still <= 60 and severity still > 0.9 (v3.63-v4.42 cleared it by 145s)');
+
+    /* 4. Capillary leak exists, and fluid given is RETAINED rather than being
+          drained straight back out (which is what a floor-based leak did). */
+    const volDrop = 5.0 - Math.min(...un.rows.map(r => r.vol));
+    const fl = runAnaph({ acts: [FLU(60, 1.0)] });
+    note(`circulating volume: untreated falls to ${Math.min(...un.rows.map(r => r.vol)).toFixed(2)} L; ` +
+         `with 1L at t=60s it is ${fl.at(600).vol.toFixed(2)} L at t=600s ` +
+         `(MAP ${un.at(600).map.toFixed(0)} -> ${fl.at(600).map.toFixed(0)})`);
+    expect(volDrop >= 1.0,
+        'the reaction causes a capillary leak',
+        `central volume falls ${volDrop.toFixed(2)} L`,
+        '>= 1.0 L, so the scenario\'s own "aggressive volume resuscitation" has a target');
+    expect(fl.at(600).vol > un.at(600).vol + 0.8 && fl.at(600).map > un.at(600).map + 5,
+        'fluid given is retained and raises the pressure',
+        `volume ${un.at(600).vol.toFixed(2)} -> ${fl.at(600).vol.toFixed(2)} L, ` +
+        `MAP ${un.at(600).map.toFixed(0)} -> ${fl.at(600).map.toFixed(0)}`,
+        'the leak caps total loss rather than pinning the volume to a floor');
+
+    /* 5. Adrenaline must never make the patient acutely worse. Checked against
+          the untreated run over the same window, because MAP is falling anyway
+          during the rise phase. */
+    let worstPenalty = -Infinity, worstT = 0;
+    for (const tGive of [30, 40, 50, 60]) {
+        const r = runAnaph({ acts: [ADR(tGive, 0.1)], dur: tGive + 15 });
+        for (let k = 1; k <= 10; k++) {
+            const pen = un.at(tGive + k).map - r.at(tGive + k).map;   // >0 = treated is worse
+            if (pen > worstPenalty) { worstPenalty = pen; worstT = tGive; }
+        }
+    }
+    expect(worstPenalty < 1.0,
+        'adrenaline never transiently worsens the pressure',
+        `worst deficit against the untreated run in the 10s after a dose: ` +
+        `${worstPenalty.toFixed(1)} mmHg (dose at t=${worstT}s)`,
+        'never worse than doing nothing (the v3.63 timer advance cost 16 mmHg at t=30s)');
+
+    /* 6. Dose-response climbs monotonically, and one bolus is not a cure. */
+    const d1 = runAnaph({ acts: [ADR(60, 0.1)] });
+    const d3 = runAnaph({ acts: [ADR(60, 0.1), ADR(100, 0.1), ADR(140, 0.1)] });
+    const d5 = runAnaph({ acts: [ADR(60, 0.1), ADR(100, 0.1), ADR(140, 0.1),
+                                 ADR(180, 0.1), ADR(220, 0.1)] });
+    note(`adrenaline dose-response at t=600s: 1x100mcg res ${d1.at(600).res.toFixed(2)} ` +
+         `MAP ${d1.at(600).map.toFixed(0)}; 3x res ${d3.at(600).res.toFixed(2)} ` +
+         `MAP ${d3.at(600).map.toFixed(0)}; 5x res ${d5.at(600).res.toFixed(2)} ` +
+         `MAP ${d5.at(600).map.toFixed(0)}`);
+    expect(d1.at(600).res < d3.at(600).res && d3.at(600).res < d5.at(600).res
+           && d1.at(600).map < d3.at(600).map && d3.at(600).map < d5.at(600).map,
+        'the adrenaline dose-response is monotonic',
+        `resolution ${d1.at(600).res.toFixed(2)} < ${d3.at(600).res.toFixed(2)} < ` +
+        `${d5.at(600).res.toFixed(2)}; MAP ${d1.at(600).map.toFixed(0)} < ` +
+        `${d3.at(600).map.toFixed(0)} < ${d5.at(600).map.toFixed(0)}`,
+        'more adrenaline resolves more of the reaction and raises MAP further');
+    expect(d1.at(600).res < 0.4 && d1.at(600).map < 70,
+        'one bolus is a response, not a cure',
+        `1x100mcg leaves resolution ${d1.at(600).res.toFixed(2)}, MAP ${d1.at(600).map.toFixed(0)}`,
+        'partial - the hints say titrate to response, so one dose must not finish it');
+
+    /* 7. The respiratory limb is comparable to the model's own bronchospasm
+          scenario, and reverses with adrenaline. */
+    const bsim = boot(); bsim.dl.loadScenario('bronchospasm'); bsim.advance(600000);
+    const bsRaw = bsim.dl.state.patient.bronchResistance;
+    note(`airway resistance: anaphylaxis untreated peaks ${un.maxRaw.toFixed(0)}, ` +
+         `the bronchospasm scenario settles ${bsRaw.toFixed(0)}, ` +
+         `anaphylaxis + 3x100mcg adrenaline ends ${d3.at(600).raw.toFixed(0)}`);
+    expect(un.maxRaw >= 0.8 * bsRaw,
+        'the co-triggered bronchospasm is as severe as the bronchospasm scenario',
+        `anaphylaxis ${un.maxRaw.toFixed(0)} vs bronchospasm scenario ${bsRaw.toFixed(0)}`,
+        'within 20% (was 21 vs 49, because sevo and betaTone attenuated it first)');
+    expect(d3.at(600).raw < un.at(600).raw - 10,
+        'adrenaline relieves the bronchospasm',
+        `resistance at t=600s: untreated ${un.at(600).raw.toFixed(0)}, ` +
+        `treated ${d3.at(600).raw.toFixed(0)}`,
+        'a real fall - the endogenous-surge discount must not block DRUG beta relief');
+
+    /* 8. Guards the oscillation the release path introduced: BRONCH_PROB is 999,
+          i.e. deterministic, so without a one-shot latch the release and the
+          co-trigger flip the event every tick and the log grows without bound. */
+    const cured = runAnaph({ acts: [ADR(60, 0.5), ADR(120, 0.5)], dur: 900 });
+    const flips = cured.rows.reduce((n, r, i) =>
+        n + (i > 0 && r.bronch !== cured.rows[i - 1].bronch ? 1 : 0), 0);
+    note(`with 1mg of adrenaline the reaction resolves (severity ${cured.at(900).sev.toFixed(2)}) ` +
+         `and the bronchospasm event flips ${flips} time(s) in 900s; tick errors ${cured.errors.length}`);
+    expect(flips <= 2 && cured.errors.length === 0,
+        'the resolving bronchospasm is released once, not oscillated',
+        `${flips} event flips over 900s, ${cured.errors.length} tick errors`,
+        'at most 2 (on, then off) - the co-trigger is latched to once per reaction');
+
+    /* 9. The surge must leave headroom below BETA_CLAMP, or every beta drug and
+          beta blocker given afterwards has a flat dose-response. This is the
+          half of trap #1 that the v4.36 parasympTone finding was about. */
+    const clamp = boot().dl.CONFIG.BETA_CLAMP;
+    const surgeOnly = Math.max(...un.rows.filter(r => r.t <= 40).map(r => r.beta));
+    note(`betaTone from the surge alone (to t=40s, before the baroreflex dominates): ` +
+         `${surgeOnly.toFixed(2)} against BETA_CLAMP ${clamp}`);
+    expect(surgeOnly < clamp - 0.15,
+        'the sympathetic surge leaves headroom below the beta clamp',
+        `betaTone reaches ${surgeOnly.toFixed(2)} of a ${clamp} clamp`,
+        'clear of the clamp, so a beta drug given afterwards still has an effect');
+});
+
+/* =============================================================================
    F19  myocardial ischaemia never moves the blood pressure, and its own
         recommended treatment cannot heal it
    -----------------------------------------------------------------------------
