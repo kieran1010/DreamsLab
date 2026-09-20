@@ -152,12 +152,24 @@ const TREATMENTS = {
         { t: 70, label: 'Salbutamol 250mcg',      do: dl => give(dl, 'salb', 0.25) },
     ],
     bronchospasm: [
-        { t: 20, label: 'RR down to 8',      do: dl => V(dl, 'rr', 8) },
-        { t: 22, label: 'FiO2 1.0',          do: dl => V(dl, 'fio2', 1.0) },
-        { t: 25, label: 'Sevoflurane 3%',    do: dl => V(dl, 'sevo', 3.0) },
-        { t: 30, label: 'Salbutamol 250mcg', do: dl => give(dl, 'salb', 0.25) },
-        { t: 45, label: 'Magnesium 2g',      do: dl => give(dl, 'mag', 2.0) },
-        { t: 90, label: 'Adrenaline 100mcg', do: dl => give(dl, 'adr', 0.1) },
+        /* v4.50: was sevo 3% on top of undiminished propofol TIVA, then
+           adrenaline 100 mcg at t=90. That is every hint applied at once
+           rather than an escalation, and it showed: BIS bottomed at 9.8 and
+           the adrenaline - given at a point where resistance had already
+           fallen to 11.6 - swung MAP to 130 and HR to 140. Hint 6 offers
+           adrenaline for REFRACTORY cases, and this plan never becomes one.
+
+           Now a clinician's escalation: open the expiratory time, oxygenate,
+           add volatile while backing the propofol off so the two do not stack,
+           then salbutamol and magnesium. Stops when it works. Peak BIS 17,
+           peak MAP 83, peak HR 117, resistance 9.2 and Vt 559 by t=180.
+           The refractory adrenaline path is covered by probe F23 instead. */
+        { t: 20, label: 'RR down to 8',       do: dl => V(dl, 'rr', 8) },
+        { t: 22, label: 'FiO2 1.0',           do: dl => V(dl, 'fio2', 1.0) },
+        { t: 25, label: 'Sevoflurane 2%',     do: dl => V(dl, 'sevo', 2.0) },
+        { t: 25, label: 'Propofol TIVA 8->4', do: dl => dl.setInf('prop', 4) },
+        { t: 30, label: 'Salbutamol 250mcg',  do: dl => give(dl, 'salb', 0.25) },
+        { t: 60, label: 'Magnesium 2g',       do: dl => give(dl, 'mag', 2.0) },
     ],
     haemorrhage: [
         { t: 20,  label: 'Crystalloid 1000mL', do: dl => give(dl, 'flu', 1.0) },

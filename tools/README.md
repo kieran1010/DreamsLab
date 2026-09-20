@@ -261,6 +261,30 @@ makes objective 3 worth teaching (MAP 66 untreated vs 52 on sevo — if keeping
 them asleep were free the objective would be empty), and that the full
 recommended management now yields peak BIS 44, no spasm, etCO₂ 46 and MAP 92.
 
+| F23 | severe bronchospasm relieved itself; briefed PIP 45 was mode-impossible | 0/12 |
+
+F23 is the fourth of that audit and the one with the **widest blast radius —
+it guards a global model change**. `bronchoRelaxFactor` credited the patient's
+own reflex beta tone as bronchodilator relief, so an untreated "severe"
+bronchospasm decayed from resistance 80 → 49 in under a minute (trapped gas
+300 → 147 mL, Vt 128 → 192, MAP 66 → 92). That single decay made the briefed
+Vt 150, objective 5 and hint 7 all unreachable. v4.43 had already rejected this
+reasoning for anaphylaxis but scoped the fix to `anaphSurge`; v4.50 generalises
+it to the whole endogenous `betaTarget` via `state.betaTargetEndo`.
+
+**Every bronchospasm in the sim is now more severe** (bronchospasm 49 → 80,
+sepsis 38 → 79, anaphylaxis 47 → 80, emergence 40 → 59, anaphBrewing 34 → 51,
+aspiration 17 → 29 at t=600). So the probe deliberately pins **both halves**: a
+refractory spasm must hold at 80 on ventilation alone, *and* sevoflurane,
+salbutamol, ketamine, magnesium and adrenaline must each still work exactly as
+before. If someone ever rewrites the discount against `betaTone` rather than
+the endogenous target, the second half fails immediately.
+
+It also pins the mode arithmetic — peak PIP stays under 32 in PCV at `pinsp`
+20, and neither briefing text may claim 45 — that objective 1 teaches the
+PCV/VCV split, and that gas trapping has a reachable haemodynamic cost (RR 8 →
+autoPEEP 1.25 / MAP 93 vs RR 30 + pinsp 30 → autoPEEP 8.68 / MAP 75).
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

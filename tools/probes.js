@@ -1625,6 +1625,185 @@ probe('F22', 'The septic laparotomy tells the trainee to keep the patient asleep
         'zero of each');
 });
 
+/* =============================================================================
+   F23  a severe bronchospasm that relieved itself, and a briefed PIP that
+        the ventilator mode made impossible
+   -----------------------------------------------------------------------------
+   The September 2026 six-scenario audit. Two findings, one of them global.
+
+   1. THE SPASM SELF-RELIEVED. Untreated, airway resistance fell 80 -> 49
+      within a minute, trapped gas 300 -> 147 mL, Vt climbed 128 -> 192 and MAP
+      66 -> 92. A scenario titled "severe bronchospasm" got steadily better
+      while nobody treated it, which made its briefed Vt 150, objective 5
+      ("impaired preload, low MAP") and hint 7 unreachable.
+
+      The cause was `bronchoRelaxFactor`, which credited the patient's OWN
+      reflex beta tone as bronchodilator relief. v4.43 had already rejected
+      exactly that reasoning for anaphylaxis - "the endogenous surge is already
+      maximal and is not enough, which is why exogenous adrenaline is
+      first-line" - but scoped the subtraction to `anaphSurge` alone. v4.50
+      generalises it: the threshold is now the whole endogenous betaTarget
+      (`state.betaTargetEndo`), so only drug-driven beta above that target
+      bronchodilates.
+
+      This is a GLOBAL change - every bronchospasm in the sim is now more
+      severe. The checks below pin both halves: the patient's own reflex must
+      not relieve the spasm, AND every exogenous bronchodilator must still
+      work exactly as before.
+
+   2. "PIP 45" WAS ALWAYS IMPOSSIBLE. The setup runs PCV at pinsp 20 over PEEP
+      5, so peak pressure is ~25-28 by construction whatever the severity -
+      measured maximum 28.7 over ten minutes. A pressure-controlled breath
+      cannot exceed its set pressure. v4.4 chose PCV deliberately so the
+      pathology shows as a Vt collapse, and that stands, so the text was
+      corrected and objective 1 now teaches the mode dependence explicitly.
+   ========================================================================== */
+probe('F23', 'Severe bronchospasm stays severe until something treats it', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('bronchospasm');
+        const specs = gaugeSpecs(dl);
+        const g = k => specs.find(x => x.key === k).spec;
+        const vt = g('vt'), raw = g('resistance'), ap = g('autoPEEP') || g('apeep');
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            const p = dl.state.patient;
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr, bis: dl.state.bis,
+                        spo2: dl.state.spo2, etco2: dl.state.etco2,
+                        vt: vt.get(), raw: raw.get(), pip: dl.state.peakPressure,
+                        apeep: p.autoPEEP, trapped: Math.max(0, p.lungVolume - dl.state.profile.frc) });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const RR    = (t, v) => ({ t, do: dl => dl.setVentParam('rr', v) });
+    const PINSP = (t, v) => ({ t, do: dl => dl.setVentParam('pinsp', v) });
+    const SEVO  = (t, v) => ({ t, do: dl => dl.setVentParam('sevo', v) });
+    const FIO2  = (t, v) => ({ t, do: dl => dl.setVentParam('fio2', v) });
+    const PROP  = (t, r) => ({ t, do: dl => dl.setInf('prop', r) });
+    const D     = (t, d, n) => ({ t, do: dl => give(dl, d, n) });
+
+    const un = run(null, 600);
+    const sc = un.dl.SCENARIOS.bronchospasm;
+
+    /* 1. THE FINDING. The spasm must not relieve itself. */
+    note(`untreated resistance: t=1 ${un.at(1).raw.toFixed(1)}, t=60 ${un.at(60).raw.toFixed(1)}, ` +
+         `t=300 ${un.at(300).raw.toFixed(1)}, t=600 ${un.at(600).raw.toFixed(1)}`);
+    expect(un.at(600).raw > 75 && un.at(60).raw > 70,
+        'an untreated severe bronchospasm stays severe',
+        `resistance ${un.at(60).raw.toFixed(1)} at t=60, ${un.at(600).raw.toFixed(1)} at t=600`,
+        'above 75 at t=600 (it used to decay to 49 within a minute)');
+    note(`untreated Vt: t=1 ${un.at(1).vt.toFixed(0)}, t=60 ${un.at(60).vt.toFixed(0)}, ` +
+         `t=600 ${un.at(600).vt.toFixed(0)}`);
+    expect(un.at(600).vt < 150 && un.at(600).vt > 100,
+        'the collapsed tidal volume stays collapsed',
+        `Vt ${un.at(1).vt.toFixed(0)} at t=1 -> ${un.at(600).vt.toFixed(0)} at t=600`,
+        'still under 150 (it used to climb to 192)');
+
+    /* 2. The briefing promises a falling saturation, and it must keep falling
+          rather than recovering as the spasm quietly resolved. */
+    note(`untreated SpO2: t=1 ${un.at(1).spo2.toFixed(1)}, t=60 ${un.at(60).spo2.toFixed(1)}, ` +
+         `t=600 ${un.at(600).spo2.toFixed(1)}; etCO2 reaches ${un.at(600).etco2.toFixed(0)}`);
+    expect(un.at(600).spo2 < 88 && un.at(600).etco2 > 100,
+        'the patient stays hypoxic and becomes profoundly hypercapnic',
+        `SpO2 ${un.at(600).spo2.toFixed(1)}, etCO2 ${un.at(600).etco2.toFixed(0)} at t=600`,
+        'SpO2 under 88 and etCO2 over 100 - an unventilatable patient');
+
+    /* 3. THE OTHER HALF, and the check that says v4.50 did not break
+          treatment. A refractory spasm - ventilation adjusted, nothing given -
+          must hold, and exogenous adrenaline must then break it. This is the
+          whole point of the discount: the patient's own catecholamines do
+          nothing, which is exactly why adrenaline is the escalation. */
+    const refractory = run([RR(20, 8)], 400);
+    const rescued    = run([RR(20, 8), D(120, 'adr', 0.1)], 400);
+    note(`refractory resistance holds at ${refractory.at(300).raw.toFixed(1)}; ` +
+         `adrenaline 100mcg at t=120 takes it to ${rescued.at(240).raw.toFixed(1)} ` +
+         `and Vt ${refractory.at(240).vt.toFixed(0)} -> ${rescued.at(240).vt.toFixed(0)}`);
+    expect(refractory.at(300).raw > 75 && rescued.at(240).raw < 45,
+        'the patient\'s own catecholamines do not relieve it, but adrenaline does',
+        `refractory ${refractory.at(300).raw.toFixed(1)}, after adrenaline ${rescued.at(240).raw.toFixed(1)}`,
+        'holds above 75 alone, falls below 45 on adrenaline');
+
+    /* 4. Every other bronchodilator the hints name must still work. If the
+          v4.50 discount had been written against betaTone rather than the
+          endogenous target, these would all have broken. */
+    const sevo = run([SEVO(20, 3.0)], 300);
+    const salb = run([D(20, 'salb', 0.25)], 300);
+    const ket  = run([D(20, 'ket', 100)], 300);
+    const mag  = run([D(20, 'mag', 2.0)], 300);
+    const base = un.at(240).raw;
+    note(`resistance at t=240 - untreated ${base.toFixed(1)}, sevo 3% ${sevo.at(240).raw.toFixed(1)}, ` +
+         `salbutamol ${salb.at(240).raw.toFixed(1)}, ketamine ${ket.at(240).raw.toFixed(1)}, ` +
+         `magnesium ${mag.at(240).raw.toFixed(1)}`);
+    expect(sevo.at(240).raw < base - 20 && salb.at(240).raw < base - 10 &&
+           ket.at(240).raw < base - 10 && mag.at(240).raw < base - 3,
+        'sevoflurane, salbutamol, ketamine and magnesium all still bronchodilate',
+        `sevo ${sevo.at(240).raw.toFixed(1)}, salb ${salb.at(240).raw.toFixed(1)}, ` +
+        `ket ${ket.at(240).raw.toFixed(1)}, mag ${mag.at(240).raw.toFixed(1)} vs ${base.toFixed(1)}`,
+        'each measurably below the untreated value');
+
+    /* 5. PIP 45 was mode-impossible. Guard the corrected text, and guard the
+          arithmetic that made it impossible, so nobody re-adds the claim. */
+    const maxPip = Math.max(...un.rows.map(r => r.pip));
+    note(`peak PIP over ten minutes: ${maxPip.toFixed(1)} (PCV pinsp 20 over PEEP 5)`);
+    expect(maxPip < 32 && !/PIP 45/.test(sc.briefing) && !/PIP 45/.test(sc.setupBrief),
+        'the briefing no longer promises a PIP the mode cannot produce',
+        `peak PIP ${maxPip.toFixed(1)}, texts mention "PIP 45": ` +
+        `${/PIP 45/.test(sc.briefing + sc.setupBrief)}`,
+        'PIP stays under 32 in PCV and no text claims 45');
+    expect(/pressure control|volume control/i.test(sc.objectives[0]),
+        'objective 1 teaches that the signature depends on the ventilator mode',
+        `objective 1 mentions the modes: ${/pressure control|volume control/i.test(sc.objectives[0])}`,
+        'true - "high-pressure / low-volume" is never both at once on one dial');
+
+    /* 6. Objective 5 and hint 7: gas trapping must have a real haemodynamic
+          consequence, reachable by ventilating the wrong way. This is what
+          makes hint 1 ("lower the rate") worth following. */
+    const slow = run([RR(20, 8)], 400);
+    const fast = run([RR(20, 30), PINSP(20, 30)], 400);
+    note(`at t=300 - RR 8: autoPEEP ${slow.at(300).apeep.toFixed(2)}, MAP ${slow.at(300).map.toFixed(0)}; ` +
+         `RR 30 + pinsp 30: autoPEEP ${fast.at(300).apeep.toFixed(2)}, MAP ${fast.at(300).map.toFixed(0)}`);
+    expect(fast.at(300).apeep > slow.at(300).apeep + 3 &&
+           slow.at(300).map - fast.at(300).map > 10,
+        'ventilating harder stacks breaths and costs blood pressure',
+        `autoPEEP ${slow.at(300).apeep.toFixed(2)} -> ${fast.at(300).apeep.toFixed(2)}, ` +
+        `MAP ${slow.at(300).map.toFixed(0)} -> ${fast.at(300).map.toFixed(0)}`,
+        'autoPEEP more than 3 higher and MAP more than 10 lower');
+    expect(/gas trapping/i.test(sc.objectives[4]) && /autoPEEP|trapping|slow the rate/i.test(sc.hints[6]),
+        'objective 5 and hint 7 describe that mechanism',
+        'both mention gas trapping',
+        'true');
+
+    /* 7. The recommended management, as sweep.js now runs it, must resolve the
+          spasm without over-anaesthetising or overshooting the pressure. */
+    const plan = run([RR(20, 8), FIO2(22, 1.0), SEVO(25, 2.0), PROP(25, 4),
+                      D(30, 'salb', 0.25), D(60, 'mag', 2.0)], 600);
+    const minBis = Math.min(...plan.rows.map(r => r.bis));
+    const maxMap = Math.max(...plan.rows.map(r => r.map));
+    const maxHr  = Math.max(...plan.rows.map(r => r.hr));
+    note(`recommended management: min BIS ${minBis.toFixed(0)}, peak MAP ${maxMap.toFixed(0)}, ` +
+         `peak HR ${maxHr.toFixed(0)}, resistance ${plan.at(180).raw.toFixed(1)} and ` +
+         `Vt ${plan.at(180).vt.toFixed(0)} at t=180`);
+    expect(plan.at(180).raw < 15 && plan.at(180).vt > 400 && plan.at(180).spo2 > 95,
+        'the recommended escalation resolves the spasm',
+        `resistance ${plan.at(180).raw.toFixed(1)}, Vt ${plan.at(180).vt.toFixed(0)}, ` +
+        `SpO2 ${plan.at(180).spo2.toFixed(0)} at t=180`,
+        'airway open, Vt restored, saturation recovered');
+    expect(minBis > 14 && maxMap < 100 && maxHr < 125,
+        'and does it without over-anaesthetising or swinging the pressure',
+        `min BIS ${minBis.toFixed(0)}, peak MAP ${maxMap.toFixed(0)}, peak HR ${maxHr.toFixed(0)}`,
+        'BIS above 14, MAP under 100, HR under 125 (the old plan gave 9.8 / 130 / 140)');
+
+    expect(un.errors.length === 0 && plan.errors.length === 0 && plan.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length + plan.errors.length} tick errors, ${plan.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

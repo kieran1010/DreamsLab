@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 99/99,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 111/111,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -153,6 +153,19 @@ the dose-response and masking every other vagal drive. Fixed by building a
 saturating `parasympTarget` (via `saturate()`) the tone relaxes toward, like
 `alphaTarget`/`betaTarget`. `parasympTone` was the last autonomic tone still
 driven by raw pushes; all three now use targets.
+
+**1b. A patient's own reflex catecholamines must not treat their own
+pathology.** `bronchoRelaxFactor` credited raw `betaTone` as bronchodilator
+relief, so a bronchospasm's own stress response bronchodilated the patient and
+every spasm in the sim quietly self-relieved (the scenario went resistance
+80 → 49, Vt 128 → 192, MAP 66 → 92 in under a minute, untreated). v4.43 spotted
+this for anaphylaxis and subtracted `anaphSurge` specifically; v4.50 generalised
+it. The threshold is now `state.betaTargetEndo` — the previous tick's
+`betaTarget`, which is built only from endogenous drives — so only drug-driven
+beta *above* that target relieves anything. Adrenaline, ephedrine,
+noradrenaline, ketamine and salbutamol all push `betaTone` after the relaxation,
+so they are unaffected; the patient's own reflex is. Ask this of any new
+pathology whose own response feeds a term that treats it.
 
 **2. Multiplying a tone per tick compounds.** `betaTone *= (1 - f)` at 10 Hz
 against a 0.05 relaxation settles at `0.05·T·(1-f) / (0.05 + 0.95f)` of target —
@@ -247,9 +260,12 @@ thresholds for anything where the resting value is not near an end.
   fix — new objectives 3 and 4, four new hints, and sweep's `TREATMENTS` now
   starts sevo and raises RR.
 - **Emergence** still fires a spontaneous bronchospasm its briefing never
-  mentions. The physiology is coherent; whether it should fire it is a content
-  decision, and the sepsis half of this item is now answered (announce it in
-  the text rather than remove it).
+  mentions, and **v4.50 made it materially worse** — resistance now holds at
+  ~50 rather than ~40, so the scenario's *own* recommended plan ends with an
+  awake patient (BIS 98) at SpO₂ 88.8, etCO₂ 54.5 and MAP 133. This is the
+  emergence half of the item v4.49 answered for sepsis and it needs the same
+  text-only pass: an objective and hints that name the spasm, plus a treatment
+  plan that addresses it. **Next thing to do in this series.**
 - `state.mac` reads 0.00 for one tick after loading scenarios that set
   `etSevo` but not `mac`.
 - The aneurysm scenario opens at ~170/105 rather than a textbook 200/110.
