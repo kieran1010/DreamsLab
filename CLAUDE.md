@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 175/175,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 180/180,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 
 `sweep.js` shifts every treatment plan by `ONSET_LEAD_IN` (see `planFor()`), so
@@ -140,6 +140,12 @@ Two things to know before extending the harness:
 - `requestAnimationFrame` is a no-op, so `animate()` never runs. **Nothing in
   the render path is covered** — verify waveform and canvas changes in a
   browser.
+- The `AudioContext` stub starts **suspended**, like a real browser, and only
+  runs once something calls `resume()`. It used to report `running` from the
+  start, which hid a live bug: the sim's audio was only ever being started as
+  a side effect of alarms firing at scenario load, so when v4.59 stopped that,
+  the sim went silent in a browser while the harness stayed green (v4.60,
+  probe F31). If you add a sound, call `ensureAudioRunning()` from it.
 
 The tick calls `Math.random()` in four places, so the sandbox supplies a seeded
 generator (`DL_SEED`). `sweep.js` output is byte-identical between runs, which

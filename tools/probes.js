@@ -3037,6 +3037,106 @@ probe('F30', 'Eye opening only alarms when the patient should be asleep', () => 
         'both - the render path is not covered headlessly, so this is the check');
 });
 
+/* =============================================================================
+   F31  the sim's audio was switched on by a side effect of a bug
+   -----------------------------------------------------------------------------
+   Reported after v4.59: "no audio at all when the sim is loaded".
+
+   Browsers create an AudioContext SUSPENDED and will not start it until the
+   page has had a user gesture, so anything that makes a sound has to be ready
+   to start it. Nothing in the sim reliably was:
+
+     - beepAtSpO2() never called resume() at all.
+     - toggleMon() does, but all four monitors default to on, so the
+       `if (!state.monitors[m]) toggleMon(m)` every scenario setup runs never
+       actually fires - verified across all twenty, toggleMon is called zero
+       times at load.
+     - cycleAudioMode() and the bag button do, but only when pressed.
+
+   That left playAlarmBurst() as the only thing that started the audio in
+   ordinary use, and it only ran because scenarios used to alarm the instant
+   they loaded. The audio was being switched on by a side effect of a bug.
+   v4.59 fixed the bug - no alarms during the onset lead-in - and the audio
+   went with it, including the ECG beep, which had never started the context
+   for itself.
+
+   The harness could not see any of this because its AudioContext stub
+   reported state 'running' from the start. It now starts 'suspended' like a
+   real browser, which is what makes this probe possible at all.
+   ========================================================================== */
+probe('F31', 'Audio starts on a user gesture, not on an alarm firing', () => {
+
+    /* 1. THE FINDING. A scenario that never alarms must still not leave the
+          context suspended forever - but nothing should have started it
+          before the user has touched the page either. */
+    const sim = boot(); const dl = sim.dl;
+    dl.state.audioMode = 'on';
+    dl.loadScenario('maintenance');        // a control scenario: never alarms
+    for (let t = 0; t < 20; t++) sim.advance(1000);
+    const beforeGesture = dl.audioCtx.state;
+    note(`maintenance (never alarms), 20s, no gesture: audioCtx.state ` +
+         `${beforeGesture}, resume() calls ${dl.audioCtx.resumes}`);
+    expect(beforeGesture === 'suspended',
+        'the context stays suspended until the user actually interacts',
+        `state ${beforeGesture} after 20s with no gesture`,
+        'suspended - a browser would not have started it either');
+
+    /* 2. A user gesture starts it, whatever the sim happens to be doing. This
+          is the path that did not exist before v4.60. */
+    const fire = ev => (sim.context.document._listeners[ev] || []).forEach(f => f());
+    fire('pointerdown');
+    note(`after one pointerdown: audioCtx.state ${dl.audioCtx.state}, ` +
+         `resume() calls ${dl.audioCtx.resumes}`);
+    expect(dl.audioCtx.state === 'running' && dl.audioCtx.resumes >= 1,
+        'and one user gesture starts it, with no alarm involved',
+        `state ${dl.audioCtx.state} after a pointerdown on a silent scenario`,
+        'running - audio no longer depends on something happening to alarm');
+
+    /* 3. And the ECG beep starts the context for itself, so it is not relying
+          on an alarm having gone off first. This is the specific regression
+          that was reported. */
+    const sim2 = boot(); const dl2 = sim2.dl;
+    dl2.state.audioMode = 'on';
+    dl2.loadScenario('maintenance');
+    for (let t = 0; t < 20; t++) sim2.advance(1000);
+    const preBeep = dl2.audioCtx.state;
+    dl2.beepAtSpO2();
+    note(`ECG beep with the context ${preBeep}: state afterwards ${dl2.audioCtx.state}`);
+    expect(preBeep === 'suspended' && dl2.audioCtx.state === 'running',
+        'the ECG beep starts the context for itself',
+        `${preBeep} -> ${dl2.audioCtx.state} across one beepAtSpO2()`,
+        'it used to rely on playAlarmBurst() having run first');
+
+    /* 4. The gesture listeners are actually registered, and on more than one
+          event - a keyboard-only user gets audio too. */
+    const evs = Object.keys(sim.context.document._listeners || {});
+    const wanted = ['pointerdown', 'keydown', 'touchstart', 'visibilitychange'];
+    const missing = wanted.filter(e => !evs.includes(e));
+    note(`document listeners: ${evs.join(', ')}`);
+    expect(missing.length === 0,
+        'and the arming listeners cover pointer, keyboard, touch and visibility',
+        missing.length ? 'missing: ' + missing.join(', ') : wanted.join(', ') + ' all present',
+        'all four - audio should not depend on owning a mouse');
+
+    /* 5. v4.59 must still hold: the lead-in is still silent. Fixing the audio
+          startup must not have quietly restored alarms-at-load. */
+    const sim3 = boot(); const dl3 = sim3.dl;
+    dl3.state.audioMode = 'on';
+    dl3.loadScenario('paedLap');           // the noisiest scenario there is
+    let alarmedEarly = null;
+    for (let t = 0; t < dl3.CONFIG.ONSET_LEAD_IN; t++) {
+        sim3.advance(1000);
+        const on = Object.entries(dl3.state.alarmStates || {})
+                         .filter(([, v]) => v === 'high' || v === 'med');
+        if (on.length && alarmedEarly === null) alarmedEarly = t + 1;
+    }
+    expect(alarmedEarly === null,
+        'and the v4.59 silent lead-in is intact - this did not undo that',
+        alarmedEarly === null ? 'no alarms through the lead-in'
+                              : `alarmed at t=${alarmedEarly}s`,
+        'still silent until the lead-in is over');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
