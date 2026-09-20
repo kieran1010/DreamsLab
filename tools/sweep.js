@@ -175,11 +175,21 @@ const TREATMENTS = {
         { t: 20, label: 'Surgeon releases (vagal event off)', do: dl => { if (dl.state.events.vagal) dl.toggleEvent('vagal'); } },
         { t: 25, label: 'Atropine 0.6mg',                    do: dl => give(dl, 'atrop', 0.6) },
     ],
+    // v4.44: retimed and re-dosed. The old plan gave a single esmolol 30mg and
+    // left ischaemia pinned at 1.00 for the whole run - the scenario's own
+    // recommended management was inert against its own model. Two things were
+    // wrong. A single bolus wears off (esmolol t1/2 ~9 min) while the surgical
+    // stimulus does not, so rate control has to be TITRATED; and the plan leant
+    // on deep sevo, which collapses the diastolic pressure the coronaries are
+    // perfused by. This plan does what hint 3 now says: opioid up, esmolol
+    // repeated to a rate target, and metaraminol to defend the DBP.
     ischaemia: [
-        { t: 60,  label: 'Sevoflurane 2.0% (deepen)',     do: dl => V(dl, 'sevo', 2.0) },
-        { t: 62,  label: 'Fentanyl 100mcg',               do: dl => give(dl, 'fent', 0.1) },
-        { t: 90,  label: 'Esmolol 30mg',                  do: dl => give(dl, 'esmo', 30) },
-        { t: 150, label: 'Metaraminol 0.5mg (raise DBP)', do: dl => give(dl, 'metar', 0.5) },
+        { t: 60,  label: 'Remifentanil up to 0.15',       do: dl => dl.setInf('remi', 0.15) },
+        { t: 90,  label: 'Esmolol 50mg',                  do: dl => give(dl, 'esmo', 50) },
+        { t: 95,  label: 'Metaraminol 1mg (defend DBP)',  do: dl => give(dl, 'metar', 1) },
+        { t: 180, label: 'Esmolol 50mg (titrate)',        do: dl => give(dl, 'esmo', 50) },
+        { t: 270, label: 'Esmolol 50mg (titrate)',        do: dl => give(dl, 'esmo', 50) },
+        { t: 275, label: 'Metaraminol 1mg (defend DBP)',  do: dl => give(dl, 'metar', 1) },
     ],
     pulmEmbolism: [
         { t: 20, label: 'FiO2 1.0',                     do: dl => V(dl, 'fio2', 1.0) },
