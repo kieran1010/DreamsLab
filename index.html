@@ -51,6 +51,84 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.51  ("Vagal: atropine does work, and then it stops working")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Last of the six-scenario audit, and the smallest. No physiology changed. The
+  best-calibrated presentation in the whole set was attached to a hint that
+  contradicted it.
+
+  THE INVERTED HINT.
+
+  Hint 4 read "Atropine alone doesn't fix it - the central reflex continues
+  while stretch is applied". A trainee reads that as "atropine will not work
+  here". It does, completely: 0.6 mg with the event still running takes HR
+  48 -> 79 and MAP 50 -> 82 by t=180 - not merely adequate but ABOVE the
+  no-event control of 78/61. The scenario was teaching trainees to distrust
+  the correct first-line drug for the exact situation it depicts.
+
+  What the model actually does is better than either reading, and is now what
+  the text says. With the event never released:
+
+      t=180    HR 79   MAP 82     atropine fully effective
+      t=600    HR 71   MAP 77     wearing off
+      t=1200   HR 48   MAP 50     reflex fully returned
+
+  Atropine works, and then stops working, because the stimulus is still there.
+  Release alone is the definitive fix and holds at 78/61 all the way to t=1800.
+
+  So objective 4 - "recognise that both source control AND pharmacology may be
+  needed" - was RIGHT all along. Only hint 4's phrasing contradicted it.
+  Objective 4 is therefore kept and sharpened rather than rewritten, and hint 4
+  now describes the actual time course: atropine treats the heart, not the
+  peritoneum; one dose holds about ten minutes; releasing the insufflation is
+  the only thing that fixes it for good.
+
+  A new hint 5 covers the trade-off and warns about the overshoot when both are
+  done together - peak HR 101, peak MAP 87, settling to 79/62.
+
+  TWO SMALLER THINGS.
+
+  Hint 3 said "Atropine 0.6mg or larger". The drug cabinet offers 0.3 and 0.6
+  only, so "or larger" meant clicking 0.6 twice - which does work (HR 94 / MAP
+  86 at t=180 against 79/82 for a single dose), so the advice was sound but
+  unclickable as written. It now says so explicitly.
+
+  CONFIG.VAGAL_DURATION (30, commented "sim-sec; event auto-resolves") is
+  removed. Nothing read it, and its comment was the opposite of the truth - the
+  event never self-resolves, which is exactly what the setupBrief promises and
+  what the tick does. The stale `vagalTimer` comment ("resolves at ~30s") is
+  corrected too.
+
+  WHAT WAS DELIBERATELY NOT FIXED.
+
+  `state.betaTone *= (1 - sympWithdraw * dt)` is the last instance of
+  structural trap 2 in the codebase - a per-tick multiplication on a tone,
+  which compounds against the TONE_DECAY_TAU relaxation. With
+  VAGAL_SYMP_WITHDRAW 1.8 and dt 0.1 the per-tick factor is 0.18, and the
+  trap-2 settling formula puts betaTone at about 18.5% of target; measured,
+  0.057 against an unaffected target of 0.262, i.e. 22%. The constant does not
+  mean what its name suggests - it delivers roughly a fifth of its nominal
+  value.
+
+  It is left alone knowingly, and now carries a long comment saying so.
+  VAGAL_SYMP_WITHDRAW was tuned THROUGH that compounding to land the scenario
+  at HR ~48 / MAP ~50, which is precisely what the briefing promises and
+  measures correct. Moving the withdrawal onto betaTarget would be a pure
+  refactor needing a retune to reproduce the same numbers, with no
+  user-visible gain and a real risk of losing the best-calibrated scenario in
+  the set. Probe F24 pins the presentation so a future refactor has a target.
+
+  Tests: probes 123/123 across 23 findings (new F24, 12 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors, scan CLIN unchanged at 32
+  (a text-only change moves nothing). sweep treatment effect for vagal:
+  MAP 50 -> 78, HR 48 -> 94.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.50  ("Bronchospasm: your own adrenaline is not coming to save you")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6212,7 +6290,11 @@ const CONFIG = {
     TOURNIQUET_CO2_PEAK_RISE: 15,     // max additional mmHg on etCO2
     TOURNIQUET_SYMP_SURGE: 0.15,      // peak sympathetic tone boost
 
-    VAGAL_DURATION: 30,               // sim-sec; event auto-resolves
+    /* v4.51: VAGAL_DURATION (30, commented "event auto-resolves") removed.
+       It was dead code and the comment was actively wrong - nothing read the
+       constant and the event never auto-resolved. The setupBrief's "not
+       self-resolving" is the correct description and is what the tick does:
+       the block runs for as long as state.events.vagal is true. */
     VAGAL_PEAK_TIME: 5,               // sim-sec; peak parasympathetic surge
     VAGAL_PARASYMP_PEAK: 0.7,         // peak parasympathetic tone boost
     // v3.65: sympathetic withdrawal rate during vagal event. Per-second
@@ -6691,7 +6773,9 @@ const state = {
 
     // Surgical event timers (self-limiting events)
     tourniquetTimer: 0,  // sim-sec since tourniquet release; effects over 0-180s
-    vagalTimer: 0,       // sim-sec since vagal event; resolves at ~30s
+    vagalTimer: 0,       // v4.51: sim-sec since the vagal event started. Drives
+                         // the VAGAL_PEAK_TIME ramp only - the event does NOT
+                         // self-resolve, which is what the briefing promises.
     bleedSeverity: null, // 'slow' | 'moderate' | 'severe' | null
 
     // v3.68: aspiration injury tracker (0..1). Builds while events.aspiration
@@ -8070,6 +8154,24 @@ setInterval(() => {
         // partially salvages MAP.
         const muscBlockEff = Math.min(1, (aE + gE));
         const sympWithdraw = envelope * CONFIG.VAGAL_SYMP_WITHDRAW * (1 - muscBlockEff);
+        /* NOTE (v4.51): this is a deliberate, calibrated instance of structural
+           trap 2 - a per-tick MULTIPLICATION on a tone, which compounds against
+           the TONE_DECAY_TAU relaxation instead of setting a target. With
+           VAGAL_SYMP_WITHDRAW 1.8 and dt 0.1 the per-tick factor f is 0.18, and
+           the trap-2 settling formula 0.05*T*(1-f)/(0.05+0.95f) puts betaTone at
+           about 18.5% of its target - measured 0.057 against an unaffected
+           target of 0.262, i.e. 22%.
+
+           So the constant does NOT mean what its name suggests; it delivers
+           roughly a fifth of its nominal value. It is left as-is knowingly.
+           VAGAL_SYMP_WITHDRAW was tuned THROUGH this compounding to land the
+           scenario at HR ~48 / MAP ~50, which is exactly what the briefing
+           promises and measures correct. Moving the withdrawal onto betaTarget
+           (the trap-2-correct form) would be a pure refactor requiring a
+           retune to reproduce the same presentation, with no user-visible
+           gain and a real risk of losing the best-calibrated scenario in the
+           set. Documented rather than fixed - if you do refactor it, the
+           target is HR 48.2 / MAP 50.0 at t=55 and probe F24 pins it. */
         state.betaTone  *= (1 - sympWithdraw * dt);
         // v3.67: alpha boosted to support MAP. Additive push, atropine still
         // blocks (vagal is muscarinic-mediated centrally).
@@ -11236,18 +11338,51 @@ const SCENARIOS = {
         name: 'Vagal hyperreflexia',
         briefing: 'Mid-laparoscopy. Surgeon has just started insufflating peritoneum. HR is dropping rapidly.',
         setupBrief: 'A 45-year-old undergoing elective laparoscopic cholecystectomy. ETT, paralysed, sevoflurane + remifentanil. Stable on induction. Surgeon has now begun CO2 insufflation of the peritoneum. Sudden severe drop in HR to ~48 and MAP to ~50. Not self-resolving.',
+        /* v4.51: hint 4 was inverted and hint 3 named a dose the drug cabinet
+           does not offer.
+
+           Hint 4 read "Atropine alone doesn't fix it - the central reflex
+           continues while stretch is applied", which a trainee reads as
+           "atropine will not work here". It does, completely: 0.6 mg with the
+           event still running takes HR 48 -> 79 and MAP 50 -> 82 by t=180,
+           which is not merely adequate but ABOVE the no-event control (78/61).
+           So the scenario was teaching trainees to distrust the correct
+           first-line drug.
+
+           What the model actually does is better than either reading, and is
+           what the hint now says. Measured, event never released:
+
+               t=180   HR 79  MAP 82     atropine fully effective
+               t=600   HR 71  MAP 77     wearing off
+               t=1200  HR 48  MAP 50     reflex fully returned
+
+           Atropine works and then stops working, because the stimulus is still
+           there. Release alone is the definitive fix and holds indefinitely
+           (78/61 at t=1800). So objective 4 - "both source control AND
+           pharmacology may be needed" - was right all along; only hint 4's
+           phrasing contradicted it. Objective 4 is kept and sharpened rather
+           than rewritten.
+
+           Both together overshoot: HR 101 and MAP 86 at t=180, settling to
+           79/62. Worth warning about, hence the new hint 6.
+
+           Hint 3 said "0.6mg or larger"; the cabinet offers 0.3 and 0.6 only,
+           so "larger" meant clicking 0.6 twice. It now says so - and 1.2 mg
+           does give a bigger response (HR 94, MAP 86 at t=180 against 79/82),
+           so the advice is sound, just previously unclickable as written. */
         objectives: [
             'Recognise the vagal mechanism (sudden bradycardia + hypotension from peritoneal stretch)',
             'Identify what action will stop the underlying stimulus',
             'Use pharmacological measures to support the heart rate',
-            'Recognise that both source control AND pharmacology may be needed',
+            'Recognise that pharmacology buys time but only source control is definitive - atropine wears off while the stretch is still being applied, and the reflex returns in full',
             'Plan for safe re-establishment of the surgical conditions'
         ],
         hints: [
             'Ask the surgeon to pause - peritoneal stretch is the trigger',
             'Toggle off the Vagal event button to represent the surgeon releasing pressure',
-            'Atropine 0.6mg or larger to block the cardiac muscarinic effect',
-            'Atropine alone doesn\'t fix it - the central reflex continues while stretch is applied',
+            'Atropine 0.6mg to block the cardiac muscarinic effect - a second 0.6mg gives a bigger response if the first is not enough',
+            'Atropine does work here, and quickly - but it treats the heart, not the peritoneum. One dose holds for about ten minutes and then the reflex comes back in full, because the stimulus never went away. Releasing the insufflation is the only thing that fixes it for good',
+            'Releasing the pressure alone is definitive but slower to lift the pressure; atropine alone is faster but temporary. Doing both is reasonable - just expect an overshoot, around HR 100 and MAP 86',
             'Once recovered, surgeon should reinsufflate more slowly'
         ],
         setup() {

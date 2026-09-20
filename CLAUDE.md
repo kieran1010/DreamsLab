@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 111/111,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 123/123,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -171,6 +171,15 @@ pathology whose own response feeds a term that treats it.
 against a 0.05 relaxation settles at `0.05·T·(1-f) / (0.05 + 0.95f)` of target —
 so `f = 0.29` cut beta tone to **11%** of target, and even `f = 0.05` halved it.
 Ask whether an effect belongs on the *target* or the *value*.
+
+One instance survives on purpose: the vagal block's
+`betaTone *= (1 - sympWithdraw * dt)`. `VAGAL_SYMP_WITHDRAW` 1.8 gives `f = 0.18`
+and therefore about 18.5% of target (measured 0.057 against 0.262, 22%) — so the
+constant delivers roughly a fifth of its nominal value and does not mean what its
+name says. It is left alone because it was tuned *through* the compounding to land
+HR ~48 / MAP ~50, exactly what that scenario's briefing promises. v4.51 documented
+it at the line rather than refactoring; probe F24 pins the presentation if anyone
+does. Do not "fix" it without retuning to those numbers.
 
 **3. Scenario setups can assign state the tick immediately overwrites.**
 `state.nociception` without `nociceptionTarget` was the worst case: the tick
