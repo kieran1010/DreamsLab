@@ -26,6 +26,12 @@ node tools/scan.js       # flag anomalies in what sweep recorded
 node tools/probes.js     # targeted checks for known bugs
 ```
 
+All four tools (including `voucher-probe.js`) take `DL_STRICT=1`, which makes
+them exit non-zero on failure instead of only reporting. `scan.js` gates on
+BUG-level findings only — CLIN, WARN and INFO describe sick patients behaving
+correctly. This is what `.github/workflows/physiology.yml` runs on every push
+and pull request.
+
 `sweep.js` writes `tools/results.json`, which `scan.js` and `trace.js` read.
 That file is generated and git-ignored.
 

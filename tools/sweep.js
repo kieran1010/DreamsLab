@@ -48,6 +48,32 @@ function extras(dl) {
     };
 }
 
+/* v4.57: every action time shifts by the standard onset lead-in.
+
+   Scenarios now open on a patient who looks normal and deteriorate after
+   CONFIG.ONSET_LEAD_IN seconds, so a plan written against the old behaviour
+   treats a pathology that has not happened yet. Several did: the vagal plan
+   released the surgeon's stimulus at t=20, before the bradycardia existed at
+   all, and the MH plan turned the vaporiser off before the etCO2 had moved -
+   so the "treated" run was not a treatment, it was prophylaxis, and comparing
+   it against the untreated run measured nothing.
+
+   Shifting the whole plan rather than editing times one by one keeps every
+   tuned INTERVAL intact (the emergence plan's sevo-off -> remi-off ->
+   sugammadex -> extubate sequence, the bronchospasm escalation ladder), which
+   is where the calibration actually lives.
+
+   `induction` is exempt: nothing is wrong with that patient, there is no
+   pathology to wait for, and its eleven steps are a walkthrough the trainee
+   drives from t=0. */
+const LEAD_IN = 20;
+const PLAN_EXEMPT = new Set(['induction']);
+function planFor(key) {
+    const plan = TREATMENTS[key] || [];
+    if (PLAN_EXEMPT.has(key)) return plan;
+    return plan.map(a => ({ ...a, t: a.t + LEAD_IN }));
+}
+
 /**
  * Run one scenario for `durationSec`, applying `plan` (an array of
  * { t, label, do }) at the given simulated second.
@@ -190,8 +216,14 @@ const TREATMENTS = {
         { t: 30,  label: 'Sevoflurane off',   do: dl => V(dl, 'sevo', 0) },
         { t: 32,  label: 'Remifentanil off',  do: dl => dl.setInf('remi', 0) },
         { t: 35,  label: 'Sugammadex 200mg',  do: dl => give(dl, 'sug', 200) },
-        { t: 120, label: 'Extubate to mask',  do: dl => dl.setAirway('mask') },
-        { t: 121, label: 'Vent to Manual',    do: dl => dl.setVentMode('MANUAL') },
+        /* v4.56: 120/121 -> 60/61. The remifentanil seed was 2.8x the level
+           its own pump sustains, so the patient used to wake slowly and the
+           spasm fired at t=292; extubating at 120 comfortably beat it. With
+           the seed corrected the wake is faster and the spasm fires at t=91,
+           so a plan that extubates at 120 arrives after the hazard it is
+           meant to avoid. Extubating at 60 prevents it as before. */
+        { t: 60,  label: 'Extubate to mask',  do: dl => dl.setAirway('mask') },
+        { t: 61,  label: 'Vent to Manual',    do: dl => dl.setVentMode('MANUAL') },
     ],
     tiva: [],
     aneurysm: [
@@ -260,11 +292,11 @@ function main() {
     for (const key of keys) {
         process.stderr.write('  ' + key.padEnd(22));
         const untreated = runScenario(key, [], DURATION, SAMPLE);
-        const treated   = runScenario(key, TREATMENTS[key] || [], DURATION, SAMPLE);
+        const treated   = runScenario(key, planFor(key), DURATION, SAMPLE);
         totalErrors += untreated.errors.length + treated.errors.length;
         results[key] = {
             untreated, treated,
-            treatmentPlan: (TREATMENTS[key] || []).map(a => ({ t: a.t, label: a.label })),
+            treatmentPlan: planFor(key).map(a => ({ t: a.t, label: a.label })),
         };
         process.stderr.write(`ok  (runtime errors: ${untreated.errors.length + treated.errors.length})\n`);
     }
@@ -274,8 +306,18 @@ function main() {
     console.log(`runtime errors across all runs: ${totalErrors}`);
     console.log(`wrote ${path.relative(process.cwd(), OUT)}`);
     console.log('next: node tools/scan.js');
+
+    /* v4.57: DL_STRICT=1 exits non-zero if any run threw, matching probes.js
+       and voucher-probe.js, so CI can gate on it. A tick that throws is always
+       a defect - the sandbox catches it and the run continues, so without this
+       a broken tick still exits 0 and writes a plausible-looking results.json
+       for scan.js to read. */
+    if (process.env.DL_STRICT === '1' && totalErrors > 0) {
+        console.error(`\nDL_STRICT: ${totalErrors} runtime error(s) across the sweep`);
+        process.exit(1);
+    }
 }
 
 if (require.main === module) main();
 
-module.exports = { runScenario, TREATMENTS };
+module.exports = { runScenario, TREATMENTS, planFor };

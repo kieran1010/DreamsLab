@@ -51,6 +51,238 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.57  ("Twenty scenarios, one clock")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Every scenario started its pathology whenever its own setup happened to, and
+  there was no rule anywhere deciding when that should be. Measured across all
+  twenty, untreated, sampled every simulated second against each scenario's own
+  settled baseline, the first monitor-visible change ranged from 0 s to 60 s,
+  with three scenarios that never produced one at all.
+
+    bronchospasm   assigned p.bronchResistance = 80 in its setup, so SpO2 read
+                   86, Vt 127 and PIP 29 BEFORE THE FIRST TICK RAN. Not just
+                   immediate - already complete. There was no onset to observe.
+    last           sat completely flat for 60 s and then stepped from MAP 98 to
+                   MAP 0 in a single tick. Its CNS phase was a per-tick push on
+                   betaTone (structural trap 1) and delivered nothing at all:
+                   HR 83.8 from t=5 to t=55, BIS flat. No onset, a trapdoor.
+    vagal, aneurysm, autonomicDysreflexia, mh, haemorrhage, hypotensionPostInd
+                   all likewise opened at or near their final presentation. The
+                   AD scenario's briefing says the surgeon "is about to begin"
+                   and tells the trainee to "watch for the classic AH response";
+                   the response was complete at MAP 118 before the first tick
+                   and never moved again for thirty minutes.
+    asthma         promised "be ready for bronchospasm" and produced none in
+                   thirty untreated minutes. bronchResistance never left 5.
+    anaphylaxis    had a carefully tuned 25 s / 50 s curve, which was right, and
+                   was the only scenario in the set that did.
+
+  A trainee moving between scenarios therefore had no way to know whether the
+  thing in front of them had already happened, was happening, or was never
+  going to.
+
+  THE CONTRACT. CONFIG.ONSET_LEAD_IN (20 s) and ONSET_TAU (25 s). Every scenario
+  opens on a patient who looks normal for themselves, holds there while the
+  trainee reads the monitor, and then deteriorates. onsetGate() is 0 through the
+  lead-in and 1 after, for a pathology that already has a first-order build of
+  its own downstream; onsetRamp() adds the standard build for one that does not.
+  Both reach 1, so every settled presentation in the sim is unchanged - only the
+  first ninety seconds differ.
+
+  ONSET_TAU is the DEFAULT build, not a rule. Where a pathology has a clinically
+  dictated rate of its own it keeps it and takes only the lead-in: MH still ramps
+  over three minutes, because three minutes is what MH does. What is shared is
+  the moment things start, which is what a trainee needs in order to compare.
+
+  THE WINDOW BELONGS TO THE SCENARIO, NOT THE USER. state.onsetArmed records
+  which events setup() armed, and onsetRampFor()/onsetGateFor() apply the window
+  only to those; toggleEvent() drops an event from the set, so a hand toggle -
+  including releasing and re-arming a scenario's own event - acts immediately on
+  its own time constant. This was not a refinement. Without it the window reached
+  into every probe and every Events-panel toggle: F15, F16, F17 and F23 all drive
+  a bronchospasm by hand shortly after loading, and all of them measured a
+  resistance of 12 where they expected 80, because the spasm they had just
+  switched on was being held down by somebody else's lead-in.
+
+  SCENARIOS NOW OPEN AT A STEADY STATE. A lead-in is worthless if the first ten
+  seconds are a loading artefact, and they were. scenarioReset() leaves the
+  autonomic tones at rest; the tick then relaxes them to target (~2 s),
+  equilibrates preload with central volume (TAU_FLUID_BUFFER 30 s) and settles
+  the stimulus lag. Measured, that took 8-12 s, during which MAP moved 16 mmHg
+  in `maintenance` and 28 in `bronchospasm` - a loading transient that looked
+  exactly like a deteriorating patient. loadScenario() now pre-rolls the tick for
+  CONFIG.ONSET_SETTLE (12 s) with log() silenced, then puts both clocks back to
+  zero. The tick body is a named function (physiologyTick) so it can be called;
+  nothing else about it changed.
+
+  The pre-roll has to run AFTER the v4.29 nociception sync, and finding that out
+  cost an hour. Placed next to setup() it drove every scenario's surgical
+  stimulus to zero - the tick eases nociception toward a target scenarioReset()
+  has just zeroed - and the sync then copied the zero back into the target.
+  Structural trap 3, reintroduced by the fix for a different problem.
+  `maintenance` opened at MAP 58 instead of 90.
+
+  Per scenario:
+    bronchospasm   setup no longer assigns resistance 80; the hysteresis block
+                   builds it. Vt 700 -> 490 -> 265 -> 189 -> 143 -> 127, SpO2
+                   99 -> 84, same end state, now watchable.
+    last           CNS phase rewritten as a real prodrome on the targets
+                   (LAST_CNS_BETA/ALPHA) with the BIS excursion its description
+                   has promised since v3.27 and never had (LAST_CNS_BIS_SPIKE,
+                   BIS 69 -> 92). LAST_ARREST_TIME 60 -> 120, so there are ~100
+                   seconds of visible prodrome before the arrest. This closes
+                   the "no BIS spike" known item.
+    asthma         arms the bronchospasm it always advertised. Lands MILDER than
+                   the bronchospasm scenario (resistance 22 vs 80) and that is
+                   the point: 1 MAC of sevo here against TIVA there. Given five
+                   objectives and eight hints - it had none - built around that
+                   comparison and around VCV showing pressure where PCV shows
+                   volume.
+    mh             severity starts at 0, not a pre-loaded 0.3 with etCO2 already
+                   at 55. The diagnosis is the TREND, and handing over the
+                   endpoint threw the signal away. etCO2 38 -> 55 -> 128,
+                   temperature 37.0 -> 41.
+    sepsis,        the standard window in its subtractive form (onsetAlphaFade).
+    hypotension-   These patients really are unwell on arrival, so "starts
+    PostInd        normal" cannot mean starts well; it means the scenario starts
+                   at the moment the compensation fails rather than after it.
+                   Sepsis 91/56 -> 73/45, hypotension MAP 71 -> mid 50s.
+    haemorrhage    starts euvolaemic at MAP 92 with the bleed gated to the
+                   lead-in, and falls through the briefed 65 at about t=110.
+                   Previously opened at 58% of blood volume - the haemorrhage
+                   had already happened.
+    aneurysm       sahSurge is brought in through state.sahEffect; the three
+                   direct tone assignments are gone (they were erased in 2 s
+                   anyway, but not before making the opening hypertensive).
+                   92/56 -> 168/103 with the reflex bradycardia as it goes.
+    autonomic-     nociceptionRampTo walks the bladder distension up over the
+    Dysreflexia    window. 97/60 -> 160/98, HR 80 -> 61.
+    vagal, aspiration, pulmEmbolism, ischaemia  all gated at their existing
+                   builds. Vagal's settled HR 48.2 / MAP 50.0 is untouched,
+                   which matters because VAGAL_SYMP_WITHDRAW was tuned through
+                   structural trap 2 to produce exactly those numbers.
+    anaphylaxis    SYMP_START 2 -> 20 to match the lead-in, with the v3.75
+                   intervals between its three phases preserved (VASOPLEGIA_START
+                   25 -> 43, BRONCH_START 50 -> 68).
+    maintenance    fentCe 0.002 -> 0.00002 and rocCe 4.0 -> 1.75, the values the
+                   PK gives 30 minutes after induction, which is what this
+                   scenario's own setupBrief says it is. Seeded fresh they were
+                   not steady states and the comparator drifted MAP 87 -> 102
+                   over fifteen untreated minutes. Same family as v4.56's
+                   remifentanil seeds. Now flat to 0.1 mmHg.
+
+  Measured onset, untreated, first monitor-visible change: 21-47 s across every
+  scenario with a pathology, against 0-60 s and three silent ones before.
+
+  Scenario text is part of the contract, so twenty-one briefings, setupBriefs
+  and descriptions were rewritten to describe what the trainee now sees rather
+  than what they used to inherit.
+
+  The pre-roll calls physiologyTick() DIRECTLY rather than through the 100 ms
+  setInterval, and a throw there is not contained the way a throw in the
+  interval is - the interval keeps firing and the sim limps on, but an
+  unguarded pre-roll propagates out of loadScenario() and half-loads the
+  scenario: stimulus synced, briefing never shown, dropdown pointing at a case
+  the model is not running. It is wrapped in try/catch/finally so it degrades
+  exactly as the interval does. Found by a deliberate negative test against the
+  new CI workflow, not by the suite.
+
+  CI, finally. .github/workflows/physiology.yml runs probes, voucher-probe,
+  sweep and scan on every push and pull request - the repo had none, so the
+  suite only ran when somebody remembered to. scan.js and sweep.js gain the
+  DL_STRICT=1 exit code probes.js and voucher-probe.js already had, without
+  which the workflow could not fail on a BUG-level finding or a throwing tick.
+  scan gates on BUG only: CLIN, WARN and INFO describe sick patients behaving
+  correctly, and gating on those would require the patients to be well for the
+  build to go green. All four gates were negative-tested - a broken
+  ONSET_LEAD_IN fails probes, an injected tick throw fails sweep, a nulled
+  gauge fails scan.
+
+  New probe F29 pins the contract in both directions - a flat lead-in for all
+  twenty, a declaration from all seventeen pathology scenarios, fifteen minutes
+  of stillness from the three controls, and the ownership rule - so this cannot
+  quietly rot back. Eleven checks in F8, F15, F20-F24, F27 and F28 were reshaped
+  where they pinned a presentation this release deliberately changed; each says
+  in place what moved and why, and every one passes on merit. sweep.js shifts
+  every treatment plan by the lead-in, because a plan written against the old
+  behaviour was treating a pathology that had not happened yet.
+
+  probes 166/166, voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime
+  errors.
+
+==================================================================================
+  DREAMS LAB  v4.56  ("The stable scenarios were not stable")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Every scenario that seeds a remifentanil effect-site level opened 2-3x above
+  what its own pump sustains, then lightened over ten minutes as the seed washed
+  out to the real steady state. Ten scenarios did this.
+
+  The source is a reference line in the [SCENARIOS] header comment, copied into
+  each setup in turn: "Remi 0.15 mcg/kg/min steady ~ remiCe 0.005". It is a
+  guess, and it is 2.3x too high. The PK block gives the true value in closed
+  form -- the tick adds (mgPerMin / (vd * wt * vdScale)) per minute and removes
+  Cp * k10 per minute, so
+
+      remiCe_ss = rate / (70 * vdScale)        rate in mcg/kg/min
+      propCe_ss = rate / (3.6 * vdScale)       rate in mg/kg/hr
+
+  -- both independent of weight, because mgPerMin and effVd both scale with it.
+  Measured against the sandbox, both formulae land on the fifth decimal.
+
+  What it cost. `maintenance` and `tiva` exist to be stable reference cases a
+  trainee can compare an emergency against. Untreated, with no user action at
+  all, maintenance ran analgesiaCover 4.2 -> 2.0, effectiveStimulus 0.8 -> 3.0
+  and MAP 62 -> 84 -> 89 over ten minutes; tiva ran MAP 68 -> 89. A 22-27 mmHg
+  climb in a scenario whose own hint says "this is a stable maintenance state -
+  no emergency to fix" is a bigger excursion than several of the actual
+  pathologies produce, and it sat underneath every attempt to measure when a
+  scenario starts to deteriorate. Both are now flat to within 1 mmHg for
+  fifteen minutes.
+
+  Corrected seeds (Cp and Ce together, all at the pump's own steady state):
+
+    maintenance, anaphBrewing, vagal, mh   remi 0.15  0.005  -> 0.00214
+    asthma, tiva                           remi 0.2   0.006  -> 0.00286
+    bronchospasm, emergence                remi 0.05  0.002  -> 0.00071
+    ischaemia (elderly, vdScale 0.8)       remi 0.05  0.0015 -> 0.00089
+    pulmEmbolism                           remi 0.08  0.0027 -> 0.00114
+    bronchospasm, tiva                     prop 8     2.5    -> 2.22
+
+  Scenarios that seed a drug with NO pump running are untouched: propCe 1.5 in
+  anaphylaxis, aspiration and haemorrhage, propCe 2.5 in sepsis and fentCe
+  everywhere are induction boluses that are supposed to be decaying.
+
+  Knock-on, and the one behaviour change a user will see. `emergence` now runs
+  on a faster clock: with the correct opioid burden the patient wakes sooner and
+  the post-extubation bronchospasm fires at t=91 rather than t=292. The v4.52
+  finding is unchanged -- extubating prevents it outright, opioid only delays it
+  (t=91 -> 92 -> 93 as remi goes up) -- but the window to act is now about 90
+  seconds rather than five minutes. Probe F25 extubated at 120/180/240, all of
+  which now land AFTER the spasm and so tested nothing; it extubates at 50/70/90
+  instead, and its note reports the measured timings rather than asserting
+  "never, never, never" in a string. sweep.js's emergence plan moves 120 -> 60
+  for the same reason. All ten F25 checks pass on merit: no spasm at any of the
+  three timings, SpO2 min 99, spontaneous Vt 372, etCO2 peaking 80 and settling
+  to 54.
+
+  Side effect on a known open item: anaphBrewing's baseline was MAP 53, which
+  the item called "either lift its baseline or accept it as the harder of the
+  two". Correcting its remi seed lifts it to MAP 71 on its own, so the reaction
+  now starts from a plausible maintenance pressure. Nadir 33 (was 32).
+
+  Baselines shifted by this change, measured at t=10s untreated:
+    maintenance  62 -> 79    tiva 68 -> 89    asthma 76 -> 92
+    bronchospasm 77 -> 90    vagal 46 -> 50   pulmEmbolism 43 -> 52
+    anaphBrewing 53 -> 71    ischaemia 115 -> 119
+  vagal moves TOWARD its own setupBrief, which promises "MAP to ~50".
+
+  probes 158/158, scan 0 BUG-level findings, 0 runtime errors.
+
+==================================================================================
   DREAMS LAB  v4.55  ("The monitor finally notices there is no circulation")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6177,7 +6409,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.55';
+const APP_VERSION = '4.57';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -6275,6 +6507,69 @@ const CONFIG = {
     TAU_BRONCH:        15,
     TAU_ANAPH_EXIT:    30,
     TAU_FLUID_BUFFER:  30,
+
+    /* ---------------------------------------------------------------------
+       v4.57: THE STANDARD SCENARIO ONSET WINDOW
+
+       Every scenario whose pathology has a precipitating event opens with a
+       patient who looks normal for themselves, holds there while the trainee
+       reads the monitor, and then deteriorates on one shared clock.
+
+       Before v4.57 the spread was 0 to 60 seconds with no rule behind it.
+       `bronchospasm` assigned p.bronchResistance = 80 in its setup, so SpO2
+       read 86 and Vt 127 before the first tick had run -- there was no onset
+       to observe at all. `anaphylaxis` had a deliberately tuned 25s/50s curve
+       (see ANAPHYLAXIS_VASOPLEGIA_START). `last` sat completely flat for 60
+       seconds and then stepped straight into a pulseless rhythm in a single
+       tick. A trainee moving between scenarios had no way to know whether the
+       thing they were looking at had already happened, was happening, or was
+       about to.
+
+       The three numbers below are the contract:
+
+         t < LEAD_IN              vitals are the patient's own normal
+         LEAD_IN .. LEAD_IN+~3*TAU   deterioration develops
+         beyond                   fully expressed
+
+       ONSET_TAU is a first-order time constant, NOT a duration: the pathology
+       reaches 63% of full at LEAD_IN + TAU, 86% at +2*TAU and 95% at +3*TAU.
+       With 20 and 25 that puts the first monitor-visible change at roughly
+       30-35 s and full expression at about 95 s.
+
+       LEAD_IN exists because a trainee cannot recognise a change they never
+       saw the start of. It is deliberately longer than the ~2 s the autonomic
+       tones take to settle after loadScenario(), so the lead-in is genuinely
+       flat rather than still settling.
+
+       Scenarios where the patient is already unwell on arrival rather than
+       deteriorating in front of you -- sepsis, post-induction hypotension --
+       still open abnormal, because there is no moment inside the scenario's
+       own timeframe at which they were normal. What they must NOT do is sit
+       abnormal and static: see ONSET_EXEMPT in [SCENARIOS] for that list and
+       what each one does instead. */
+    ONSET_LEAD_IN: 20,    // sec of the patient's own normal before anything moves
+    ONSET_TAU:     25,    // sec; first-order build of the pathology thereafter
+    /* Sim-seconds of tick that loadScenario() runs before handing the scenario
+       to the user, so that what they first see is a steady state.
+
+       scenarioReset() leaves the autonomic tones at their rest values and the
+       setup assigns drug levels and a stimulus; the tick then has to relax the
+       tones to their targets (TONE_DECAY_TAU, ~2 s), equilibrate preload with
+       central volume (TAU_FLUID_BUFFER, 30 s) and settle the stimulus lag
+       (TAU_NOCI). Measured across the set, that took 8-12 s, during which MAP
+       moved by 16 mmHg in `maintenance` and 28 in `bronchospasm` - so the
+       first ten seconds of every scenario were a loading artefact that looked
+       exactly like a deteriorating patient.
+
+       Three scenarios used to paper over this by hand-seeding their tones at
+       measured target values (haemorrhage from v4.48, sepsis and
+       hypotensionPostInd from v4.57). Those seeds are kept - they cost nothing
+       and they document the settled state - but they are no longer load-bearing.
+
+       Must stay below ONSET_LEAD_IN: the pre-roll advances state.onsetTimer
+       like any other tick, so a settle longer than the lead-in would start the
+       pathology before the user ever saw the patient. Probe F29 checks this. */
+    ONSET_SETTLE: 12,
 
     // v3.50: Furosemide diuresis gain.
     // Drain rate (L/sec) = furoCe * this gain.
@@ -6580,6 +6875,29 @@ const CONFIG = {
        pushing the tones per tick, so the relaxation converges on them instead
        of erasing them. Tuned for HR ~110 at full severity, matching the
        scenario briefing. */
+    /* v4.57: local anaesthetic toxicity, CNS phase. Before this the phase was
+       a per-tick push on betaTone/alphaTone that delivered nothing measurable
+       (structural trap 1), so the scenario ran flat for sixty seconds and then
+       stepped straight into a pulseless rhythm. These three drive the prodrome
+       the briefing has always described: "acutely confused, with twitching...
+       watch for progression to cardiovascular collapse".
+
+       Beta-dominant, like the anaphylaxis surge, because the sign is a rising
+       heart rate. Kept below BETA_CLAMP so a beta blocker given during the
+       prodrome still has something to act on (structural trap 1's subtler
+       half). BIS_SPIKE is the EEG activation of seizure activity - the
+       scenario's description has promised a "brief BIS spike" since v3.27 and
+       there was never one; 22 takes the scenario's resting BIS 69 to ~91 at
+       full CNS severity, which reads unmistakably on the monitor without
+       implying the patient is awake. */
+    LAST_CNS_BETA:      0.45,        // added to betaTarget at full CNS severity
+    LAST_CNS_ALPHA:     0.20,        // added to alphaTarget at full CNS severity
+    LAST_CNS_BIS_SPIKE: 22,          // BIS points added at full CNS severity
+    /* Sim-seconds from the LAST trigger to the pulseless rhythm, and at twice
+       this to VF. Was a literal 60/120 in the tick. 120 gives the CNS phase
+       about a hundred seconds of visible prodrome after the standard onset
+       lead-in, instead of the sixty seconds of nothing it used to be. */
+    LAST_ARREST_TIME: 120,
     MH_BETA_DRIVE:  0.62,            // added to betaTarget at severity 1.0
     MH_ALPHA_DRIVE: 0.15,            // added to alphaTarget at severity 1.0
     /* Core temperature. Normothermia is 37; a fulminant MH climbs about
@@ -6593,12 +6911,19 @@ const CONFIG = {
     // v3.63: tightened to ~30s build to full CV collapse, matching real-world
     // intra-operative anaphylaxis (NMB/antibiotic-triggered, observed in seconds
     // not minutes). Old values: SYMP_START 5, VASOPLEGIA_START 30, BRONCH_START 60.
-    ANAPHYLAXIS_SYMP_START: 2,        // initial sympathetic surge begins (early HR rise)
+    /* v4.57: 2 -> 20, matching ONSET_LEAD_IN. This scenario already had the
+       best-shaped onset in the set and needed only to start on the same clock
+       as everything else; at 2 s the early tachycardia was moving before the
+       trainee had read the monitor (+2.5 bpm and +2.1 mmHg by t=20). The
+       intervals BETWEEN the three phases are deliberately preserved - see the
+       v3.75 note below - so vasoplegia still follows the surge by 23 s and the
+       bronchospasm by a further 25. */
+    ANAPHYLAXIS_SYMP_START: 20,       // initial sympathetic surge begins (early HR rise)
     // v3.75: stretched timing - real anaphylaxis under anaesthesia takes
     // 1-2 minutes to nadir, not 30 seconds. Vasoplegia starts later,
     // bronchospasm appears later still.
-    ANAPHYLAXIS_VASOPLEGIA_START: 25, // SVR starts crashing (was 10)
-    ANAPHYLAXIS_BRONCH_START: 50,     // bronchospasm co-triggers (was 15)
+    ANAPHYLAXIS_VASOPLEGIA_START: 43, // SVR starts crashing (was 10; v4.57 25 -> 43, keeping the v3.75 interval)
+    ANAPHYLAXIS_BRONCH_START: 68,     // bronchospasm co-triggers (was 15; v4.57 50 -> 68, keeping the v3.75 interval)
     ANAPHYLAXIS_BRONCH_PROB: 999,     // v3.63: deterministic - always fires (was probabilistic)
     /* v4.43: the shape of the reaction, lifted out of the tick body where it
        had been sitting as inline literals since v3.63 - which is how it came
@@ -7152,6 +7477,31 @@ const state = {
     // When >= REVIVE_THRESHOLD, rhythm auto-reverts to sinus.
     arrestRescueCredits: 0,
     // Anaphylaxis progression (sim-sec into the reaction; 0 if inactive)
+    /* v4.57: sim-seconds since the current scenario was loaded. Drives the
+       standard onset window (CONFIG.ONSET_LEAD_IN / ONSET_TAU) so every
+       scenario's pathology declares itself on one shared clock instead of
+       whenever its own setup happened to assign its severity. Reset by
+       scenarioReset(); counts on regardless of which scenario is loaded, so a
+       user who toggles an event by hand outside a scenario gets the onset
+       immediately (onsetGate() is already 1 by then). */
+    onsetTimer: 0,
+    onsetArmed: {},      // v4.57: events this scenario's setup() armed (see onsetRampFor)
+    settling: false,     // v4.57: true during loadScenario's pre-roll; silences log()
+    /* v4.57: set by a scenario whose pathology is a rising surgical stimulus.
+       null means "no ramp, the target is whatever the slider says". */
+    nociceptionRampFrom: 0,
+    nociceptionRampTo: null,
+    sahEffect: 0,        // v4.57: sahSurge as seen through the onset window
+    lastCnsSeverity: 0,  // v4.57: LAST's CNS phase, 0..1; drives the prodrome
+    /* v4.57: an alphaTarget bonus that FADES over the standard onset window,
+       i.e. the compensation the patient had before the precipitating event.
+       For a scenario whose pathology is the loss of something rather than the
+       arrival of something - the septic patient's sympathetic compensation
+       failing as the induction agent takes hold, the hypertensive patient's
+       vascular tone going under sevoflurane. Lets those open at a pressure
+       that looks survivable and deteriorate on the same clock as everything
+       else, instead of opening at the nadir and sitting there. */
+    onsetAlphaFade: 0,
     anaphylaxisTimer: 0,
     /* v4.43: the reaction's shape, derived from the timer each tick.
        anaphSeverity (0..1) is the mediator burden - it drives the vasoplegia,
@@ -7719,6 +8069,64 @@ function saturate(baseline, floor, ceiling, pushUp, pushDown, Kup, Kdown) {
     return baseline + (ceiling - baseline) * up - (baseline - floor) * down;
 }
 
+/* =============================================================================
+   v4.57: THE STANDARD SCENARIO ONSET WINDOW
+
+   Two helpers, both reading state.onsetTimer (sim-seconds since the scenario
+   loaded). See the CONFIG.ONSET_LEAD_IN block for why they exist.
+
+   onsetGate()   -- 0 during the lead-in, 1 afterwards. For a pathology that
+                    already has its own first-order build downstream (the
+                    bronchospasm hysteresis, the PE shunt, the aspiration
+                    injury): gate its TARGET and the existing lag supplies the
+                    ramp for free. Gating the target rather than the value
+                    matters, because a gated value would jump.
+
+   onsetRamp()   -- 0 during the lead-in, then a first-order rise toward 1 with
+                    time constant ONSET_TAU. For a pathology with no build of
+                    its own, where the severity IS the number everything reads
+                    (the SAH surge, the AD stimulus, the MH ramp).
+
+   Both are 1 (respectively fully risen) once the window has passed, so code
+   downstream of them behaves exactly as it did before v4.57 in the steady
+   state. Only the first ~95 seconds after a scenario loads differ.
+
+   NOTE for anything that toggles an event by hand outside a scenario: the
+   timer keeps counting from the last scenarioReset(), so by the time a user
+   reaches the Events panel these are long since 1 and the event fires at once,
+   which is what a manual toggle should do. It is only loadScenario() that puts
+   the clock back to zero. */
+function onsetGate() {
+    return state.onsetTimer >= CONFIG.ONSET_LEAD_IN ? 1 : 0;
+}
+function onsetRamp() {
+    const t = state.onsetTimer - CONFIG.ONSET_LEAD_IN;
+    return t <= 0 ? 0 : 1 - Math.exp(-t / CONFIG.ONSET_TAU);
+}
+
+/* The window applies to a pathology THE SCENARIO ARMED, never to one a user
+   switched on afterwards. Toggle bronchospasm from the Events panel and it
+   should tighten on its own tau immediately, not wait out a lead-in that
+   belongs to a scenario you loaded thirty seconds ago and to a pathology you
+   did not ask for.
+
+   state.onsetArmed is the set of events that were already true when
+   loadScenario() finished running setup(). toggleEvent() drops an event from
+   it, so releasing and re-arming the same event by hand also gets the
+   immediate behaviour - once the user has touched it, it is theirs.
+
+   Non-event drivers (sahSurge, onsetAlphaFade, nociceptionRampTo) need no
+   equivalent: nothing but a scenario setup ever assigns them, so they call
+   onsetRamp() directly.
+
+   This mattered more than it looks. Without it the ramp reached into every
+   probe and every God-Mode toggle: F15, F16, F17 and F23 all drive a
+   bronchospasm by hand shortly after loading a scenario, and all of them
+   measured a resistance of 12 where they expected ~80, because the spasm they
+   had just switched on was still being held down by somebody else's lead-in. */
+function onsetRampFor(evt) { return state.onsetArmed[evt] ? onsetRamp() : 1; }
+function onsetGateFor(evt) { return state.onsetArmed[evt] ? onsetGate() : 1; }
+
 /* Dynamic lung compliance as a function of current absolute lung volume.
    Piecewise linear:
      - volume <= 80% TLC:   compliance = profile.compliance (flat portion)
@@ -7743,7 +8151,10 @@ function dynamicCompliance(volume, profile) {
    dt (sim seconds) = 0.1 * timeScale
    Drug rate constants are per minute; we convert to per-tick internally.
    ============================================================================= */
-setInterval(() => {
+/* v4.57: the tick body is a named function rather than an inline arrow, so
+   loadScenario() can pre-roll it (see settleScenario). Nothing about the tick
+   itself changed; setInterval registration is immediately below it. */
+function physiologyTick() {
     /* --- Time stepping ---
        dt       : 0.1 sec of WALL-CLOCK per tick (never scaled). Used for all
                   physiology except pharmacokinetics. Keeps feedback loops stable.
@@ -7755,6 +8166,7 @@ setInterval(() => {
     const dtPharm = 0.1 * state.timeScale;             // scaled for drug PK
     const dtMin = dtPharm / 60;                        // sim-minutes of drug time
     state.simTime += dt;                               // log timestamps (wall-clock)
+    state.onsetTimer += dt;                            // v4.57: standard onset window
     const p = state.patient;
     const wt = state.profile.weight;
 
@@ -7923,6 +8335,23 @@ setInterval(() => {
             const sevMult = 1 + (CONFIG.ANAPHYLAXIS_BRONCH_SEVERITY - 1) * state.anaphSeverity;
             bronchTarget = Math.min(CONFIG.BRONCH_RESISTANCE,
                 CONFIG.BRONCH_RESISTANCE * sevMult * attn + 5 * (1 - attn));
+            /* v4.57: the standard onset window. The bronchospasm scenario used
+               to assign p.bronchResistance = 80 in its own setup, so SpO2 read
+               86, Vt 127 and PIP 29 before the first tick ran - the pathology
+               was not just immediate, it was already complete, and there was
+               no onset for a trainee to see. The scenario now arms the event
+               and lets the resistance build here like any other spasm.
+
+               Interpolated from the resting 5 rather than multiplied, so the
+               relaxed airway stays relaxed during the lead-in instead of the
+               target being scaled toward zero.
+
+               This only shapes a spasm that starts at the beginning of a
+               scenario. Anything that triggers one later - the anaphylaxis
+               co-trigger at t=50, aspiration's injury threshold, the emergence
+               wake at t~91, a user toggling the event by hand - meets an
+               onsetRamp() that is already ~1 and is unaffected. */
+            bronchTarget = 5 + (bronchTarget - 5) * onsetRampFor('bronchospasm');
         } else {
             bronchTarget = 5;
         }
@@ -7949,7 +8378,13 @@ setInterval(() => {
         const bleedMap = ((state.sys || 90) + 2 * (state.dia || 60)) / 3;
         const bleedFactor = clamp(bleedMap / CONFIG.BLEED_MAP_REF,
                                   CONFIG.BLEED_MAP_MIN_FRAC, CONFIG.BLEED_MAP_MAX_FRAC);
-        p.effectiveBleedRate = p.bleedRate * bleedFactor;
+        /* v4.57: gated by the standard onset lead-in so the scenario's first
+           twenty seconds are genuinely flat. The haemorrhage scenario now opens
+           euvolaemic at MAP 90 and the bleed takes it through the briefing's 65
+           at about t=110, rather than starting at 58% of blood volume with the
+           shock already established. A hand-toggled bleed is unaffected - the
+           gate is 1 long before a user reaches the Events panel. */
+        p.effectiveBleedRate = p.bleedRate * bleedFactor * onsetGateFor('bleed');
         p.centralVolume -= p.effectiveBleedRate * dt;
     } else {
         p.effectiveBleedRate = 0;
@@ -8167,6 +8602,21 @@ setInterval(() => {
     // state.nociception eases toward it with tau = TAU_NOCI. Scaled with
     // time compression via dtPharm so the lag feels right at any speed.
     {
+        /* v4.57: a scenario whose pathology IS a rising surgical stimulus can
+           set state.nociceptionRampTo, and the target walks from whatever the
+           setup left to that value over the standard onset window. Used by
+           autonomicDysreflexia, where the briefing says the surgeon "is about
+           to begin bladder distension" while the setup assigned nociception 6
+           outright - so the explosive hypertension the trainee was told to
+           watch for had already peaked at MAP 118 before the first tick.
+
+           Cleared by scenarioReset(). Any user movement of the Stimulus slider
+           calls setNoci(), which cancels the ramp - otherwise the scenario
+           would keep overwriting a deliberate manual change. */
+        if (state.nociceptionRampTo !== null && state.nociceptionRampTo !== undefined) {
+            state.nociceptionTarget = state.nociceptionRampFrom
+                + (state.nociceptionRampTo - state.nociceptionRampFrom) * onsetRamp();
+        }
         const blend = 1 - Math.exp(-dtPharm / CONFIG.TAU_NOCI);
         state.nociception += (state.nociceptionTarget - state.nociception) * blend;
     }
@@ -8220,13 +8670,26 @@ setInterval(() => {
     const betaRest  = state.profile.betaToneRest  !== undefined
         ? state.profile.betaToneRest  : CONFIG.BETA_REST;
     /* v4.29: SAH catecholamine surge - a sustained drive rather than a one-off
-       tone assignment, so it survives the relaxation below. Decays over ~15 min. */
+       tone assignment, so it survives the relaxation below. Decays over ~15 min.
+
+       v4.57: state.sahSurge is the burden the bleed represents and still decays
+       on SAH_SURGE_DECAY. state.sahEffect is what the physiology actually sees,
+       which is the burden brought in over the standard onset window. The
+       scenario's premise is a rupture happening now - "sudden severe headache
+       during induction" - but the setup assigned sahSurge 1.0 plus alphaTone
+       0.85 directly, so MAP read 128 with a reflex bradycardia of 57 before the
+       first tick. The rupture had already happened and the trainee arrived for
+       the aftermath. Both consumers (this target and the SVR pushUp) read
+       sahEffect now. */
     if (state.sahSurge > 0) {
         state.sahSurge = Math.max(0, state.sahSurge - dt / CONFIG.SAH_SURGE_DECAY);
     }
+    state.sahEffect = state.sahSurge * onsetRamp();
     const alphaTarget = alphaRest + alphaNociDrive
-                      + state.sahSurge  * CONFIG.SAH_SURGE_ALPHA
+                      + state.onsetAlphaFade * (1 - onsetRamp())   // v4.57
+                      + state.sahEffect * CONFIG.SAH_SURGE_ALPHA
                       + state.mhSeverity * CONFIG.MH_ALPHA_DRIVE    // v4.29
+                      + state.lastCnsSeverity * CONFIG.LAST_CNS_ALPHA  // v4.57
                       + state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_ALPHA;  // v4.43
     /* Beta blockade scales the target rather than the tone (see the esmolol
        note further down). bbBlockFraction is computed later in this same tick,
@@ -8235,6 +8698,7 @@ setInterval(() => {
     const betaTarget  = Math.max(0.05,
                         (betaRest + betaNociDrive
                          + state.mhSeverity * CONFIG.MH_BETA_DRIVE    // v4.29
+                         + state.lastCnsSeverity * CONFIG.LAST_CNS_BETA  // v4.57
                          + state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_BETA)  // v4.43
                         * (1 - (state.bbBlockFraction || 0)));
     /* v4.36: parasympathetic target. The opioids' central vagal drive is a
@@ -8331,7 +8795,12 @@ setInterval(() => {
 
     // Bleed & events push both sympathetic tones up (transient, per tick)
     if (state.events.bleed) { state.alphaTone += 0.02 * dt; state.betaTone += 0.02 * dt; }
-    if (state.events.aspiration) { state.alphaTone += 0.015 * dt; state.betaTone += 0.015 * dt; }
+    // v4.57: gated, so the reflex sympathetic response arrives with the injury
+    // rather than at the instant the scenario loads.
+    if (state.events.aspiration) {
+        state.alphaTone += 0.015 * dt * onsetGateFor('aspiration');
+        state.betaTone  += 0.015 * dt * onsetGateFor('aspiration');
+    }
     if (state.events.laryngospasm) { state.alphaTone += 0.03 * dt; state.betaTone += 0.03 * dt; }
 
     // v3.68: aspiration injury tracker.
@@ -8342,7 +8811,14 @@ setInterval(() => {
     if (state.events.aspiration) {
         const prevInjury = state.aspirationInjury;
         const blend = 1 - Math.exp(-dt / 15);
-        state.aspirationInjury += (1.0 - state.aspirationInjury) * blend;
+        /* v4.57: standard onset window. The scenario armed the event in setup
+           and seeded a spontaneous Vt of 142, so SpO2 read 96 at load and was
+           through 93 by t=8 - the trainee met a patient who had already
+           aspirated rather than one aspirating in front of them. The target is
+           now gated, so the injury holds at 0 through the lead-in and then
+           builds on its own tau exactly as before. Unaffected once the window
+           has passed, which is every manual toggle of the event. */
+        state.aspirationInjury += (onsetRampFor('aspiration') - state.aspirationInjury) * blend;
         // Reliably trigger bronchospasm once injury crosses 0.3 (~5s after
         // aspiration starts). Real aspiration causes prompt smooth-muscle
         // contraction from acid contact with the airway. This bypasses the
@@ -8389,7 +8865,10 @@ setInterval(() => {
        blood flow restoration. */
     if (state.events.pulmEmbolism) {
         const blend = 1 - Math.exp(-dt / CONFIG.PE_SHUNT_BUILD_TAU);
-        state.peShunt += (CONFIG.PE_SHUNT_TARGET - state.peShunt) * blend;
+        /* v4.57: standard onset window - the shunt target is gated so the
+           patient holds a normal SpO2 and etCO2 through the lead-in. PE_CO_FACTOR,
+           the other half of this pathology, is ramped at its own site below. */
+        state.peShunt += (CONFIG.PE_SHUNT_TARGET * onsetRampFor('pulmEmbolism') - state.peShunt) * blend;
     } else if (state.peShunt > 0) {
         const blend = 1 - Math.exp(-dt / 30);
         state.peShunt -= state.peShunt * blend;
@@ -8438,7 +8917,12 @@ setInterval(() => {
         if (state.events.ischaemia) {
             imbalance *= CONFIG.ISCHAEMIA_SCENARIO_AMPLIFIER;
             if (imbalance > 0) {
-                const buildRate = imbalance / CONFIG.ISCHAEMIA_BUILD_TAU;
+                /* v4.57: the build is gated by the standard onset lead-in so
+                   the ECG is clean for the first twenty seconds. Only the
+                   BUILD is gated, never the heal below - a gated heal would
+                   make treatment given in the first twenty seconds do nothing,
+                   which is the opposite of the lesson. */
+                const buildRate = imbalance / CONFIG.ISCHAEMIA_BUILD_TAU * onsetGateFor('ischaemia');
                 state.ischaemia += (1.0 - state.ischaemia) * buildRate * dt;
             } else {
                 const healRate = (-imbalance) / CONFIG.ISCHAEMIA_HEAL_TAU;
@@ -8576,9 +9060,20 @@ setInterval(() => {
        vagal-specific atropine code. */
     if (state.events.vagal) {
         state.vagalTimer += dt;
-        // Ramp-up envelope: 0 -> 1 over VAGAL_PEAK_TIME, then held at 1.
-        // Used only as the per-tick gain on the parasymp/symp pushes.
-        const envelope = Math.min(1.0, state.vagalTimer / CONFIG.VAGAL_PEAK_TIME);
+        /* Ramp-up envelope: 0 -> 1 over VAGAL_PEAK_TIME, then held at 1.
+           Used only as the per-tick gain on the parasymp/symp pushes.
+
+           v4.57: multiplied by the standard onset window. The scenario armed
+           the event in setup and VAGAL_PEAK_TIME is 5 s, so the patient was at
+           HR 49 / MAP 45 before the trainee had read the monitor - the briefing
+           says "HR is dropping rapidly", which is a thing you watch happen, not
+           a thing you arrive after. Both factors reach 1, so the settled
+           presentation is untouched (HR 48.2 / MAP 50.0, which probe F24 pins
+           and which the trap-2 note below depends on); only the approach to it
+           is now on the shared clock. A hand-toggled vagal event still peaks in
+           5 s, because onsetRamp() is long since 1 by then. */
+        const envelope = Math.min(1.0, state.vagalTimer / CONFIG.VAGAL_PEAK_TIME)
+                       * onsetRampFor('vagal');
         // Hard parasympathetic push. Will saturate at the 1.0 cap (clamped
         // elsewhere in this tick), giving the maximal vagal HR pushdown the
         // existing parasympTone -> HR mapping allows.
@@ -8643,8 +9138,15 @@ setInterval(() => {
         // Escape conditions reduce ramp rate
         const sevoOff = state.etSevo < 0.3 ? 0.5 : 1.0;       // stopping vol halves rate
         const dantBlock = clamp(state.dantroleneEffect, 0, 1); // 0..1
-        // Net ramp rate (full = 1/180s -> 0 to 1 in 3 min)
-        const rampRate = (1/180) * sevoOff * (1 - dantBlock);
+        /* Net ramp rate (full = 1/180s -> 0 to 1 in 3 min).
+           v4.57: gated by the standard onset lead-in. The scenario used to
+           pre-load mhSeverity 0.3 with etCO2 already at 55; it now starts at 0
+           and holds there for ONSET_LEAD_IN before this ramp begins, so the
+           rising etCO2 the briefing describes is a trend the trainee watches
+           rather than a number they inherit. The 3-minute ramp itself is
+           unchanged - MH is a slow syndrome and ONSET_TAU would be wrong for
+           it. Only the moment it starts is shared. */
+        const rampRate = (1/180) * sevoOff * (1 - dantBlock) * onsetGateFor('mh');
         // If dantrolene is winning, mhSeverity decays
         const decayRate = dantBlock * 0.5 * (1/180);          // recovery up to 3x faster
         state.mhSeverity = clamp(
@@ -8688,6 +9190,19 @@ setInterval(() => {
        mechanism. Lipid emulsion not modelled; user manages as cardiac arrest. */
     if (state.events.last) {
         state.lastTimer += dt;
+        /* v4.57: CNS-phase severity, 0..1 over the standard onset window. The
+           phase-1 block below used to be a per-tick push on betaTone/alphaTone
+           (0.05 * dt each) - structural trap 1. Against TONE_DECAY_TAU that
+           settles 0.1 above target, and measured it delivered nothing at all:
+           HR sat at 83.8 from t=5 to t=55 and BIS was flat. So the scenario was
+           sixty seconds of a completely normal patient followed by a single
+           tick in which the rhythm stepped to VT pulseless and MAP went 98 ->
+           0. It had no onset; it had a trapdoor.
+
+           Now a sustained drive on the targets, like sahSurge and MH_BETA_DRIVE,
+           so the CNS phase produces the tachycardia and hypertension it always
+           claimed to. */
+        state.lastCnsSeverity = state.rhythm === 'sinus' ? onsetRampFor('last') : 0;
         /* Resolution is checked BEFORE the progression ladder. Achieving ROSC
            puts the rhythm back to sinus, which would otherwise match the
            phase-2 condition below on the very next tick and immediately
@@ -8696,17 +9211,17 @@ setInterval(() => {
             state.events.last = false;
             state.lastArrested = false;
             log('LAST: ROSC - rhythm restored');
-        } else if (state.lastTimer < 60) {
-            // Phase 1: seizure-like signs
-            // Express via betaTone surge (seizure -> tachycardia, hypertension)
-            state.betaTone  += 0.05 * dt;
-            state.alphaTone += 0.05 * dt;
-        } else if (state.lastTimer >= 60 && state.rhythm === 'sinus') {
+        } else if (state.lastTimer < CONFIG.LAST_ARREST_TIME) {
+            /* Phase 1: seizure-like signs. The drives themselves are applied on
+               alphaTarget/betaTarget and on the BIS excursion, both of which
+               read state.lastCnsSeverity - see LAST_CNS_BETA and
+               LAST_CNS_BIS_SPIKE. Nothing to push here any more. */
+        } else if (state.lastTimer >= CONFIG.LAST_ARREST_TIME && state.rhythm === 'sinus') {
             // Phase 2: VT pulseless
             setRhythm('vtPulseless');
             state.lastArrested = true;
             log('LAST: progression -> VT pulseless');
-        } else if (state.lastTimer >= 120 && state.rhythm === 'vtPulseless') {
+        } else if (state.lastTimer >= CONFIG.LAST_ARREST_TIME * 2 && state.rhythm === 'vtPulseless') {
             // Phase 3: VF
             setRhythm('vf');
             state.lastArrested = true;
@@ -8721,6 +9236,7 @@ setInterval(() => {
     } else {
         state.lastTimer = 0;
         state.lastArrested = false;
+        state.lastCnsSeverity = 0;
     }
 
     /* --- Baroreflex ---
@@ -8808,7 +9324,7 @@ setInterval(() => {
         let pushUp   = state.alphaTone * CONFIG.SVR_ALPHA_GAIN
                      + p.vasoCe * CONFIG.SVR_VASO_GAIN          // v3.26 vasopressin (V1)
                      + p.caCe   * CONFIG.SVR_CALCIUM_GAIN       // v3.26 calcium chloride
-                     + state.sahSurge * CONFIG.SAH_SURGE_SVR    // v4.29 SAH catecholamine surge
+                     + state.sahEffect * CONFIG.SAH_SURGE_SVR   // v4.29 SAH surge; v4.57 via the onset window
                      + (state.adSvrDrive || 0);                 // v4.29 autonomic dysreflexia
         let pushDown = state.parasympTone * CONFIG.SVR_PARASYMP_GAIN
                      + pE        * CONFIG.SVR_PROP_DROP
@@ -8909,7 +9425,12 @@ setInterval(() => {
     // v3.77: pulmonary embolism also drops CO (RV outflow obstruction).
     // Multiplicative with CO2 embolism factor if both are somehow active.
     let emboCoFactor = state.events.co2Embolism ? CONFIG.CO2_EMBOLISM_CO_FACTOR : 1.0;
-    if (state.events.pulmEmbolism) emboCoFactor *= CONFIG.PE_CO_FACTOR;
+    /* v4.57: ramped over the standard onset window. Applied flat, this took
+       MAP to 52 before the first tick, so the "sudden hypotension" the briefing
+       describes had already finished happening by the time the scenario opened. */
+    if (state.events.pulmEmbolism) {
+        emboCoFactor *= 1 - (1 - CONFIG.PE_CO_FACTOR) * onsetRampFor('pulmEmbolism');
+    }
     const co = (state.hr * sv * rhythmCoFactor * emboCoFactor) / 1000;
     const map = (co * (1200 * p.svrTone)) / 80;
 
@@ -8940,7 +9461,16 @@ setInterval(() => {
         // BIS display = consciousness + paradoxical ketamine EEG activation.
         // Clamped [0,100] so big ketamine doses don't push BIS through the ceiling.
         const ketBump = kE * CONFIG.BIS_KET_BUMP_GAIN;
-        state.bis = clamp(state.consciousness + ketBump, 0, 100);
+        /* v4.57: the seizure-like EEG activation of LAST's CNS phase. The
+           scenario's own description has promised "seizure-like activity (brief
+           BIS spike)" since v3.27 and there was never a spike - BIS sat flat at
+           69-71 for the entire run, peaking at 71.4. Listed as a known open
+           item and deferred as a content decision; making the CNS phase real
+           (see lastCnsSeverity) is what it was waiting for, so it is wired up
+           here. Rides on the same severity as the tachycardia, so it rises with
+           the prodrome and is gone the moment the rhythm arrests. */
+        const lastBump = state.lastCnsSeverity * CONFIG.LAST_CNS_BIS_SPIKE;
+        state.bis = clamp(state.consciousness + ketBump + lastBump, 0, 100);
     }
 
     /* --- Ventilation mechanics ---
@@ -9651,7 +10181,8 @@ setInterval(() => {
     updateGodMode();
     updateNum();
     updateSuctionBtn();   // v3.69
-}, 100);
+}
+setInterval(physiologyTick, 100);
 
 /* --- Helper: convert the user-facing infusion rate to mg/min for the PK loop.
        pumps values are the same units shown on the slider. --- */
@@ -10259,6 +10790,9 @@ function setNoci(v) {
     // v2.8: slider writes to target; state.nociception lags behind via first-order
     // filter in the physiology tick (TAU_NOCI). This makes big steps feel like a
     // real stimulus ramping up, not a binary toggle.
+    /* v4.57: a deliberate move of the Stimulus slider cancels any scenario
+       onset ramp, which would otherwise overwrite the user's value every tick. */
+    state.nociceptionRampTo = null;
     state.nociceptionTarget = parseFloat(v);
     reflectNoci(state.nociceptionTarget);
 }
@@ -10833,10 +11367,29 @@ function triggerAwareness(kind) {
    Cp >> Ce (still equilibrating). PK kinetics will continue from these
    values normally.
 
-   Steady-state Cp/Ce reference values (mcg/mL) for typical clinical use:
+   Steady-state Cp/Ce reference values (mcg/mL) for typical clinical use.
+   v4.56: these are now DERIVED from the PK block, not guessed. For an infusion
+   the tick adds (mgPerMin / (vd * wt * vdScale)) per minute and eliminates
+   Cp * k10 per minute, so the steady state is
+
+       remiCe_ss = rate / (70 * vdScale)          rate in mcg/kg/min
+       propCe_ss = rate / (3.6 * vdScale)         rate in mg/kg/hr
+
+   -- both independent of weight, since mgPerMin and effVd both scale with it.
+
+   The old line here read "Remi 0.15 mcg/kg/min steady ~ remiCe 0.005". The true
+   value is 0.00214, so every scenario that copied it opened 2.3x over-opioided
+   and then lightened as the seed washed out to what the pump actually sustains.
+   Ten scenarios did. In `maintenance`, which exists to be stable, that showed up
+   as analgesiaCover 4.2 -> 2.0 and MAP 62 -> 89 over ten untreated minutes -- a
+   bigger excursion than several of the actual pathologies produce, and it
+   contaminated every measurement of when a scenario starts to deteriorate.
+   Seed from the formula, or seed a deliberate non-steady state and say so.
+
      Sevo 1 MAC alone: pE not used; mac = 1.0 (etSEVO 2%)
-     Propofol TIVA  ~ propCe 3-4 (light), 4-6 (deep maintenance)
-     Remi 0.15 mcg/kg/min steady ~ remiCe 0.005
+     Propofol 8 mg/kg/hr steady ~ propCe 2.22 (adult); 3-4 light, 4-6 deep
+     Remi 0.05 / 0.08 / 0.15 / 0.2 mcg/kg/min steady ~ remiCe 0.00071 /
+       0.00114 / 0.00214 / 0.00286 (adult; divide by vdScale for others)
      Fentanyl 100 mcg ~ fentCe 0.002 (peak ~3 min after bolus)
      Roc 50mg @ 5min after bolus ~ rocCe 5-7 (full block)
    ============================================================================= */
@@ -10946,8 +11499,8 @@ const SCENARIOS = {
     // - just a specific starting state.
     hypotensionPostInd: {
         name: 'Post-induction hypotension',
-        briefing: '78-year-old hypertensive, induced a few minutes ago. ETT, on sevo maintenance, surgery about to start. MAP sitting at 55. Their usual BP at home is 160/95.',
-        setupBrief: '78-year-old female for elective hemicolectomy. Background: long-standing hypertension on ramipril and amlodipine, well-controlled diabetes. Home BP 160/95. ASA 2. Induced a few minutes ago with propofol 100mg + fentanyl 100mcg, intubated easily, on sevoflurane 2% with VCV. Surgeon is just finishing draping. MAP is sitting at 55 and not improving. SpO2 99, etCO2 38, BIS 25, PIP 14. No bleeding, no rash. The patient needs treatment - for someone whose usual MAP is over 100, a MAP of 55 means renal and cerebral perfusion are at risk.',
+        briefing: '78-year-old hypertensive, just induced. ETT, on sevo maintenance, surgery about to start. MAP 71 and falling. Their usual BP at home is 160/95.',
+        setupBrief: '78-year-old female for elective hemicolectomy. Background: long-standing hypertension on ramipril and amlodipine, well-controlled diabetes. Home BP 160/95. ASA 2. Just induced with propofol 100mg + fentanyl 100mcg, intubated easily, on sevoflurane 2% with VCV. Surgeon is just finishing draping. MAP opens at 71 - already low for this patient - and over the first minute the combined vasodilation of the sevoflurane and the induction takes it into the mid 50s, where it then sits. SpO2 99, etCO2 38, BIS 25, PIP 14. No bleeding, no rash. The patient needs treatment - for someone whose usual MAP is over 100, a MAP of 55 means renal and cerebral perfusion are at risk.',
         objectives: [
             '1. Recognise the hypotension (MAP < 60 is generally the alarm threshold; for this elderly hypertensive patient, target MAP should be >65)',
             '2. Rule out emergencies by scanning the rest of the picture: no bleeding (no surgical loss yet), no anaphylaxis (no rash, no airway issues), no PE (etCO2 normal), no ischaemia (ECG looks ordinary). This is straightforward post-induction hypotension',
@@ -11028,6 +11581,29 @@ const SCENARIOS = {
             // normal. Combined with the anaesthetic vasodilation this is
             // what tips MAP into the 50s.
             p.centralVolume = state.profile.centralVol * 0.92;
+            /* v4.57: the standard onset window, in its subtractive form (see
+               state.onsetAlphaFade). The scenario opened at MAP 54 and stayed
+               there, so a trainee met a number rather than an event - and the
+               number on its own does not teach where it came from.
+
+               This patient's usual pressure is 160/95. What the scenario is
+               about is that pressure going, under the combined vasodilation of
+               sevoflurane and a propofol induction in someone whose vascular
+               tone was holding a chronically high baseline. onsetAlphaFade
+               carries that tone and gives it up over the window, so MAP now
+               opens near 80 and settles into the mid 50s where v4.47 put it.
+               The v4.47 finding is preserved exactly: the patient still SITS
+               there once arrived, rather than creeping back up, and still
+               crosses objective 1's MAP 65 only around t=320. */
+            state.onsetAlphaFade = 0.70;
+            /* Seed the tones at the values the tick holds them at, for the same
+               reason haemorrhage does (v4.48): scenarioReset() leaves them at
+               rest, and a 2 s ramp up to target at the very start of a scenario
+               is exactly the startup artefact the lead-in exists to remove.
+               Measured for this scenario with the fade fully present. */
+            state.alphaTone    = 0.996;
+            state.betaTone     = 0.336;
+            state.parasympTone = 0.503;
             syncScenarioUI();
             log('=== SCENARIO: Post-induction hypotension ===');
             log(SCENARIOS.hypotensionPostInd.briefing);
@@ -11037,7 +11613,7 @@ const SCENARIOS = {
     maintenance: {
         name: 'Gas maintenance',
         briefing: 'Mid-case: 70kg adult, 30 min into elective laparotomy.',
-        setupBrief: 'Mid-case in an elective laparotomy. 70kg adult, 30 minutes since induction. ETT in place, paralysed with rocuronium (largely worn off). Maintenance with sevoflurane 2% + remifentanil 0.15 mcg/kg/min. Surgeon working in deep peritoneum providing moderate stimulus. Vitals are stable.',
+        setupBrief: 'Mid-case in an elective laparotomy. 70kg adult, 30 minutes since induction. ETT in place, paralysed with rocuronium (largely worn off - TOF 3). Maintenance with sevoflurane 2% + remifentanil 0.15 mcg/kg/min; the induction fentanyl has gone, which is what 30 minutes means. Surgeon working in deep peritoneum providing moderate stimulus. Vitals are stable and stay stable - this is the comparator, and nothing in it will deteriorate on its own.',
         objectives: [
             'Recognise a stable maintenance state and the inputs producing it',
             'Anticipate likely physiological changes if surgical stimulus rises or falls',
@@ -11073,14 +11649,23 @@ const SCENARIOS = {
             state.mac = 1.0;
             // Remi infusion 0.15 mcg/kg/min, equilibrated to ~0.005 Ce
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             // Fentanyl induction dose still on board: ~0.002 Ce
-            p.fentCp = 0.002;
-            p.fentCe = 0.002;
+            /* v4.57: 0.002 -> 0.00002, and roc 4.0 -> 1.75 below. Both are the
+               values the PK gives 30 minutes after an induction dose, which is
+               what this scenario's own setupBrief says it is. Seeded at a fresh
+               100 mcg and a fresh 50 mg they were not steady states, so the
+               scenario drifted as they washed out: analgesiaCover fell and
+               MAP climbed 87 -> 102 over fifteen untreated minutes, in the
+               case whose entire job is to be the stable thing a trainee
+               compares an emergency against. Now flat to 0.1 mmHg. Same family
+               as the v4.56 remifentanil seeds; found by the same measurement. */
+            p.fentCp = 0.00002;
+            p.fentCe = 0.00002;
             // Paralysis: roc 50mg @ 25 min, partly worn off
-            p.rocCp = 4.0;
-            p.rocCe = 4.0;
+            p.rocCp = 1.75;
+            p.rocCe = 1.75;
             p.paralysis = 0.85;
             // Surgical stimulus moderate
             state.nociception = 5;
@@ -11100,8 +11685,8 @@ const SCENARIOS = {
            rest values, so there is nothing to settle. Text corrected to the
            model rather than the other way round: MAP 54 against the profile's
            mapTarget of 65 is the vasoplegia the scenario is about. */
-        briefing: 'Septic 70kg, urgent laparotomy for perforated viscus. Just induced, no volatile started yet. BP 70/43.',
-        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. Initial BP 70/43. Sevoflurane is not running yet. Drapes going on, surgeon about to start.',
+        briefing: 'Septic 70kg, urgent laparotomy for perforated viscus. Just induced, no volatile started yet. BP 91/56 and falling as the induction takes hold.',
+        setupBrief: 'Septic 70kg patient for urgent laparotomy (perforated viscus). Just induced with propofol 100mg, fentanyl 100mcg, rocuronium 50mg. ETT secured. BP is 91/56 as you start, which for this patient is already low, and it will not stay there: the sympathetic tone that was holding it up is going as the induction agent takes hold, and it settles around 73/45 over the first two minutes. Sevoflurane is not running yet. Drapes going on, surgeon about to start.',
         /* v4.49: objectives 3 and 4 are new. The scenario ran for ten minutes
            with nothing maintaining anaesthesia and no objective that mentioned
            it, so the "correct" trainee - one who did everything the three
@@ -11173,6 +11758,29 @@ const SCENARIOS = {
             // explicit init still set so the very first tick reflects sepsis state.
             state.alphaTone = 0.45;
             state.betaTone  = 0.45;
+            /* v4.57: the standard onset window, in its subtractive form.
+               This scenario used to open at MAP 53 and stay there - a patient
+               who was already in shock when the trainee arrived, in a scenario
+               whose whole teaching point is what induction does to a septic
+               patient's compensation.
+
+               A septic patient really IS septic on arrival, so "evolves from
+               normal" cannot mean they start well. What it means here is that
+               the scenario starts at the moment the compensation fails rather
+               than after it has. onsetAlphaFade carries the pre-induction
+               sympathetic tone that was holding the pressure up, and it fades
+               over the window as the induction agent takes hold - so the
+               trainee sees MAP 78 go to 53 in front of them, which is exactly
+               the collapse the scenario exists to teach and exactly what
+               happens in theatre. The end state is unchanged. */
+            state.onsetAlphaFade = 0.55;
+            /* v3.24's explicit tone init above set 0.45/0.45, which were the
+               settled values before onsetAlphaFade existed. Re-measured with
+               the fade present so the opening two seconds sit still rather
+               than ramping. */
+            state.alphaTone    = 1.049;
+            state.betaTone     = 0.528;
+            state.parasympTone = 0.626;
             syncScenarioUI();
             log('=== SCENARIO: Septic laparotomy ===');
             log(SCENARIOS.sepsis.briefing);
@@ -11209,8 +11817,8 @@ const SCENARIOS = {
             state.circuitSevo = 2.0;
             state.mac = 1.0;
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             p.fentCp = 0.002;
             p.fentCe = 0.002;
             p.rocCp = 4.0;
@@ -11277,13 +11885,28 @@ const SCENARIOS = {
 
     asthma: {
         name: 'Acute severe asthma',
-        briefing: 'Asthmatic adult, ETT, emergency lap, sevo + remi. Airway reactive. Be ready for bronchospasm.',
-        description: 'Adult with known severe asthma, undergoing emergency laparotomy. ETT in place, sevo + remi maintenance. Airway reactivity is elevated at baseline. Surgical stimulus high. Bronchospasm could develop at any time and treatment will need to be escalated quickly.',
+        briefing: 'Asthmatic adult, ETT, emergency lap, sevo + remi in VCV. Ventilating normally for now. Watch the airway pressure.',
+        description: 'Adult with known severe asthma, undergoing emergency laparotomy. ETT in place, sevo + remi maintenance. Airway reactivity is elevated at baseline and the airway tightens shortly after you take over: peak pressure climbs from 12 to around 20 cmH2O in volume control, saturation drifts to 96 and etCO2 to the high 40s. Note this is a MILDER picture than the Severe bronchospasm scenario, and the reason is worth knowing - there is a full MAC of sevoflurane on board here where that case runs TIVA, and sevoflurane is a potent bronchodilator. Note too that in volume control you see the pressure rise; in pressure control you would instead have seen the volume fall. Same pathology, different dial. Treatment still needs escalating if it does not settle.',
         objectives: [
-            'Recognise rising airway pressures and falling tidal volume as bronchospasm onset',
-            'Use the bronchodilator properties of sevoflurane and ketamine; escalate to adrenaline if severe',
-            'Manage gas trapping and its haemodynamic consequences (preload reduction, hypotension)',
-            'Adjust ventilator: slow rate, prolong expiration, accept permissive hypercapnia'
+            '1. Recognise rising airway pressure as bronchospasm onset. This patient is in VOLUME control, so the ventilator defends the tidal volume and the pressure is what moves - PIP climbs from 12 towards 20 while Vt sits at 480. In pressure control you would have seen the mirror image, a collapsing tidal volume at a fixed pressure. Neither mode shows you both',
+            '2. Note how much the sevoflurane is already doing. This spasm settles at an airway resistance around 22 where the Severe bronchospasm scenario reaches 80, and the difference is not the severity of the trigger - it is that this patient has a full MAC of volatile on board and that one runs TIVA. Sevoflurane is a bronchodilator and it is already treating this',
+            '3. Use the bronchodilator properties of sevoflurane and ketamine; escalate to salbutamol, magnesium and then adrenaline if it does not settle',
+            '4. Manage gas trapping and its haemodynamic consequences (preload reduction, hypotension)',
+            '5. Adjust ventilator: slow rate, prolong expiration, accept permissive hypercapnia'
+        ],
+        /* v4.57: this scenario had no hints array at all - one of the seven
+           CLAUDE.md lists - and until v4.57 it also had no bronchospasm, so
+           there was nothing for hints to talk about. Now that it delivers the
+           pathology its title promises, it gets the teaching to go with it. */
+        hints: [
+            'Watch the peak pressure, not the tidal volume. In VCV the ventilator will keep delivering 480 mL until it physically cannot, so the volume looks reassuring while the pressure tells you what is happening',
+            'Compare this against the Severe bronchospasm scenario deliberately. Same event, same patient weight, very different picture - because of the volatile. That comparison is the single most useful thing in this case',
+            'Turn the sevoflurane UP before reaching for anything else. It is the fastest bronchodilator you already have running, and this scenario is calibrated so you can see it work',
+            'Salbutamol 250mcg IV (Emergency tab) is the next step; magnesium 2g adds a modest amount by a different mechanism',
+            'Ketamine is worth knowing here - bronchodilator, analgesic and anaesthetic at once, which is why it earns its place in the difficult asthmatic',
+            'Adrenaline is for a spasm that is not responding. Note the deliberate contrast with the Severe bronchospasm case, where the patient\'s own catecholamines are already maximal and exogenous adrenaline is first-line rather than last',
+            'Resist ventilating harder. A faster rate shortens expiration, stacks breaths and costs you blood pressure through gas trapping - the wrong direction, and it looks like it should be the right one',
+            'If you do nothing at all, this settles at PIP 20, SpO2 96 and etCO2 around 50 and stays there. It is survivable inattention rather than an emergency, which is exactly why it is worth catching early'
         ],
         setup() {
             setProfile('adult');
@@ -11304,8 +11927,8 @@ const SCENARIOS = {
             state.mac = 1.0;
             // Remi infusion
             state.machine.pumps.remi = 0.2;
-            p.remiCp = 0.006;
-            p.remiCe = 0.006;
+            p.remiCp = 0.00286;
+            p.remiCe = 0.00286;
             // Paralysed with roc
             p.rocCp = 5.0;
             p.rocCe = 5.0;
@@ -11313,6 +11936,25 @@ const SCENARIOS = {
             // Airway reactivity elevated (asthmatic baseline)
             p.airwayReactivity = 1.6;
             state.profile.airwayReactivity = 1.6;
+            /* v4.57: the scenario is called "Acute severe asthma" and its
+               briefing says "Airway reactive. Be ready for bronchospasm" - and
+               for thirty untreated minutes nothing whatever happened.
+               bronchResistance sat at 5, Vt at 480 and SpO2 at 99 the entire
+               time. Raising airwayReactivity arms the patient for a spasm but
+               nothing in the scenario ever triggered one, and a fully
+               paralysed patient on 1 MAC of sevo is not going to trigger it by
+               themselves. So the scenario promised the one thing it could not
+               deliver.
+
+               The event is now armed, and the hysteresis block builds it over
+               the standard onset window like every other spasm in the set.
+               Note this lands MILDER than the bronchospasm scenario rather
+               than identical to it, and that is the point: 1 MAC of sevo is on
+               board here where the bronchospasm scenario runs TIVA, so
+               bronchoRelaxFactor attenuates the target. Two scenarios, same
+               pathology, different volatile background, visibly different
+               severity - which is itself worth teaching. */
+            state.events.bronchospasm = true;
             // High stimulus
             state.nociception = 6;
             syncScenarioUI();
@@ -11413,7 +12055,7 @@ const SCENARIOS = {
     aspiration: {
         name: 'Aspiration of gastric contents',
         briefing: 'Elective hernia repair under LMA. You notice gastric contents in the oropharynx around the LMA cuff.',
-        setupBrief: 'Adult, ASA 2, elective inguinal hernia repair under LMA. Anaesthetised with propofol + sevo, spontaneously ventilating. You notice gastric contents around the LMA cuff and in the oropharynx. SpO2 is starting to fall.',
+        setupBrief: 'Adult, ASA 2, elective inguinal hernia repair under LMA. Anaesthetised with propofol + sevo, spontaneously ventilating. You notice gastric contents around the LMA cuff and in the oropharynx. The saturation is still 99 at this moment; over the next minute it falls through the low 90s into the 80s as the acid injury develops.',
         objectives: [
             'Recognise the aspiration signature (sudden SpO2 drop + rising airway pressures + wheeze)',
             'Take steps to deliver maximum FiO2',
@@ -11496,8 +12138,8 @@ const SCENARIOS = {
            high-pressure / low-volume signature" is not a thing a ventilator
            ever shows you both halves of at once. In PCV you lose volume; in
            VCV you gain pressure. Same pathology, different dial. */
-        briefing: 'Just induced for emergency laparotomy. Propofol TIVA, ETT in. PCV: Vt collapsed to ~130 mL, SpO2 falling, wheeze.',
-        setupBrief: 'Adult, just intubated for an emergency laparotomy. Propofol TIVA running, ETT secured. Ventilating in pressure control at 20 cmH2O over PEEP 5. Within seconds of intubation the delivered tidal volume has collapsed to ~130 mL against a set pressure that would normally give 700. Wheeze on auscultation, SpO2 falling into the mid 80s. Gas trapping already building - autoPEEP visible on the ventilator.',
+        briefing: 'Just induced for emergency laparotomy. Propofol TIVA, ETT in, ventilating normally in PCV. Watch the tidal volume.',
+        setupBrief: 'Adult, just intubated for an emergency laparotomy. Propofol TIVA running, ETT secured. Ventilating in pressure control at 20 cmH2O over PEEP 5, delivering a comfortable 700 mL. The tube went in easily but this was a rapid sequence induction in an unstarved patient and the airway is irritable. Over the first minute or two the delivered tidal volume collapses towards 130 mL against an unchanged set pressure, with wheeze on auscultation, a saturation falling into the mid 80s and gas trapping building - autoPEEP climbing on the ventilator.',
         objectives: [
             'Recognise severe bronchospasm from the collapsed tidal volume, and understand that in pressure control you lose volume where in volume control you would instead see the airway pressure spike',
             'Adjust ventilator: low RR, long expiratory time, prioritise oxygenation over ventilation',
@@ -11536,19 +12178,22 @@ const SCENARIOS = {
             state.machine.vent.fgf = 2;
             // Propofol TIVA already running. Calibrated for stable BIS ~40.
             state.machine.pumps.prop = 8;
-            p.propCp = 2.5;
-            p.propCe = 2.5;
+            p.propCp = 2.22;
+            p.propCe = 2.22;
             // Light remi for context
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.002;
-            p.remiCe = 0.002;
+            p.remiCp = 0.00071;
+            p.remiCe = 0.00071;
             // Paralysed
             p.rocCp = 5.0;
             p.rocCe = 5.0;
             p.paralysis = 0.9;
-            // Bronchospasm established and severe
+            /* v4.57: was `p.bronchResistance = 80` here - full severity before
+               the first tick. The event is now simply armed and the hysteresis
+               block builds it over the standard onset window, so the trainee
+               watches the Vt collapse happen instead of finding it already
+               complete. End state is unchanged (resistance 80). */
             state.events.bronchospasm = true;
-            p.bronchResistance = 80;       // matches CONFIG.BRONCH_RESISTANCE - full effect
             // v3.61: don't pre-seed autoPEEP. Some lungVolume above FRC is enough
             // to set the patient up - autoPEEP is computed each breath from the
             // lungVolume <-> FRC gap. Smaller pre-seed (300 mL) lets autoPEEP
@@ -11565,8 +12210,8 @@ const SCENARIOS = {
 
     haemorrhage: {
         name: 'Haemorrhagic shock',
-        briefing: 'Trauma laparotomy, fresh induction, severe bleed ongoing. MAP 65. Surgeon entering now.',
-        setupBrief: 'Adult trauma laparotomy. Just induced, ETT placed, drapes on. Severe ongoing intra-abdominal bleeding. MAP currently 65. Surgeon is opening the abdomen now. Expect further blood loss until source is controlled.',
+        briefing: 'Trauma laparotomy, fresh induction. MAP 92 at the moment. Surgeon is entering now and there is a severe bleed waiting.',
+        setupBrief: 'Adult trauma laparotomy. Just induced, ETT placed, drapes on. MAP is currently 92 and the patient looks stable. The surgeon is opening the abdomen now, and there is severe intra-abdominal bleeding waiting behind it: expect the pressure to start falling within the first half-minute, through MAP 65 at around two minutes and onward for as long as the source is uncontrolled.',
         objectives: [
             'Resuscitate with appropriate volume while titrating pressors to support pressure',
             'Recognise the limits of pressors without volume; avoid masking under-resuscitation',
@@ -11620,14 +12265,29 @@ const SCENARIOS = {
             // hypotension fix; here the stimulus is correct (the surgeon really
             // is opening), so the fix is to start the tones settled rather than
             // to lower the stimulus.
-            p.centralVolume = state.profile.centralVol * 0.58;
-            // Start the autonomic response where the tick will hold it, not at
-            // rest. These are the measured settled values for this scenario's
-            // nociception and volume state - seeding a tone AT its target is
-            // stable (the tick relaxes toward targets, it does not re-zero them),
-            // so this removes the ramp without fighting the relaxation.
-            state.alphaTone = 0.50;
-            state.betaTone  = 0.58;
+            /* v4.57: was `centralVol * 0.58` plus the two seeded tones below,
+               which opened the scenario at MAP 63 - the blood was already lost
+               and the trainee inherited the shock rather than watching it
+               arrive. The patient now starts euvolaemic and the bleed does the
+               work: a haemorrhage is the one pathology in the set that was
+               always going to be progressive on its own, it was just started
+               late.
+
+               The v4.48 tone seeding goes with it. It existed to cancel the
+               2 s startup transient at a volume state that no longer applies,
+               and seeding tones for the wrong volume would fight the relaxation
+               rather than sit still. */
+            p.centralVolume = state.profile.centralVol;
+            /* Start the autonomic response where the tick will hold it, not at
+               rest - v4.48's reason still applies, only the values change. The
+               tick relaxes tones TOWARD targets rather than re-zeroing them, so
+               a tone seeded at its target sits still; seeded at rest it ramps
+               over ~2 s and the opening seconds show a pressure climbing while
+               the patient bleeds. These are the measured settled values for
+               this scenario at its new euvolaemic start. */
+            state.alphaTone    = 0.459;
+            state.betaTone     = 0.554;
+            state.parasympTone = 0.712;   // v4.57: this one was missing, and was worth ~7 mmHg over the first 3 s
             // Ongoing severe bleed - use CONFIG.BLEED_SEVERE (0.025 L/s = 25 mL/s).
             // v3.59: previous value was 0.05 (double severe) and didn't set the
             // bleed.events flag, so the scenario state was inconsistent with
@@ -11724,8 +12384,8 @@ const SCENARIOS = {
             state.mac = 0.2;
             // Light remi
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.002;
-            p.remiCe = 0.002;
+            p.remiCp = 0.00071;
+            p.remiCe = 0.00071;
             // Fent on board from earlier
             p.fentCp = 0.0015;
             p.fentCe = 0.0015;
@@ -11780,12 +12440,12 @@ const SCENARIOS = {
             // MAP drop at any given propCe. 2.5 mcg/mL keeps BIS ~40 with MAP
             // in the low-60s, matching the previous behaviour of the scenario.
             state.machine.pumps.prop = 8;   // 8 mg/kg/hr maintains propCe ~2.5
-            p.propCp = 2.5;
-            p.propCe = 2.5;
+            p.propCp = 2.22;
+            p.propCe = 2.22;
             // Remi 0.2 mcg/kg/min
             state.machine.pumps.remi = 0.2;
-            p.remiCp = 0.006;
-            p.remiCe = 0.006;
+            p.remiCp = 0.00286;
+            p.remiCe = 0.00286;
             // Paralysed
             p.rocCp = 5.0;
             p.rocCe = 5.0;
@@ -11804,8 +12464,8 @@ const SCENARIOS = {
 
     aneurysm: {
         name: 'Cerebral aneurysm rupture',
-        briefing: 'Sudden severe headache during induction. Likely SAH with aneurysm rupture. BP around 170/105 with a reflex bradycardia. Aim: control BP without crashing into ischaemic territory.',
-        description: 'A 55-year-old, previously well, has just suffered a sudden severe ("thunderclap") headache mid-induction. CT confirms subarachnoid haemorrhage from a ruptured anterior communicating aneurysm. A catecholamine surge has driven BP to around 170/105 with reflex bradycardia. Surgical aim is now emergent clipping/coiling. Tight BP control is essential - MAP < 110 to reduce re-bleed risk, but MAP > 80 to maintain cerebral perfusion in the face of vasospasm.',
+        briefing: 'Sudden severe headache during induction. Likely SAH with aneurysm rupture. BP climbing towards 170/105 with a reflex bradycardia. Aim: control BP without crashing into ischaemic territory.',
+        description: 'A 55-year-old, previously well, has just suffered a sudden severe ("thunderclap") headache mid-induction. CT confirms subarachnoid haemorrhage from a ruptured anterior communicating aneurysm. A catecholamine surge is building as you watch, taking BP from a normal 92/56 up to around 170/105 over the first minute and a half, with a reflex bradycardia into the high 50s as it goes. Surgical aim is now emergent clipping/coiling. Tight BP control is essential - MAP < 110 to reduce re-bleed risk, but MAP > 80 to maintain cerebral perfusion in the face of vasospasm.',
         objectives: [
             'Recognise the haemodynamic profile of acute SAH (severe HTN, reflex brady)',
             'Titrate fast-on/fast-off antihypertensives (esmolol, GTN) without overshoot',
@@ -11836,15 +12496,20 @@ const SCENARIOS = {
             p.rocCp = 4.5;
             p.rocCe = 4.5;
             p.paralysis = 0.88;
-            // Massive sympathetic surge from SAH.
-            // v4.29: driven by state.sahSurge, which feeds the alpha and
-            // parasympathetic TARGETS each tick and decays over ~15 min.
-            // Assigning the tones directly (as this used to) did nothing -
-            // the tone relaxation erased them within a couple of seconds.
+            /* Massive sympathetic surge from SAH.
+               v4.29: driven by state.sahSurge, which feeds the alpha and
+               parasympathetic TARGETS each tick and decays over ~15 min.
+               Assigning the tones directly (as this used to) did nothing -
+               the tone relaxation erased them within a couple of seconds.
+
+               v4.57: the three direct tone assignments are gone. They were
+               erased within ~2 s as that note says, but not before making the
+               scenario's first two seconds hypertensive, which defeats the
+               lead-in. sahSurge stays 1.0 - it is the burden, and the tick
+               brings it in through state.sahEffect over the standard onset
+               window. The rupture now happens in front of the trainee, which
+               is what "sudden severe headache during induction" describes. */
             state.sahSurge = 1.0;
-            state.alphaTone = 0.85;
-            state.betaTone  = 0.30;   // beta blunted by reflex bradycardia
-            state.parasympTone = 0.55;
             // Bump baseline target to reflect ongoing SAH drive
             state.profile.mapTarget = 95;
             state.nociception = 2;
@@ -11886,8 +12551,18 @@ const SCENARIOS = {
             state.mac = 0.9;
             p.fentCp = 0.001;
             p.fentCe = 0.001;
-            // Stimulus rising as bladder is being distended
-            state.nociception = 6;
+            /* Stimulus rising as the bladder is distended.
+               v4.57: was `state.nociception = 6` outright, so the AH response
+               was complete at MAP 118 / HR 62 before the first tick and then
+               never moved again for thirty minutes - in a scenario whose
+               briefing says the surgeon "is about to begin" and tells the
+               trainee to "watch for the classic AH response". The stimulus now
+               starts at a baseline cystoscopy level and walks up to 6 over the
+               standard onset window, so the explosive hypertension and its
+               reflex bradycardia declare themselves while being watched. */
+            state.nociception = 1;
+            state.nociceptionRampFrom = 1;
+            state.nociceptionRampTo = 6;
             syncScenarioUI();
             log('=== SCENARIO: Autonomic dysreflexia ===');
             log(SCENARIOS.autonomicDysreflexia.briefing);
@@ -11896,8 +12571,8 @@ const SCENARIOS = {
 
     vagal: {
         name: 'Vagal hyperreflexia',
-        briefing: 'Mid-laparoscopy. Surgeon has just started insufflating peritoneum. HR is dropping rapidly.',
-        setupBrief: 'A 45-year-old undergoing elective laparoscopic cholecystectomy. ETT, paralysed, sevoflurane + remifentanil. Stable on induction. Surgeon has now begun CO2 insufflation of the peritoneum. Sudden severe drop in HR to ~48 and MAP to ~50. Not self-resolving.',
+        briefing: 'Mid-laparoscopy, HR 78 and stable. Surgeon is just starting to insufflate the peritoneum.',
+        setupBrief: 'A 45-year-old undergoing elective laparoscopic cholecystectomy. ETT, paralysed, sevoflurane + remifentanil. Stable on induction. Surgeon has now begun CO2 insufflation of the peritoneum. Over the following minute the HR drops from 78 to ~48 and the MAP from ~61 to ~50, and stays there. Not self-resolving.',
         /* v4.51: hint 4 was inverted and hint 3 named a dose the drug cabinet
            does not offer.
 
@@ -11964,8 +12639,8 @@ const SCENARIOS = {
             state.mac = 0.9;
             // Remi maintenance
             state.machine.pumps.remi = 0.15;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             // Paralysed
             p.rocCp = 4.0;
             p.rocCe = 4.0;
@@ -11996,7 +12671,7 @@ const SCENARIOS = {
     ischaemia: {
         name: 'Intraoperative myocardial ischaemia',
         briefing: 'Elderly patient, known IHD, mid-case. HR has crept up to 105, BP rising. ECG showing progressive ST depression and T-wave changes.',
-        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol. Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 105, BP 150/95. ECG showing progressive ST depression with T-wave flattening/inversion.',
+        setupBrief: '78-year-old, hypertension and stable angina, on aspirin and atenolol. Mid-laparoscopic cholecystectomy, 45 minutes into case. ETT, sevoflurane + remifentanil. Surgical stimulus has risen as the surgeon dissects the gallbladder. HR 104, BP 156/96, and the ECG is clean as you look at it. Within half a minute progressive ST depression appears with T-wave flattening/inversion.',
         objectives: [
             'Recognise myocardial ischaemia in the anaesthetised patient (ST depression with T-wave changes on ECG, limited clinical signs unless severe enough to cause cardiogenic shock)',
             'Identify the demand-supply imbalance driving this',
@@ -12056,8 +12731,8 @@ const SCENARIOS = {
             // which is what "present but insufficient for the rising surgical
             // stimulus" was always supposed to mean.
             state.machine.pumps.remi = 0.05;
-            p.remiCp = 0.0015;
-            p.remiCe = 0.0015;
+            p.remiCp = 0.00089;
+            p.remiCe = 0.00089;
             // Mid-case fentanyl on board, partially worn off
             p.fentCp = 0.0010;
             p.fentCe = 0.0010;
@@ -12093,8 +12768,8 @@ const SCENARIOS = {
     // and escalates.
     pulmEmbolism: {
         name: 'Intraoperative pulmonary embolism',
-        briefing: 'Just rolled supine after laparoscopic cholecystectomy ended. Sudden hypotension, tachycardia, SpO2 falling. etCO2 dropping.',
-        setupBrief: '55-year-old, BMI 32, having had a 3-hour laparoscopic cholecystectomy in reverse Trendelenburg. The surgeon has just deflated the pneumoperitoneum and you have repositioned the patient. Within seconds: HR has jumped to 115, BP fallen to 80/50, SpO2 dropping from 99 to 90, etCO2 falling from 38 to 25 despite unchanged ventilation. PIP is unchanged at 14. No wheeze, no rash. PE risk factors: long case, BMI, position changes.',
+        briefing: 'Just rolled supine after laparoscopic cholecystectomy ended. Vitals normal for the moment. Watch the etCO2 and the saturation.',
+        setupBrief: '55-year-old, BMI 32, having had a 3-hour laparoscopic cholecystectomy in reverse Trendelenburg. The surgeon has just deflated the pneumoperitoneum and you have repositioned the patient. Everything reads normal as you settle them: 100/62, HR 84, SpO2 99. Over the next minute or two the picture changes - BP falls towards 69/42, HR climbs into the 90s, SpO2 drifts down to 92 and etCO2 falls from 30 to 22 despite unchanged ventilation. PIP is unchanged at 14 throughout. No wheeze, no rash. PE risk factors: long case, BMI, position changes.',
         objectives: [
             'Recognise the diagnostic triad: hypotension + hypoxia + LOW etCO2 with normal PIP',
             'Distinguish from bronchospasm (high PIP, high etCO2) and anaphylaxis (rash, low SVR) signature',
@@ -12137,8 +12812,8 @@ const SCENARIOS = {
             // number), so this scenario ran with no infusion. Cp/Ce seeded to
             // the steady state for 0.08 mcg/kg/min (0.15 -> 0.005, so 0.08 -> ~0.0027).
             state.machine.pumps.remi = 0.08;
-            p.remiCp = 0.0027;
-            p.remiCe = 0.0027;
+            p.remiCp = 0.00114;
+            p.remiCe = 0.00114;
             p.fentCp = 0.0008;
             p.fentCe = 0.0008;
             // Rocuronium worn off - end of case
@@ -12160,7 +12835,7 @@ const SCENARIOS = {
     last: {
         name: 'Local anaesthetic toxicity',
         briefing: 'Just finished a regional block (40mL of 0.5% bupivacaine). Patient has become acutely confused, with twitching. Watch for progression to cardiovascular collapse.',
-        description: 'A 30-year-old healthy patient was having a brachial plexus block placed under sedation prior to elbow ORIF. The injection of bupivacaine has been followed by acute confusion, perioral tingling, then twitching. Concerning for systemic absorption. Over the next 1-2 minutes the patient is likely to progress to seizure-like activity (brief BIS spike), then ventricular tachycardia (pulseless), then VF if untreated. Treatment is the LIPID rescue protocol (intralipid 20% bolus 1.5 mL/kg then infusion) plus standard ACLS with adrenaline. NOTE: lipid emulsion is not modelled in this sim - manage as standard cardiac arrest with adrenaline boluses for now.',
+        description: 'A 30-year-old healthy patient was having a brachial plexus block placed under sedation prior to elbow ORIF. The injection of bupivacaine has been followed by acute confusion, perioral tingling, then twitching. Concerning for systemic absorption. The CNS phase is visible on the monitor as a rising heart rate and pressure with a BIS climbing from 69 towards 90 (seizure-like EEG activation, not waking), and it runs for about a hundred seconds before the cardiovascular phase. Over the next 1-2 minutes the patient is likely to progress to seizure-like activity (brief BIS spike), then ventricular tachycardia (pulseless), then VF if untreated. Treatment is the LIPID rescue protocol (intralipid 20% bolus 1.5 mL/kg then infusion) plus standard ACLS with adrenaline. NOTE: lipid emulsion is not modelled in this sim - manage as standard cardiac arrest with adrenaline boluses for now.',
         /* v4.54: objective 2 rewritten to match the corrected respiratory model.
 
            It used to say the patient was "already desaturating before the
@@ -12238,8 +12913,8 @@ const SCENARIOS = {
 
     mh: {
         name: 'Malignant hyperthermia',
-        briefing: 'Mid-case under sevoflurane. ETCO2 drifting up despite stable minute volume. HR climbing. Body warming. Suspect MH.',
-        description: 'A 25-year-old healthy male, no significant family history elicited preoperatively. Mid-case under sevoflurane for elective ORIF tibia. 30 minutes ago vitals were normal. Now: ETCO2 has climbed from 36 to 55 despite no change in vent settings, HR has risen from 75 to 110, core temp 38.5C, masseter rigid. This is a malignant hyperthermia crisis. Treatment: stop the volatile, change to TIVA, hyperventilate to clear CO2, give dantrolene 2.5 mg/kg bolus (200mg sized dose in this sim), cool aggressively, treat hyperkalaemia/acidosis. Without dantrolene the crisis will worsen progressively over 5-10 min toward arrhythmias and rhabdo.',
+        briefing: 'Mid-case under sevoflurane, vitals currently normal. Watch the ETCO2 against a minute volume you have not touched.',
+        description: 'A 25-year-old healthy male, no significant family history elicited preoperatively. Mid-case under sevoflurane for elective ORIF tibia. Vitals are normal as you take over - ETCO2 38, HR 79, core temp 37.0 - and they do not stay that way. Over the next few minutes the ETCO2 climbs through 55 and on past 100 with no change in vent settings, HR rises from 79 towards 110, core temperature climbs past 38.5C, masseter rigid. This is a malignant hyperthermia crisis. Treatment: stop the volatile, change to TIVA, hyperventilate to clear CO2, give dantrolene 2.5 mg/kg bolus (200mg sized dose in this sim), cool aggressively, treat hyperkalaemia/acidosis. Without dantrolene the crisis will worsen progressively over 5-10 min toward arrhythmias and rhabdo.',
         objectives: [
             'Recognise MH: unexplained rising ETCO2 + tachycardia + hyperthermia under volatile',
             'Stop the trigger: turn the vaporiser off',
@@ -12268,28 +12943,38 @@ const SCENARIOS = {
             // Some opioid on board
             p.fentCp = 0.002;
             p.fentCe = 0.002;
-            p.remiCp = 0.005;
-            p.remiCe = 0.005;
+            p.remiCp = 0.00214;
+            p.remiCe = 0.00214;
             state.machine.pumps.remi = 0.15;
             // Paralysed
             p.rocCp = 4.5;
             p.rocCe = 4.5;
             p.paralysis = 0.88;
-            // MH already partially developed
+            /* v4.57: the trigger is armed, nothing is established yet.
+               Previously this pre-loaded mhSeverity 0.3, temperature 38.5,
+               etco2 55 and betaTone 0.45, so the scenario opened with the
+               syndrome a third of the way developed and the trainee's job was
+               to notice a state rather than a trend. MH is the one diagnosis in
+               the set that is made almost entirely ON the trend - a rising
+               etCO2 against a fixed minute volume - so starting at 55 threw
+               away the teaching signal and left only the endpoint.
+
+               Severity now starts at 0 and the MH block ramps it over the
+               standard onset window, taking etCO2 38 -> 55 -> 128 and
+               temperature 37.0 -> 38.5 -> 41 as the syndrome runs. The
+               briefing's "ETCO2 drifting up despite stable minute volume"
+               becomes something the trainee actually watches drift.
+
+               betaTone is no longer assigned here either: MH_BETA_DRIVE feeds
+               betaTarget with severity (structural trap 1 - a sustained state
+               must drive the target), so the tachycardia now arrives with the
+               rest of the syndrome instead of being seeded ahead of it. */
             state.events.mh = true;
-            state.mhSeverity = 0.3;   // pre-loaded
-            state.temperature = 38.5; // v4.29: matches the briefing's core temp
-            // Boost initial ETCO2 by directly tweaking the gas state.
-            // v4.29: was `state.etCO2` - wrong case, so this created a dead
-            // property and the patient started at 38 while the briefing said 55.
-            state.etco2 = 55;
-            // Tachycardia from MH
-            state.betaTone = 0.45;
             state.nociception = 3;
             syncScenarioUI();
             log('=== SCENARIO: Malignant hyperthermia ===');
             log(SCENARIOS.mh.briefing);
-            log('MH: severity 0.3, escalating. Stop sevo + give dantrolene');
+            log('MH: trigger on board. Watch the etCO2. Stop sevo + give dantrolene');
         }
     },
 };
@@ -12353,6 +13038,17 @@ function scenarioReset() {
         p[d + 'Cp'] = 0;
         p[d + 'Ce'] = 0;
     });
+
+    // v4.57: restart the standard onset window. Must be here rather than in
+    // loadScenario(), because setup() runs after scenarioReset() and reads the
+    // gate -- a setup that arms an event needs the clock already at zero.
+    state.onsetTimer = 0;
+    state.onsetArmed = {};
+    state.nociceptionRampFrom = 0;
+    state.nociceptionRampTo = null;
+    state.sahEffect = 0;
+    state.lastCnsSeverity = 0;
+    state.onsetAlphaFade = 0;
 
     // v3.27: clear emergency-scenario state
     state.mhSeverity = 0;
@@ -12483,6 +13179,13 @@ function loadScenario(key) {
     scenarioReset();
     SCENARIOS[key].setup();
 
+    /* v4.57: record which events the setup armed, so the standard onset window
+       applies to those and to nothing else. See onsetRampFor(). */
+    state.onsetArmed = {};
+    Object.keys(state.events).forEach(e => {
+        if (state.events[e]) state.onsetArmed[e] = true;
+    });
+
     /* v4.45: kick off a fresh NIBP reading now. scenarioReset() clears
        nibpCuffFail and resets sys/dia to the new profile's baseline, but
        leaves the num-nibp BOX untouched - it just keeps showing whatever the
@@ -12516,6 +13219,29 @@ function loadScenario(key) {
        read state.mac already has. Derived exactly as the tick derives it, from
        whatever cover the setup left behind. */
     state.effectiveStimulus = Math.max(0, state.nociception - state.analgesiaCover);
+
+    /* v4.57: settle the model before the user sees it. See CONFIG.ONSET_SETTLE
+       for why this exists.
+
+       Placement matters, and is the whole reason it sits down HERE rather than
+       beside setup(). It has to run AFTER the v4.29 nociception sync above:
+       scenarioReset() zeroes nociceptionTarget, and the tick eases
+       state.nociception toward that target on TAU_NOCI. Pre-rolling before the
+       sync therefore drove each scenario's surgical stimulus to zero, and the
+       sync then dutifully copied the zero back into the target - structural
+       trap 3, reintroduced by a fix for something else, and it cost every
+       scenario its stimulus (maintenance opened at MAP 58 instead of 90).
+
+       state.settling silences log() so the pre-roll leaves no history, and both
+       clocks go back to zero afterwards so the user's t=0 is a patient holding
+       still. takeNIBP() is called again after it, because the reading the
+       earlier call took reflects the pre-settle pressure. */
+    state.settling = true;
+    for (let i = 0; i < CONFIG.ONSET_SETTLE * 10; i++) physiologyTick();
+    state.settling = false;
+    state.onsetTimer = 0;
+    state.simTime = 0;
+    takeNIBP();
 
     // v3.26: do NOT reset the dropdown - the previous behaviour blanked it back
     // to "-- pick one --" right after loading. Now the user-visible label
@@ -12607,6 +13333,11 @@ document.addEventListener('webkitfullscreenchange', () => {
    ============================================================================= */
 function toggleEvent(name) {
     state.events[name] = !state.events[name];
+    /* v4.57: once a user has touched an event it is theirs, so the standard
+       scenario onset window no longer holds it back. Applies in both
+       directions - switching a scenario's own bronchospasm off and on again
+       gives the immediate spasm a deliberate toggle should. */
+    delete state.onsetArmed[name];
     const btn = document.getElementById('evt-' + eventIdSuffix(name));
     if (btn) btn.classList.toggle('active', state.events[name]);
 
@@ -13169,6 +13900,7 @@ function resetY(fast) {
    the visible list inside the Log tab. Keeps last 500 entries.
    ============================================================================= */
 function log(m) {
+    if (state.settling) return;   // v4.57: the loadScenario pre-roll is not history
     if (!state.logEntries) state.logEntries = [];
     // simTime in sim-seconds since start (respects time compression)
     const simSecs = state.simTime || 0;

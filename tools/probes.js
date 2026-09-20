@@ -322,15 +322,23 @@ probe('F8', 'Scenario setup lines actually take effect', () => {
             'pumps.remi = 0.08');
     });
 
+    /* v4.57: this used to assert that mh STARTS at etCO2 55, which is what its
+       setup assigned. It no longer does: the scenario now starts at a normal
+       38 and the syndrome ramps, because a rising etCO2 against a fixed minute
+       volume is the diagnosis and handing the trainee the endpoint threw the
+       signal away. The original finding is still what is being pinned - the
+       setup wrote `state.etCO2`, wrong case, a dead property, so the patient
+       sat at 38 while the briefing said 55 - only now it is pinned as a trend
+       rather than a starting value. A dead property would leave etCO2 flat. */
     const sim = boot();
     sim.dl.loadScenario('mh');
-    sim.advance(2000);
-    const etco2 = sim.dl.state.etco2;
-    expect(etco2 > 50,
-        'mh starts at the briefed etCO2 of 55',
-        `state.etco2 = ${etco2.toFixed(1)}` +
-            (etco2 > 50 ? '' : ` (setup writes state.etCO2 - wrong case, dead property)`),
-        'state.etco2 near 55');
+    const mhStart = sim.dl.state.etco2;
+    let mhPeak = mhStart;
+    for (let t = 0; t < 300; t++) { sim.advance(1000); mhPeak = Math.max(mhPeak, sim.dl.state.etco2); }
+    expect(mhStart < 42 && mhPeak > 55,
+        'mh starts normal and its etCO2 climbs through the briefed 55',
+        `state.etco2 ${mhStart.toFixed(1)} at load -> ${mhPeak.toFixed(1)} peak over five minutes`,
+        'starts under 42 and rises past 55 - a trend, not a seeded number');
 });
 
 /* =============================================================================
@@ -634,13 +642,22 @@ probe('F14', 'Opioid vagal drive does not pin parasympathetic tone', () => {
    ========================================================================== */
 probe('F15', 'Rate control heals myocardial ischaemia; tachycardia does not', () => {
     /* Run the ischaemia scenario under a treatment, sampling the accumulator. */
-    function run(treat, secs) {
+    /* v4.57: `delay` added. The treatment used to be applied at t=0, which is
+       now before the ischaemia has started to build at all - the standard
+       onset window holds the ECG clean for ONSET_LEAD_IN seconds - so the
+       accumulator peaked at 0.38 instead of the 0.4 this probe requires, and
+       the run was testing prophylaxis rather than treatment. Treating at t=45,
+       once the ST changes have declared, is both what a trainee does and a
+       stronger check. */
+    function run(treat, secs, delay) {
         const sim = boot(); const dl = sim.dl;
         dl.loadScenario('ischaemia');
-        if (treat) treat(dl, sim);
+        let pending = treat || null;
+        if (pending && !delay) { pending(dl, sim); pending = null; }
         let peak = 0;
         const series = [];
         for (let t = 0; t <= secs; t += 5) {
+            if (pending && t >= delay) { pending(dl, sim); pending = null; }
             sim.advance(5000);
             peak = Math.max(peak, dl.state.ischaemia);
             series.push({ t, isch: dl.state.ischaemia, hr: dl.state.hr });
@@ -659,7 +676,7 @@ probe('F15', 'Rate control heals myocardial ischaemia; tachycardia does not', ()
     /* 2. Rate control to the low 70s with an adequate DBP heals within a few
        minutes and holds - the clinical target the scenario teaches. Delivered
        here with the tools the hints name: analgesia (remi) plus a beta-blocker. */
-    const managed = run(dl => { dl.state.machine.pumps.remi = 0.5; give(dl, 'esmo', 50); give(dl, 'esmo', 50); }, 600);
+    const managed = run(dl => { dl.state.machine.pumps.remi = 0.5; give(dl, 'esmo', 50); give(dl, 'esmo', 50); }, 600, 45);
     const healedBy = managed.series.find(x => x.t >= 60 && x.isch < 0.2);
     const heldLow = managed.series.slice(-6).every(x => x.isch < 0.25);
     note(`managed (HR ${managed.hr.toFixed(0)}, ${managed.sys.toFixed(0)}/${managed.dia.toFixed(0)}): peak ${managed.peak.toFixed(2)} -> ` +
@@ -1247,30 +1264,58 @@ probe('F20', 'Post-induction hypotension actually sits at MAP 55', () => {
 
     const un = run();
 
-    /* 1. The briefed pressure is a STATE, not a one-second transient. */
-    const early = [5, 15, 30, 60].map(t => un.at(t).map);
-    note(`untreated MAP: t=5 ${un.at(5).map.toFixed(0)}, t=30 ${un.at(30).map.toFixed(0)}, ` +
+    /* v4.57 reshapes checks 1-3. The v4.47 finding they were written for is
+       unchanged and still pinned: the briefed pressure must be a STATE the
+       patient sits at, not a one-second transient on the way somewhere else.
+       What changed is that the scenario no longer OPENS at that state.
+
+       Under the standard onset window this patient starts at MAP 71 - already
+       well below their own 160/95 baseline, but survivable - and the combined
+       vasodilation of sevoflurane and the propofol induction takes them into
+       the mid 50s over the following minute. So the trainee watches the
+       pressure go, which is the event the scenario is named for, instead of
+       finding a number that was already there. The nadir, how long it holds,
+       and the slow creep afterwards are all as v4.47 left them. */
+
+    /* 1. The lead-in is flat: the patient the trainee first sees is stable. */
+    const leadIn = [1, 5, 10, 20].map(t => un.at(t).map);
+    note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=20 ${un.at(20).map.toFixed(0)}, ` +
          `t=60 ${un.at(60).map.toFixed(0)}, t=120 ${un.at(120).map.toFixed(0)}, ` +
          `t=300 ${un.at(300).map.toFixed(0)}, t=600 ${un.at(600).map.toFixed(0)}`);
-    expect(early.every(m => m >= 50 && m <= 60),
-        'the scenario genuinely sits at the briefed MAP 55',
-        `MAP at t=5/15/30/60 = ${early.map(m => m.toFixed(0)).join('/')}`,
-        'all within 50-60 (it used to be 56 then 70 by t=10)');
+    expect(Math.max(...leadIn) - Math.min(...leadIn) < 3 && leadIn[0] > 65,
+        'the scenario opens stable and above the treatment target',
+        `MAP at t=1/5/10/20 = ${leadIn.map(m => m.toFixed(0)).join('/')}`,
+        'flat within 3 mmHg and starting above 65 - there is a fall to watch');
 
-    /* 2. It must not self-correct out of the teaching window. Objective 1's
-          target is >65; a trainee needs time to notice and act. */
-    const cross = un.rows.find(r => r.map > 65);
-    note(`untreated MAP first exceeds objective 1's 65 target at t=${cross ? cross.t : 'never'}`);
-    expect(cross && cross.t >= 180,
+    /* 2. The briefed pressure is a STATE, not a transient. This is the v4.47
+          check, moved past the onset window to where the patient now sits. */
+    const settled = [90, 120, 150, 200].map(t => un.at(t).map);
+    expect(settled.every(m => m >= 50 && m <= 62),
+        'and then genuinely sits at the briefed MAP, rather than passing through it',
+        `MAP at t=90/120/150/200 = ${settled.map(m => m.toFixed(0)).join('/')}`,
+        'all within 50-62 (before v4.47 it read 56 for one second then 70 by t=10)');
+
+    /* 3. It must not self-correct out of the teaching window. Objective 1's
+          target is >65; a trainee needs time to notice and act. Measured from
+          the end of the onset window, since it legitimately starts above it. */
+    /* Measured as the first RECOVERY past 65, i.e. the first row above it
+       after the pressure has been below it. The scenario legitimately starts
+       above 65 now and falls through it, so a plain "first row above 65" finds
+       t=21 - the tail of the descent, not a recovery. */
+    const dip = un.rows.findIndex(r => r.map < 65);
+    const cross = dip >= 0 ? un.rows.slice(dip).find(r => r.map > 65) : null;
+    note(`untreated MAP falls below 65 at t=${dip >= 0 ? un.rows[dip].t : 'never'} ` +
+         `and recovers past it at t=${cross ? cross.t : 'never'}`);
+    expect(cross && cross.t >= 300,
         'it does not recover past the treatment target on its own for minutes',
         `first MAP > 65 at t=${cross ? cross.t : 'never'}`,
-        '>= 180s, so there is something to recognise and treat (was t=10)');
+        '>= 300s, so there is something to recognise and treat');
 
-    /* 3. But hint 5 promises it DOES slowly creep up as propofol redistributes,
+    /* 4. But hint 5 promises it DOES slowly creep up as propofol redistributes,
           so it must not be frozen either. */
-    expect(un.at(600).map > un.at(30).map + 8,
+    expect(un.at(600).map > un.at(120).map + 8,
         'it still slowly creeps up over ten minutes, as hint 5 describes',
-        `MAP ${un.at(30).map.toFixed(0)} at t=30 -> ${un.at(600).map.toFixed(0)} at t=600`,
+        `MAP ${un.at(120).map.toFixed(0)} at t=120 -> ${un.at(600).map.toFixed(0)} at t=600`,
         'a real upward drift - the hint describes propofol redistributing');
 
     /* 4. Objective 4 lists four options and says they "all work". Each must
@@ -1384,24 +1429,40 @@ probe('F21', 'Haemorrhage scales with perfusion pressure, and opens at MAP 65', 
 
     const un = run(null, 600);
 
-    /* 1. The briefed opening pressure is a STATE, not a transient on the way
-          up to something else. Both briefing and setupBrief say MAP 65. */
-    const open = [1, 5, 10].map(t => un.at(t).map);
-    note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=5 ${un.at(5).map.toFixed(0)}, ` +
-         `t=10 ${un.at(10).map.toFixed(0)}, t=60 ${un.at(60).map.toFixed(0)}, ` +
-         `t=120 ${un.at(120).map.toFixed(0)}, t=300 ${un.at(300).map.toFixed(0)}`);
-    expect(Math.abs(open[0] - 65) <= 3,
-        'the scenario opens at the briefed MAP 65',
-        `MAP ${open[0].toFixed(1)} at t=1`,
-        'within 3 of 65 (it used to read 61 then climb to 74.7)');
+    /* v4.57 reshapes checks 1 and 2. The v4.48 property they exist for is
+       unchanged - the opening pressure must be a STATE the patient sits at,
+       not a startup transient on the way up to something else - but the
+       scenario no longer opens AT the briefed 65.
+
+       It opens euvolaemic at MAP 92 with the surgeon going in, and the bleed
+       takes it through 65 at about t=110. That is what the briefing describes
+       ("severe ongoing intra-abdominal bleeding... expect further blood loss")
+       and it means the trainee sees the pressure fall rather than inheriting a
+       number. The old form started the patient at 58% of blood volume, i.e.
+       with the haemorrhage already done. */
+    const open = [1, 5, 10, 20].map(t => un.at(t).map);
+    note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=20 ${un.at(20).map.toFixed(0)}, ` +
+         `t=60 ${un.at(60).map.toFixed(0)}, t=120 ${un.at(120).map.toFixed(0)}, ` +
+         `t=300 ${un.at(300).map.toFixed(0)}`);
+    expect(Math.max(...open) - Math.min(...open) < 3,
+        'the opening pressure is a state the patient sits at, not a transient',
+        `MAP at t=1/5/10/20 = ${open.map(m => m.toFixed(1)).join('/')}`,
+        'flat within 3 mmHg (it used to read 61 then climb to 74.7)');
 
     /* 2. And it must fall from there, not rise. The old startup transient
           showed a trainee an exsanguinating patient who appeared to improve
-          for the first half-minute. */
-    expect(open[1] < open[0] && open[2] < open[1],
+          for the first half-minute. Checked across the bleed itself now, and
+          it must pass through the briefed 65 rather than start there. */
+    const falls = [60, 120, 180].every((t, i, a) =>
+        i === 0 ? un.at(t).map < open[3] : un.at(t).map < un.at(a[i - 1]).map);
+    const through65 = un.rows.find(r => r.map < 65);
+    note(`falls through the briefed MAP 65 at t=${through65 ? through65.t : 'never'}`);
+    expect(falls && through65 && through65.t > 20,
         'pressure falls from the opening value rather than climbing',
-        `MAP t=1 ${open[0].toFixed(1)} -> t=5 ${open[1].toFixed(1)} -> t=10 ${open[2].toFixed(1)}`,
-        'monotonically down (it used to rise to 74.7 by t=5)');
+        `MAP ${open[3].toFixed(0)} at t=20 -> ${un.at(60).map.toFixed(0)} -> ` +
+        `${un.at(120).map.toFixed(0)} -> ${un.at(180).map.toFixed(0)}, ` +
+        `through 65 at t=${through65 ? through65.t : 'never'}`,
+        'monotonically down, crossing 65 after the onset window rather than at t=0');
 
     /* 3. The untreated bleed is still lethal in the direction the setupBrief
           promises ("expect further blood loss until source is controlled"). */
@@ -1528,17 +1589,32 @@ probe('F22', 'The septic laparotomy tells the trainee to keep the patient asleep
     const un = run(null, 600);
     const sc = un.dl.SCENARIOS.sepsis;
 
-    /* 1. The briefed opening pressure is what the scenario holds. It is a
-          steady state here, not a transient - the setup seeds alphaTone and
-          betaTone at the septic profile's rest values, so nothing settles. */
+    /* 1. The briefed pressures are what the scenario actually does. v4.57
+          gives this scenario the standard onset window in its subtractive
+          form: it opens at 91/56 with the pre-induction sympathetic
+          compensation still up, and settles near 73/45 as the induction agent
+          takes that compensation away. Both numbers are quoted in both texts,
+          and both are checked - a text that named only the endpoint would be
+          describing a patient the trainee never sees arrive. The opening must
+          also be a STATE, not a transient, which is what the lead-in check
+          below is for. */
     const o = un.at(1);
+    const lead = [1, 5, 10, 20].map(t => un.at(t).sys);
     note(`opening BP ${o.sys.toFixed(0)}/${o.dia.toFixed(0)} (MAP ${o.map.toFixed(0)}), ` +
-         `holding ${un.at(60).sys.toFixed(0)}/${un.at(60).dia.toFixed(0)} at t=60`);
-    expect(/70\/43/.test(sc.briefing) && /70\/43/.test(sc.setupBrief) &&
-           Math.abs(o.sys - 70) <= 3 && Math.abs(o.dia - 43) <= 3,
-        'both briefing texts quote the pressure the scenario actually opens at',
-        `texts say 70/43, model gives ${o.sys.toFixed(0)}/${o.dia.toFixed(0)}`,
-        'agreement within 3 mmHg (the texts used to say 75/45)');
+         `settling to ${un.at(120).sys.toFixed(0)}/${un.at(120).dia.toFixed(0)} at t=120`);
+    expect(/91\/56/.test(sc.briefing) && /91\/56/.test(sc.setupBrief) &&
+           /73\/45/.test(sc.setupBrief) &&
+           Math.abs(o.sys - 91) <= 3 && Math.abs(o.dia - 56) <= 3 &&
+           Math.abs(un.at(120).sys - 73) <= 3 && Math.abs(un.at(120).dia - 45) <= 3,
+        'both briefing texts quote the pressures the scenario actually produces',
+        `texts say 91/56 opening and 73/45 settled; model gives ` +
+        `${o.sys.toFixed(0)}/${o.dia.toFixed(0)} and ` +
+        `${un.at(120).sys.toFixed(0)}/${un.at(120).dia.toFixed(0)}`,
+        'agreement within 3 mmHg on both (the texts used to say 75/45, then 70/43)');
+    expect(Math.max(...lead) - Math.min(...lead) < 3,
+        'and the opening pressure is a state, not a startup transient',
+        `systolic at t=1/5/10/20 = ${lead.map(v => v.toFixed(0)).join('/')}`,
+        'flat within 3 mmHg through the onset lead-in');
 
     /* 2. THE FINDING. Untreated, the patient wakes - so there must be an
           objective that tells the trainee to prevent it. */
@@ -1693,10 +1769,20 @@ probe('F23', 'Severe bronchospasm stays severe until something treats it', () =>
     /* 1. THE FINDING. The spasm must not relieve itself. */
     note(`untreated resistance: t=1 ${un.at(1).raw.toFixed(1)}, t=60 ${un.at(60).raw.toFixed(1)}, ` +
          `t=300 ${un.at(300).raw.toFixed(1)}, t=600 ${un.at(600).raw.toFixed(1)}`);
-    expect(un.at(600).raw > 75 && un.at(60).raw > 70,
+    /* v4.57: the t=60 anchor moves to t=180. The v4.50 finding this pins is
+       that the spasm must not RELIEVE itself - it used to decay 80 -> 49 within
+       a minute because the patient's own reflex beta tone counted as
+       bronchodilation. That property is unchanged and is what t=180 and t=600
+       check. What changed is the direction of travel at t=60: the scenario no
+       longer assigns resistance 80 in its setup, so at t=60 the spasm is still
+       BUILDING (50, heading for 80) rather than decaying from it. Checking that
+       it is above 70 on the way up tested the onset, not the finding. t=180 is
+       past the onset window, so a decay would show there. */
+    expect(un.at(600).raw > 75 && un.at(180).raw > 75 && un.at(60).raw > un.at(20).raw,
         'an untreated severe bronchospasm stays severe',
-        `resistance ${un.at(60).raw.toFixed(1)} at t=60, ${un.at(600).raw.toFixed(1)} at t=600`,
-        'above 75 at t=600 (it used to decay to 49 within a minute)');
+        `resistance ${un.at(20).raw.toFixed(1)} at t=20 -> ${un.at(60).raw.toFixed(1)} at t=60 ` +
+        `-> ${un.at(180).raw.toFixed(1)} at t=180, ${un.at(600).raw.toFixed(1)} at t=600`,
+        'rising through the onset then above 75 and staying there (it used to decay to 49 within a minute)');
     note(`untreated Vt: t=1 ${un.at(1).vt.toFixed(0)}, t=60 ${un.at(60).vt.toFixed(0)}, ` +
          `t=600 ${un.at(600).vt.toFixed(0)}`);
     expect(un.at(600).vt < 150 && un.at(600).vt > 100,
@@ -1793,9 +1879,17 @@ probe('F23', 'Severe bronchospasm stays severe until something treats it', () =>
         `resistance ${plan.at(180).raw.toFixed(1)}, Vt ${plan.at(180).vt.toFixed(0)}, ` +
         `SpO2 ${plan.at(180).spo2.toFixed(0)} at t=180`,
         'airway open, Vt restored, saturation recovered');
-    expect(minBis > 14 && maxMap < 100 && maxHr < 125,
+    /* v4.57: peak MAP is measured from t=30 rather than from t=1. The scenario
+       now opens on a patient who has not yet spasmed, and a well adult on TIVA
+       reads MAP 103 - so "peak MAP" over the whole run was picking up the
+       healthy lead-in, not an overshoot caused by the treatment. What this
+       check is for is the treatment not swinging the pressure, so it looks at
+       the part of the run where the treatment is acting. */
+    const maxMapTreated = Math.max(...plan.rows.filter(r => r.t >= 30).map(r => r.map));
+    expect(minBis > 14 && maxMapTreated < 100 && maxHr < 125,
         'and does it without over-anaesthetising or swinging the pressure',
-        `min BIS ${minBis.toFixed(0)}, peak MAP ${maxMap.toFixed(0)}, peak HR ${maxHr.toFixed(0)}`,
+        `min BIS ${minBis.toFixed(0)}, peak MAP ${maxMapTreated.toFixed(0)} from t=30, ` +
+        `peak HR ${maxHr.toFixed(0)}`,
         'BIS above 14, MAP under 100, HR under 125 (the old plan gave 9.8 / 130 / 140)');
 
     expect(un.errors.length === 0 && plan.errors.length === 0 && plan.undone === 0,
@@ -1863,18 +1957,30 @@ probe('F24', 'Vagal hyperreflexia teaches atropine correctly', () => {
 
     /* 1. The presentation is on contract and stays there. The setupBrief
           promises "HR to ~48 and MAP to ~50. Not self-resolving." */
-    note(`untreated HR/MAP: t=55 ${un.at(55).hr.toFixed(1)}/${un.at(55).map.toFixed(1)}, ` +
-         `t=300 ${un.at(300).hr.toFixed(1)}/${un.at(300).map.toFixed(1)}, ` +
+    /* v4.57: read at t=150 rather than t=55. The reflex now comes on over the
+       standard onset window instead of VAGAL_PEAK_TIME's 5 s, so at t=55 it is
+       still arriving (HR 50.0, on its way to 48.2) and a "does not self-resolve"
+       check anchored there was measuring the tail of the onset as drift. The
+       settled presentation is unchanged and is still pinned to the briefed
+       numbers - which is the point of this probe, since VAGAL_SYMP_WITHDRAW was
+       tuned through structural trap 2 to produce exactly them. */
+    note(`untreated HR/MAP: t=20 ${un.at(20).hr.toFixed(1)}/${un.at(20).map.toFixed(1)} ` +
+         `(lead-in), t=150 ${un.at(150).hr.toFixed(1)}/${un.at(150).map.toFixed(1)}, ` +
          `t=1800 ${un.at(1800).hr.toFixed(1)}/${un.at(1800).map.toFixed(1)}`);
-    expect(Math.abs(un.at(55).hr - 48) <= 3 && Math.abs(un.at(55).map - 50) <= 3,
+    expect(Math.abs(un.at(150).hr - 48) <= 3 && Math.abs(un.at(150).map - 50) <= 3,
         'the scenario presents at the briefed HR 48 / MAP 50',
-        `HR ${un.at(55).hr.toFixed(1)}, MAP ${un.at(55).map.toFixed(1)} at t=55`,
+        `HR ${un.at(150).hr.toFixed(1)}, MAP ${un.at(150).map.toFixed(1)} at t=150`,
         'both within 3 of the briefed values');
-    expect(Math.abs(un.at(1800).hr - un.at(55).hr) < 2 &&
-           Math.abs(un.at(1800).map - un.at(55).map) < 2,
+    expect(un.at(20).hr > 70 && un.at(20).map > 55,
+        'and gets there from a normal rate, so the drop is something to watch',
+        `HR ${un.at(20).hr.toFixed(1)}, MAP ${un.at(20).map.toFixed(1)} at t=20 ` +
+        `(end of the onset lead-in)`,
+        'a normal heart rate during the lead-in - it used to open at HR 49');
+    expect(Math.abs(un.at(1800).hr - un.at(150).hr) < 2 &&
+           Math.abs(un.at(1800).map - un.at(150).map) < 2,
         'and it does not self-resolve, over a full thirty minutes',
-        `HR ${un.at(55).hr.toFixed(1)} -> ${un.at(1800).hr.toFixed(1)}, ` +
-        `MAP ${un.at(55).map.toFixed(1)} -> ${un.at(1800).map.toFixed(1)}`,
+        `HR ${un.at(150).hr.toFixed(1)} -> ${un.at(1800).hr.toFixed(1)}, ` +
+        `MAP ${un.at(150).map.toFixed(1)} -> ${un.at(1800).map.toFixed(1)}`,
         'unchanged - the setupBrief says "not self-resolving"');
 
     /* 2. THE FINDING. Atropine alone must work, and the hints must say so. */
@@ -2030,10 +2136,18 @@ probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
     /* 2. THE FINDING. Extubation prevents it outright, and the scenario must
           now say so. Checked at three timings so this is not a coincidence of
           one schedule. */
+    /* v4.56: these timings were 120/180/240 and are now 50/70/90. Not a
+       weakening of the check - the finding is unchanged and all three still
+       prevent the spasm outright. The scenario simply runs on a faster clock
+       now that its remifentanil seed matches what its pump sustains (it was
+       0.002 against a true steady state of 0.00071, i.e. 2.8x over). With the
+       correct opioid burden the patient wakes sooner and the spasm fires at
+       t=91 rather than t=292, so the old timings all sat AFTER it and were
+       testing nothing. Extubate before the wake and it never fires. */
     const plan = [SEVO(30, 0), REMI(32, 0), SUG(35, 200)];
-    const ex120 = run([...plan, AIR(120, 'mask'), MODE(121, 'MANUAL')], 900);
-    const ex180 = run([...plan, AIR(180, 'mask'), MODE(181, 'MANUAL')], 900);
-    const ex240 = run([...plan, AIR(240, 'mask'), MODE(241, 'MANUAL')], 900);
+    const ex120 = run([...plan, AIR(50, 'mask'), MODE(51, 'MANUAL')], 900);
+    const ex180 = run([...plan, AIR(70, 'mask'), MODE(71, 'MANUAL')], 900);
+    const ex240 = run([...plan, AIR(90, 'mask'), MODE(91, 'MANUAL')], 900);
     const noEx  = run(plan, 900);
     const noExSpasm = noEx.rows.find(r => r.broncho);
     note(`with the scenario's old plan (no extubation): bronchospasm ` +
@@ -2043,7 +2157,10 @@ probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
     expect(noExSpasm && ![ex120, ex180, ex240].some(r => r.rows.some(x => x.broncho)),
         'extubating prevents the bronchospasm entirely, at any timing',
         `no extubation: t=${noExSpasm ? noExSpasm.t : 'never'}; ` +
-        `extubated at 120/180/240: never, never, never`,
+        `extubated at 50/70/90: ` +
+        [ex120, ex180, ex240].map(r => {
+            const b = r.rows.find(x => x.broncho); return b ? 't=' + b.t : 'never';
+        }).join(', '),
         'fires only when the tube is left in');
 
     /* 3. And opioid cover is NOT an alternative - it only buys minutes. This
@@ -2329,21 +2446,27 @@ probe('F27', 'No airway device means breathing room air, not apnoea', () => {
         `(spontaneous run gives ${un.at(40).vt.toFixed(0)})`,
         'no pressure, and the tidal volume is the patient\'s own, not the ventilator\'s');
 
-    /* 7. Objective 4's bolus count, now that the objective states it. */
-    const rosc = run('last', [ADR(90), ADR(120), ADR(150)], 300);
-    const two  = run('last', [ADR(90), ADR(120)], 300);
-    note(`three 500mcg boluses: rhythm ${rosc.at(200).rhythm} at t=200; ` +
-         `two boluses: ${two.at(200).rhythm}`);
-    expect(rosc.at(200).rhythm === 'sinus' && two.at(200).rhythm !== 'sinus',
+    /* 7. Objective 4's bolus count, now that the objective states it.
+          v4.57: bolus times 90/120/150 -> 150/180/210 and the reading point
+          200 -> 260. CONFIG.LAST_ARREST_TIME moved 60 -> 120 so the scenario
+          has a visible CNS prodrome instead of sixty flat seconds, which means
+          the old first bolus now lands a full thirty seconds BEFORE the arrest
+          it is supposed to treat. The check is unchanged: three boluses give
+          ROSC, two do not. */
+    const rosc = run('last', [ADR(150), ADR(180), ADR(210)], 400);
+    const two  = run('last', [ADR(150), ADR(180)], 400);
+    note(`three 500mcg boluses: rhythm ${rosc.at(260).rhythm} at t=260; ` +
+         `two boluses: ${two.at(260).rhythm}`);
+    expect(rosc.at(260).rhythm === 'sinus' && two.at(260).rhythm !== 'sinus',
         'three adrenaline boluses give ROSC and two do not',
-        `three -> ${rosc.at(200).rhythm}, two -> ${two.at(200).rhythm}`,
+        `three -> ${rosc.at(260).rhythm}, two -> ${two.at(260).rhythm}`,
         'exactly what objective 4 now states');
 
     /* 8. And ROSC restores the drive, because the pulse is back. */
-    note(`after ROSC: respDrive ${rosc.at(200).rd.toFixed(2)}, Vt ${rosc.at(200).vt.toFixed(0)}`);
-    expect(rosc.at(200).rd > 0 && rosc.at(200).vt > 200,
+    note(`after ROSC: respDrive ${rosc.at(260).rd.toFixed(2)}, Vt ${rosc.at(260).vt.toFixed(0)}`);
+    expect(rosc.at(260).rd > 0 && rosc.at(260).vt > 200,
         'ROSC restores the respiratory drive, since the arrest is what removed it',
-        `respDrive ${rosc.at(200).rd.toFixed(2)}, Vt ${rosc.at(200).vt.toFixed(0)} at t=200`,
+        `respDrive ${rosc.at(260).rd.toFixed(2)}, Vt ${rosc.at(260).vt.toFixed(0)} at t=260`,
         'breathing again - the cut-off is the pulse, not a one-way latch');
 
     expect(un.errors.length === 0 && secured.errors.length === 0 && secured.undone === 0,
@@ -2465,9 +2588,11 @@ probe('F28', 'SpO2 and etCO2 answer to the circulation', () => {
     /* 5. THE PAYOFF, which this coupling makes possible for the first time:
           etCO2 as the ROSC signal. A sudden rise is what tells you the
           circulation is back. */
+    /* v4.57: boluses 120/150/180 -> 180/210/240 and the "after the arrest"
+       cutoff 100 -> 160, following CONFIG.LAST_ARREST_TIME 60 -> 120. */
     const rosc = run('last', [AIRWAY(20, 'ett'), MODE(21, 'VCV'), FIO2(22, 1.0),
-                              ADR(120), ADR(150), ADR(180)], 400);
-    const back = rosc.rows.find(r => r.t > 100 && r.rhythm === 'sinus');
+                              ADR(180), ADR(210), ADR(240)], 500);
+    const back = rosc.rows.find(r => r.t > 160 && r.rhythm === 'sinus');
     note(`ROSC at t=${back ? back.t : 'never'}: etCO2 ${rosc.at(back.t - 1).etco2.toFixed(0)} just before -> ` +
          `${rosc.at(back.t + 20).etco2.toFixed(0)} at +20s -> ${rosc.at(back.t + 40).etco2.toFixed(0)} at +40s`);
     expect(back && rosc.at(back.t + 40).etco2 > rosc.at(back.t - 1).etco2 + 12,
@@ -2502,6 +2627,189 @@ probe('F28', 'SpO2 and etCO2 answer to the circulation', () => {
         'the scenarios run clean',
         `${bleed.errors.length + rosc.errors.length} tick errors, ${rosc.undone} undelivered actions`,
         'zero of each');
+});
+
+/* =============================================================================
+   F29  scenarios started their pathology whenever they felt like it
+   -----------------------------------------------------------------------------
+   Measured across all twenty before v4.57, untreated, sampling every simulated
+   second and comparing each scenario against its OWN settled baseline: the
+   first monitor-visible change ranged from 0 s to 60 s, with three scenarios
+   that never produced one at all, and there was no rule anywhere deciding
+   which a scenario should be.
+
+     bronchospasm   assigned p.bronchResistance = 80 in its setup, so SpO2 read
+                    86, Vt 127 and PIP 29 before the first tick ran. Not just
+                    immediate - already complete. Nothing to observe.
+     vagal, aneurysm, autonomicDysreflexia, haemorrhage, mh, hypotensionPostInd
+                    all likewise opened at or near their final presentation.
+     last           sat completely flat for 60 s - its CNS phase was a per-tick
+                    push on betaTone, structural trap 1, and delivered nothing
+                    measurable - and then stepped from MAP 98 to MAP 0 in a
+                    single tick. No onset at all, just a trapdoor.
+     anaphylaxis    had a carefully tuned 25 s / 50 s curve, which was right,
+                    and was the only scenario that did.
+     asthma         promised "be ready for bronchospasm" and produced none in
+                    thirty untreated minutes.
+
+   A trainee moving between scenarios therefore had no way to know whether the
+   thing in front of them had already happened, was happening, or was never
+   going to. v4.57 puts every scenario with a precipitating event on one clock:
+   CONFIG.ONSET_LEAD_IN of the patient's own normal, then a deterioration.
+
+   This probe pins the contract in both directions. A lead-in that is not flat
+   is a scenario the trainee cannot take a baseline from; a pathology that
+   never declares is a scenario that teaches nothing.
+   ========================================================================== */
+probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => {
+
+    const dl0 = boot().dl;
+    const LEAD = dl0.CONFIG.ONSET_LEAD_IN;
+    /* The three deliberate controls. induction is the student walkthrough -
+       nothing is wrong and the trainee causes every change themselves.
+       maintenance and tiva exist to be stable comparators; tiva's own hint
+       says "this is a stable maintenance state - no emergency to fix". */
+    const CONTROLS = ['induction', 'maintenance', 'tiva'];
+
+    /* Monitor-visible variables, with the change a trainee would call a
+       change. Deliberately generous - this is a test of whether anything
+       moved at all, not of calibration. */
+    const VARS = { hr: 6, map: 6, spo2: 2, etco2: 5, pip: 4, vt: 50, bis: 8, temp: 0.3 };
+
+    function trace(key, secs) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(key);
+        const rows = [];
+        for (let t = 1; t <= secs; t++) {
+            sim.advance(1000);
+            const st = dl.state;
+            rows.push({ t, hr: st.hr, map: mapOf(dl), spo2: st.spo2, etco2: st.etco2,
+                        pip: st.peakPressure, vt: st.tidalVolume, bis: st.bis,
+                        temp: st.temperature, rhythm: st.rhythm });
+        }
+        return rows;
+    }
+
+    const keys = Object.keys(dl0.SCENARIOS);
+    const traces = {};
+    keys.forEach(k => { traces[k] = trace(k, 300); });
+
+    /* 1. THE LEAD-IN. For every scenario, controls included, nothing the
+          monitor shows may move meaningfully before ONSET_LEAD_IN. A trainee
+          cannot recognise a change they never saw the start of.
+
+          etCO2 is excluded here and checked separately below: several
+          scenarios ventilate their patient away from the seeded 38 from the
+          first tick, which is a baseline-seeding problem rather than an onset
+          one (see the known item in CLAUDE.md). */
+    /* Baselined at t=3, not t=1. scenarioReset() leaves the autonomic tones at
+       their rest values and the tick relaxes them toward the scenario's targets
+       over about two seconds (TONE_DECAY_TAU), so every scenario has a brief
+       settle at load that predates v4.57 and is not an onset. Three scenarios
+       cancel it explicitly by seeding their tones at target - haemorrhage
+       (v4.48), sepsis and hypotensionPostInd (v4.57) - because they needed a
+       genuinely still opening for their own checks. Doing it for all twenty is
+       a separate piece of work; see the known item in CLAUDE.md. */
+    const leadVars = Object.keys(VARS).filter(v => v !== 'etco2');
+    const restless = [];
+    keys.forEach(k => {
+        const rows = traces[k], b = rows[2];
+        leadVars.forEach(v => {
+            const worst = Math.max(...rows.slice(2, LEAD).map(r => Math.abs(r[v] - b[v])));
+            if (worst > VARS[v]) restless.push(`${k}/${v} moved ${worst.toFixed(1)}`);
+        });
+    });
+    note(`lead-in is ${LEAD}s; checked ${keys.length} scenarios x ${leadVars.length} variables`);
+    if (restless.length) note(restless.join('\n'));
+    expect(restless.length === 0,
+        'every scenario holds its own vitals still through the onset lead-in',
+        restless.length ? restless.join('; ') : `all ${keys.length} scenarios flat for ${LEAD}s`,
+        'nothing moves before the lead-in is over');
+
+    /* 2. THE DECLARATION. Every scenario that is NOT a control must then
+          produce a change a trainee would notice, within a couple of minutes
+          of the lead-in ending. This is what asthma failed for its whole
+          existence. */
+    const silent = [];
+    const onsets = [];
+    keys.filter(k => !CONTROLS.includes(k)).forEach(k => {
+        const rows = traces[k], b = rows[2];
+        let first = null;
+        for (const r of rows) {
+            if (Object.keys(VARS).some(v => Math.abs(r[v] - b[v]) > VARS[v]) ||
+                r.rhythm !== b.rhythm) { first = r.t; break; }
+        }
+        if (first === null || first > 150) silent.push(`${k}: ${first === null ? 'never' : first + 's'}`);
+        else onsets.push(`${k} ${first}s`);
+    });
+    note('first noticeable change: ' + onsets.join(', '));
+    expect(silent.length === 0,
+        'and every scenario with a pathology then declares it',
+        silent.length ? 'silent past 150s: ' + silent.join('; ')
+                      : `all ${keys.length - CONTROLS.length} pathology scenarios declared`,
+        'a monitor-visible change within ~2 min of the lead-in ending');
+
+    /* 3. THE CONTROLS. These must NOT declare anything - they are what a
+          trainee compares an emergency against, and a stable scenario that
+          drifts is worse than useless. This is what v4.56 fixed: the
+          remifentanil seeds were 2-3x their pumps' steady state, so
+          maintenance ran MAP 62 -> 89 over ten untreated minutes. */
+    const drifted = [];
+    CONTROLS.forEach(k => {
+        const rows = trace(k, 900), b = rows[2];
+        Object.keys(VARS).forEach(v => {
+            const worst = Math.max(...rows.map(r => Math.abs(r[v] - b[v])));
+            if (worst > VARS[v] * 1.5) drifted.push(`${k}/${v} moved ${worst.toFixed(1)}`);
+        });
+    });
+    note(`controls (${CONTROLS.join(', ')}) checked over 15 untreated minutes`);
+    expect(drifted.length === 0,
+        'and the control scenarios stay still for a full fifteen minutes',
+        drifted.length ? drifted.join('; ') : 'all three flat',
+        'nothing to treat, so nothing moves - they are the comparators');
+
+    /* 4. THE OWNERSHIP RULE. The window belongs to the scenario, never to the
+          user. An event toggled by hand must act on its own time constant
+          immediately, whenever it is switched on - otherwise a teacher
+          demonstrating a bronchospasm from the Events panel ten seconds after
+          loading a case would watch nothing happen. */
+    function handToggle(at) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('maintenance');
+        for (let t = 0; t < at; t++) sim.advance(1000);
+        dl.toggleEvent('bronchospasm');
+        for (let t = 0; t < 60; t++) sim.advance(1000);
+        return dl.state.patient.bronchResistance;
+    }
+    /* Compared against the same toggle made long after the window has closed,
+       rather than against an absolute number: what matters is that the two are
+       the same. The absolute value here is well under BRONCH_RESISTANCE because
+       maintenance runs a full MAC of sevoflurane, which is a bronchodilator -
+       that attenuation is correct and is not what this check is about. */
+    const inside  = handToggle(2);
+    const outside = handToggle(200);
+    note(`bronchospasm toggled by hand: resistance 60s later is ${inside.toFixed(1)} ` +
+         `when toggled at t=2 (inside the lead-in) and ${outside.toFixed(1)} at t=200 (outside it)`);
+    expect(Math.abs(inside - outside) < 1.0,
+        'an event a user toggles is not held back by the scenario onset window',
+        `${inside.toFixed(1)} inside vs ${outside.toFixed(1)} outside - ` +
+        `difference ${Math.abs(inside - outside).toFixed(2)}`,
+        'identical within 1 - it builds on TAU_BRONCH, not on somebody else\'s lead-in');
+
+    /* 5. And releasing a scenario's OWN event and re-arming it by hand hands
+          it to the user too - once they have touched it, it is theirs. */
+    const sim2 = boot(); const dl2 = sim2.dl;
+    dl2.loadScenario('bronchospasm');
+    sim2.advance(1000);
+    dl2.toggleEvent('bronchospasm');         // off
+    dl2.toggleEvent('bronchospasm');         // and straight back on
+    for (let t = 0; t < 60; t++) sim2.advance(1000);
+    const reR = dl2.state.patient.bronchResistance;
+    note(`scenario's own spasm released and re-armed at t=1s: resistance ${reR.toFixed(1)} at t=61`);
+    expect(reR > 60,
+        're-arming a scenario event by hand releases it from the window too',
+        `resistance ${reR.toFixed(1)}`,
+        'above 60 - the deliberate toggle wins over the scenario default');
 });
 
 /* -----------------------------------------------------------------------------
