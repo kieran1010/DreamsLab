@@ -85,6 +85,12 @@ jobs:
 
       # The sweep's recording, kept so a failure can be diagnosed without
       # re-running it locally. Generated and git-ignored, hence the upload.
+      # NOTE: v5 of this action still targets the Node 20 runtime, so the run
+      # ends with "Node.js 20 is deprecated ... forced to run on Node.js 24"
+      # naming upload-artifact alone. checkout and setup-node at v5 no longer
+      # do. That is upstream's build to change, not ours, and it is a warning
+      # on a green run - don't chase it by guessing a version that may not
+      # exist. Revisit when upload-artifact ships a node24 release.
       - name: Upload sweep results
         if: always()
         uses: actions/upload-artifact@v5
