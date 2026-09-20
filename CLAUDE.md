@@ -113,8 +113,11 @@ the treated runs treat a pathology that has actually declared. `induction` is
 exempt — nothing is wrong with that patient.
 `tools/README.md` has the detail.
 
-**CI runs all four on every push and pull request** —
-`.github/workflows/physiology.yml`, added v4.57. Nothing to install: no build
+**CI runs all four on every pull request, and on pushes to `main`** —
+`.github/workflows/physiology.yml`, added v4.57. (Both triggers, rather than a
+bare `push`: a bare one fires alongside `pull_request` on any branch with a PR
+open, which ran the suite twice per push. Confirmed on the workflow's own first
+run.) It takes about two minutes, and `concurrency` cancels a superseded run. Nothing to install: no build
 step, no dependencies, just Node 20. All four honour `DL_STRICT=1` to exit
 non-zero (`scan` gates on BUG-level findings only; `CLIN`/`WARN`/`INFO`
 describe sick patients behaving correctly, and gating on those would require

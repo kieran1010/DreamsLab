@@ -19,9 +19,21 @@
 # This does not deploy anything. Pages publishes from `main` separately.
 name: Physiology
 
+# `push` is scoped to main, not left bare. A bare `push` plus `pull_request`
+# fires BOTH on any branch that has a PR open, so every push to a PR branch ran
+# the ~3 minute suite twice - confirmed on the first run of this workflow, which
+# produced two identical `harness` checks. Scoped this way, a PR branch gets one
+# run from `pull_request` and main gets one from `push` after merge.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Cancel a superseded run when new commits land on the same branch, so a quick
+# follow-up push does not leave the previous ~3 minute run burning a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -32,11 +44,15 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          # tools/README.md: Node 18+. No dependencies, so no cache and no install.
+          # tools/README.md says Node 18+. Pinned to 20 rather than to the
+          # local dev version (22): it is an LTS below what the sim is
+          # developed on, so it gives some floor coverage against a tool
+          # accidentally picking up a newer-than-claimed API. No dependencies,
+          # so no cache and no install step.
           node-version: '20'
 
       # Targeted checks, one per known bug. Fastest and the most likely to
@@ -71,7 +87,7 @@ jobs:
       # re-running it locally. Generated and git-ignored, hence the upload.
       - name: Upload sweep results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sweep-results
           path: tools/results.json
