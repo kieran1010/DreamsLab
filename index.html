@@ -51,6 +51,30 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.46  ("Anaphylaxis: routine baseline FiO2")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Anaphylaxis scenario's baseline FiO2, both p.fio2 and the vent dial, 1.0 ->
+  0.3. The scenario opens as a ROUTINE case - "vitals look normal initially...
+  about to position for surgery" - not a declared emergency, so 100% oxygen at
+  t=0 didn't fit: that figure belongs to a pre-oxygenation or already-in-extremis
+  picture, which is why sepsis and haemorrhage correctly open on it (both start
+  already in shock). 0.3 matches the routine air/O2 maintenance mix used
+  elsewhere in the sim (aspiration, vagal).
+
+  No physiology change: FiO2 only enters the gas-exchange model below
+  SPO2_DESAT_THRESHOLD_FIO2 (0.13), so 1.0 and 0.3 are identical to the model -
+  verified, min SpO2 89 @ t=126s and SpO2 90 at t=600s either way. This is
+  scenario realism (what the dial reads at t=0), not a calibration change.
+
+  Baseline unchanged: probes 70/70, voucher-probe 15/15, scan 0 BUG-level
+  findings, 0 runtime errors, sweep output identical.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.45  ("Fresh NIBP reading on scenario load")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -10202,7 +10226,17 @@ const SCENARIOS = {
             setProfile('adult');
             const p = state.patient;
             p.airway = 'ett';
-            p.fio2 = 1.0;
+            // v4.46: 1.0 -> 0.3. This scenario opens as a ROUTINE case -
+            // "vitals look normal initially... about to position for surgery" -
+            // not a declared emergency, so a baseline FiO2 of 100% didn't fit:
+            // that's the pre-oxygenation/emergency figure sepsis and haemorrhage
+            // correctly open on, since those scenarios start already in extremis.
+            // 0.3 is the routine air/O2 maintenance mix used elsewhere in the sim
+            // (aspiration, vagal). No effect on the simulated SpO2 trajectory -
+            // FiO2 only enters the gas-exchange model below
+            // SPO2_DESAT_THRESHOLD_FIO2 (0.13), so this is scenario realism
+            // rather than a physiology change.
+            p.fio2 = 0.3;
             ['ecg','spo2','bis','art'].forEach(m => {
                 if (!state.monitors[m]) toggleMon(m);
             });
@@ -10211,7 +10245,7 @@ const SCENARIOS = {
             state.machine.vent.rr = 12;
             state.machine.vent.vt = 500;
             state.machine.vent.peep = 5;
-            state.machine.vent.fio2 = 1.0;
+            state.machine.vent.fio2 = 0.3;
             // v3.75: more-equilibrated baseline. Previously the just-induced
             // propofol + sevo washin caused a noticeable MAP drop in the first
             // 10s that overlapped with the anaphylaxis early-symp phase,
