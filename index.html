@@ -51,6 +51,135 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.50  ("Bronchospasm: your own adrenaline is not coming to save you")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Fourth of the six-scenario audit, and the one with the widest blast radius.
+  Read the GLOBAL EFFECT section before touching any airway scenario.
+
+  1. THE SPASM RELIEVED ITSELF.
+
+  Untreated, the "severe bronchospasm" scenario got steadily better while
+  nobody treated it. Airway resistance fell 80 -> 49 within a minute, trapped
+  gas 300 -> 147 mL, Vt climbed 128 -> 192 and MAP 66 -> 92. Everything the
+  scenario exists to show decayed out of existence inside the first minute,
+  which is why its briefed Vt 150, objective 5 ("impaired preload, low MAP")
+  and hint 7 were all unreachable. One root cause, three symptoms.
+
+  The cause was `bronchoRelaxFactor`, which credited the patient's own reflex
+  beta tone as bronchodilator relief. The spasm raises beta tone (stress,
+  baroreflex, nociception); that beta tone then bronchodilated them.
+
+  v4.43 had already rejected exactly this reasoning - its comment reads "the
+  endogenous surge is already maximal and is not enough - that is why exogenous
+  adrenaline is first-line" - but scoped the subtraction to `anaphSurge` alone.
+  The reasoning was never specific to anaphylaxis; only the code was.
+
+  v4.50 generalises it. `state.betaTargetEndo` publishes the previous tick's
+  betaTarget, which is built purely from endogenous drives (profile rest +
+  nociception + MH + anaphylaxis, scaled by beta blockade). Every drug pressor
+  - adrenaline, ephedrine, noradrenaline, ketamine, salbutamol - pushes
+  betaTone ABOVE that target, after the relaxation. So `betaTone -
+  betaTargetEndo` is the exogenous beta on board and nothing else, and that is
+  now what bronchodilates. Floored at BETA_REST so beta blockade cannot hand
+  out free relief. This subsumes v4.43's anaphylaxis case, since anaphSurge is
+  one of betaTarget's own terms.
+
+  Bronchospasm scenario, untreated, after: resistance holds 77-80, Vt holds
+  127-131, SpO2 84-86, etCO2 climbs to 118. It stays severe.
+
+  The other half, and the check that matters: a genuinely refractory spasm
+  (ventilation adjusted, nothing given) now holds at resistance 80.0 and Vt 127
+  indefinitely, and adrenaline 100 mcg then takes it to 34 with Vt 254. Before
+  this change that same patient self-relieved to 49 on their own. Sevoflurane,
+  salbutamol, ketamine and magnesium all still work unchanged (measured at
+  t=240: 12.9, 34.1, 13.7, 53.6 against an untreated 80.0).
+
+  2. "PIP 45" WAS ALWAYS IMPOSSIBLE.
+
+  The setup runs PCV at pinsp 20 over PEEP 5, so peak pressure is ~25-28 by
+  construction whatever the severity - the measured maximum over ten minutes is
+  28.7. A pressure-controlled breath cannot exceed its set pressure; that is
+  the mode, not a calibration error. v4.4 chose PCV deliberately so the
+  pathology shows as a Vt collapse rather than a pressure spike, and that
+  decision stands.
+
+  So the text is corrected to what PCV actually shows, and objective 1 now
+  teaches the mode dependence explicitly: in pressure control you lose volume,
+  in volume control you would instead see the pressure spike. Same pathology,
+  different dial. That is better teaching than the old "high-pressure /
+  low-volume signature", which is not a thing a ventilator ever shows you both
+  halves of at once.
+
+  3. OBJECTIVE 5 AND HINT 7 KEPT, AND NOW REACHABLE.
+
+  Gas trapping was never unmodelled - LUNG_VOLUME_PRELOAD_K_FRAC (v3.4) is a
+  real path and at t=1 it cuts preload 19%. What it does not do is produce
+  frank hypotension at the briefed settings, because the baroreflex defends
+  MAP and at Vt 127 there is little volume to stack.
+
+  But it is strongly dose-dependent on how the patient is ventilated, and that
+  is the teaching:
+
+      RR 8  (hint 1)       autoPEEP 1.25   MAP 93
+      RR 14 (as briefed)   autoPEEP 2.71   MAP 89
+      RR 30                autoPEEP 6.65   MAP 80
+      RR 30 + pinsp 30     autoPEEP 8.68   MAP 75
+
+  Eighteen mmHg between following hint 1 and ventilating the wrong way. So
+  objective 5 and hint 7 are rewritten to name that mechanism - ventilating
+  harder against an obstructed airway stacks breaths and costs pressure - which
+  is reachable through the trainee's own choice rather than scripted, and which
+  finally makes hint 1 earn its place.
+
+  4. GLOBAL EFFECT - EVERY BRONCHOSPASM IN THE SIM IS NOW MORE SEVERE.
+
+  This is not a scenario-local change. Untreated, resistance at t=600:
+
+      bronchospasm   49 -> 80      SpO2 85.7 -> 84.3   etCO2  88 -> 118
+      sepsis         38 -> 79      SpO2 92.1 -> 84.7   etCO2 106 -> 110
+      anaphylaxis    47 -> 80      SpO2 89.2 -> 84.8   etCO2  47 -> 129
+      emergence      40 -> 59      SpO2 91.0 -> 87.6
+      anaphBrewing   34 -> 51      SpO2 90.9 -> 88.7
+      aspiration     17 -> 29      SpO2 81.9 -> 79.6
+
+  The anaphylaxis one is the largest and deserves calling out: its respiratory
+  limb goes from mild (Vt held at 500, etCO2 47) to severe (Vt collapses to 91,
+  etCO2 129). That is a real change to a scenario tuned deliberately in v4.43 -
+  though v4.43's own stated goal for that pass included "strengthen the
+  respiratory limb", and its MAP stays on the target chosen then (49-55 against
+  a ~50 aim). Treatment still works: the sweep plan's adrenaline takes
+  resistance 80 -> 27 and holds Vt at 500. F18 still passes 13/13.
+
+  The emergence consequence is worse and is NOT fixed here. Its spontaneous
+  bronchospasm - a known open item, fires at t~292, briefing never mentions it
+  - now holds at resistance ~50 rather than ~40, so the scenario's OWN
+  recommended plan now ends with an awake patient (BIS 98) at SpO2 88.8, etCO2
+  54.5 and MAP 133. That is the emergence half of the item v4.49 answered for
+  sepsis, and it now needs the same text-only pass. Left for its own change
+  rather than widened into this one.
+
+  5. sweep.js TREATMENTS for bronchospasm rewritten.
+
+  It was every hint applied at once - sevo 3% on top of undiminished propofol
+  TIVA, then adrenaline 100 mcg at t=90 when resistance had already fallen to
+  11.6. BIS bottomed at 9.8 and the adrenaline swung MAP to 130 and HR to 140.
+  Hint 6 offers adrenaline for REFRACTORY cases and that plan never becomes
+  one. Now a clinician's escalation that stops when it works: RR 8, FiO2 1.0,
+  sevo 2% with the propofol backed 8 -> 4 so the two do not stack, salbutamol,
+  magnesium. Peak BIS 17, peak MAP 83, peak HR 117, resistance 9.2 and Vt 559
+  by t=180. The refractory adrenaline path moved into probe F23.
+
+  Tests: probes 111/111 across 22 findings (new F23, 12 checks), voucher-probe
+  15/15, scan 0 BUG-level findings, 0 runtime errors. scan CLIN rises 25 -> 32,
+  all of it the intended severity increase above: mostly existing findings with
+  shifted numbers, plus newly-flagged SpO2 on the scenarios listed in 4.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.49  ("Sepsis: someone has to keep this patient asleep")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6543,6 +6672,13 @@ const state = {
        ever released the spasm, so the co-trigger was one-shot by accident. */
     anaphSeverity: 0,
     anaphSurge: 0,
+    /* v4.50: the previous tick's betaTarget, i.e. the ENDOGENOUS part of
+       betaTone (rest + nociception + MH + anaphylaxis, scaled by beta
+       blockade). Drug pressors push betaTone above this value after the
+       relaxation, so `betaTone - betaTargetEndo` isolates the exogenous
+       beta on board. bronchoRelaxFactor uses it so a patient's own reflex
+       catecholamines do not bronchodilate them - see the block that reads it. */
+    betaTargetEndo: CONFIG.BETA_REST,
     anaphResolution: 0,
     anaphBronchOwned: false,
     anaphBronchFired: false,
@@ -7225,9 +7361,39 @@ setInterval(() => {
                was wanted all along: the spasm is severe until treated, and
                adrenaline reverses it. betaTone tracks betaTarget within ~2s so
                the subtraction is a close approximation, and it is floored at 0. */
-            const endogenousSurgeBeta = state.anaphSurge * CONFIG.ANAPHYLAXIS_SYMP_BETA;
+            /* v4.50: generalises v4.43's endogenous-surge discount from
+               anaphylaxis to ALL reflex beta tone.
+
+               v4.43 subtracted `anaphSurge * ANAPHYLAXIS_SYMP_BETA` here on the
+               reasoning that a patient's own catecholamine surge is already
+               maximal and is not enough - which is exactly why exogenous
+               adrenaline is first-line. That reasoning was never specific to
+               anaphylaxis, but the subtraction was, and the bronchospasm
+               scenario paid for it: the spasm's own reflex beta rise
+               bronchodilated the patient, so resistance decayed 80 -> 49
+               within a minute, trapped gas 300 -> 147 mL, VT 128 -> 192 and
+               MAP 66 -> 92. A scenario titled "severe bronchospasm" got
+               steadily better while nobody treated it, which made its briefed
+               VT 150, objective 5 ("impaired preload, low MAP") and hint 7
+               ("if MAP drops, suspect gas trapping") all unreachable.
+
+               `betaTargetEndo` is the previous tick's betaTarget, which is
+               built purely from endogenous drives (rest + nociception + MH +
+               anaphylaxis, scaled by beta blockade). Every drug pressor -
+               adrenaline, ephedrine, noradrenaline, ketamine, salbutamol -
+               pushes betaTone ABOVE that target after the relaxation, so the
+               difference is the exogenous beta on board and nothing else.
+               Adrenaline therefore still reverses a spasm exactly as before;
+               the patient's own reflex no longer does.
+
+               Floored at BETA_REST so beta blockade cannot make the threshold
+               negative and hand the patient free bronchodilation. This
+               subsumes the v4.43 anaphylaxis case, since anaphSurge is one of
+               betaTarget's own terms. */
+            const endogenousBeta = Math.max(CONFIG.BETA_REST,
+                                            state.betaTargetEndo || CONFIG.BETA_REST);
             const bronchoRelaxFactor =
-                  2.0 * Math.max(0, state.betaTone - CONFIG.BETA_REST - endogenousSurgeBeta)
+                  2.0 * Math.max(0, state.betaTone - endogenousBeta)
                 + 1.5 * state.mac
                 + 1.0 * (p.ketCe / 2.0)
                 + CONFIG.SALB_BRONCHO_GAIN * (p.salbCe / CONFIG.SALB_CE_REF)   // v4.38: was 3.0*(Ce/0.05); the 0.05 reference was ~37x too high (real peak Ce ~0.00134), so this term was near-inert
@@ -7570,6 +7736,11 @@ setInterval(() => {
         CONFIG.PARASYMP_REST, 0, CONFIG.PARASYMP_CLAMP,
         opioidVagalDrive, 0,
         CONFIG.PARASYMP_OPIOID_K, 1);
+    /* v4.50: publish the endogenous beta target for the bronchospasm block,
+       which runs earlier in the tick and therefore reads the previous tick's
+       value - a 100 ms lag, immaterial here, and the same pattern betaTarget
+       itself already uses for bbBlockFraction. */
+    state.betaTargetEndo = betaTarget;
     state.alphaTone    += (alphaTarget    - state.alphaTone)    * CONFIG.TONE_DECAY_TAU;
     state.betaTone     += (betaTarget     - state.betaTone)     * CONFIG.TONE_DECAY_TAU;
     state.parasympTone += (parasympTarget - state.parasympTone) * CONFIG.TONE_DECAY_TAU;
@@ -10696,14 +10867,29 @@ const SCENARIOS = {
     // Tests user on a managed escalation - ventilator strategy + drug therapy.
     bronchospasm: {
         name: 'Severe bronchospasm',
-        briefing: 'Just induced for emergency laparotomy. Propofol TIVA, ETT in. PIP 45, VT 150, SpO2 falling.',
-        setupBrief: 'Adult, just intubated for an emergency laparotomy. Propofol TIVA running, ETT secured. Within seconds of intubation: high airway pressures (PIP 45+), very low delivered tidal volumes (~150 mL). Wheeze on auscultation, SpO2 starting to fall. Some gas trapping already - autoPEEP visible.',
+        /* v4.50: "PIP 45" was unreachable and always had been. The setup runs
+           PCV at pinsp 20 over PEEP 5, so peak pressure is ~25-28 by
+           construction no matter how severe the spasm - the measured maximum
+           across a ten-minute run was 28.7. This is mode arithmetic, not a
+           calibration problem: a pressure-controlled breath cannot exceed its
+           set pressure, which is the whole point of the mode.
+
+           v4.4 chose PCV deliberately so the pathology presents as a Vt
+           collapse on the now-separate Vt display rather than a pressure
+           spike, and that decision stands. So the text is corrected to what
+           PCV shows, and objective 1 now teaches the mode dependence
+           explicitly - which is better than the old text, because "the
+           high-pressure / low-volume signature" is not a thing a ventilator
+           ever shows you both halves of at once. In PCV you lose volume; in
+           VCV you gain pressure. Same pathology, different dial. */
+        briefing: 'Just induced for emergency laparotomy. Propofol TIVA, ETT in. PCV: Vt collapsed to ~130 mL, SpO2 falling, wheeze.',
+        setupBrief: 'Adult, just intubated for an emergency laparotomy. Propofol TIVA running, ETT secured. Ventilating in pressure control at 20 cmH2O over PEEP 5. Within seconds of intubation the delivered tidal volume has collapsed to ~130 mL against a set pressure that would normally give 700. Wheeze on auscultation, SpO2 falling into the mid 80s. Gas trapping already building - autoPEEP visible on the ventilator.',
         objectives: [
-            'Recognise the high-pressure / low-volume signature of severe bronchospasm',
+            'Recognise severe bronchospasm from the collapsed tidal volume, and understand that in pressure control you lose volume where in volume control you would instead see the airway pressure spike',
             'Adjust ventilator: low RR, long expiratory time, prioritise oxygenation over ventilation',
             'Use the bronchodilator properties of inhalational and IV agents',
             'Escalate appropriately if first-line measures are insufficient',
-            'Recognise haemodynamic consequences of gas trapping (impaired preload, low MAP)'
+            'Recognise that ventilating harder against an obstructed airway stacks breaths, and that the resulting gas trapping impedes venous return and costs blood pressure'
         ],
         hints: [
             'Lower the rate (RR 8-10) and lengthen expiratory time - accept hypercapnia',
@@ -10711,8 +10897,8 @@ const SCENARIOS = {
             'Ketamine has bronchodilator + analgesic + anaesthetic benefit',
             'Salbutamol 250mcg IV (Emergency tab) for direct beta-2 effect',
             'Magnesium 2g IV adds bronchodilation by a different mechanism',
-            'Low-dose adrenaline (10-100 mcg) for refractory cases',
-            'If MAP drops, suspect gas trapping - disconnecting briefly may help'
+            'Low-dose adrenaline (10-100 mcg) for refractory cases - the patient\'s own catecholamines are already maximal and are not relieving this, which is exactly why exogenous adrenaline works when nothing else has',
+            'Resist the urge to ventilate harder. Going the wrong way costs pressure: at RR 30 autoPEEP reaches 6.7 and MAP sits around 80, against autoPEEP 1.3 and MAP 93 at RR 8. If MAP drops, suspect gas trapping - slow the rate, or disconnect briefly and let the chest empty'
         ],
         setup() {
             setProfile('adult');
