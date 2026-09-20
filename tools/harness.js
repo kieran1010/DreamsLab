@@ -294,7 +294,7 @@ function boot(opts = {}) {
         'setAirway', 'setNoci', 'toggleEvent', 'setBleed', 'setRhythm', 'calcMAP',
         'physCardiacOutput', 'physCOBaseline', 'physSVRBaseline', 'physStatus',
         'suctionAirway', 'setProfile', 'resolveAllEvents', 'setTimeScale',
-        'saturate', 'clamp', 'hasPulse',
+        'saturate', 'clamp', 'hasPulse', 'onsetGate', 'onsetRamp',
         'ENT_CONFIG', 'PREMIUM_SCENARIOS', 'entConfigured', 'hasPro', 'isScenarioLocked',
         'entVerifyToken', 'entInit', 'entRenderUI', 'pickScenario',
     ];

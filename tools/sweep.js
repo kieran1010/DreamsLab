@@ -48,6 +48,32 @@ function extras(dl) {
     };
 }
 
+/* v4.57: every action time shifts by the standard onset lead-in.
+
+   Scenarios now open on a patient who looks normal and deteriorate after
+   CONFIG.ONSET_LEAD_IN seconds, so a plan written against the old behaviour
+   treats a pathology that has not happened yet. Several did: the vagal plan
+   released the surgeon's stimulus at t=20, before the bradycardia existed at
+   all, and the MH plan turned the vaporiser off before the etCO2 had moved -
+   so the "treated" run was not a treatment, it was prophylaxis, and comparing
+   it against the untreated run measured nothing.
+
+   Shifting the whole plan rather than editing times one by one keeps every
+   tuned INTERVAL intact (the emergence plan's sevo-off -> remi-off ->
+   sugammadex -> extubate sequence, the bronchospasm escalation ladder), which
+   is where the calibration actually lives.
+
+   `induction` is exempt: nothing is wrong with that patient, there is no
+   pathology to wait for, and its eleven steps are a walkthrough the trainee
+   drives from t=0. */
+const LEAD_IN = 20;
+const PLAN_EXEMPT = new Set(['induction']);
+function planFor(key) {
+    const plan = TREATMENTS[key] || [];
+    if (PLAN_EXEMPT.has(key)) return plan;
+    return plan.map(a => ({ ...a, t: a.t + LEAD_IN }));
+}
+
 /**
  * Run one scenario for `durationSec`, applying `plan` (an array of
  * { t, label, do }) at the given simulated second.
@@ -266,11 +292,11 @@ function main() {
     for (const key of keys) {
         process.stderr.write('  ' + key.padEnd(22));
         const untreated = runScenario(key, [], DURATION, SAMPLE);
-        const treated   = runScenario(key, TREATMENTS[key] || [], DURATION, SAMPLE);
+        const treated   = runScenario(key, planFor(key), DURATION, SAMPLE);
         totalErrors += untreated.errors.length + treated.errors.length;
         results[key] = {
             untreated, treated,
-            treatmentPlan: (TREATMENTS[key] || []).map(a => ({ t: a.t, label: a.label })),
+            treatmentPlan: planFor(key).map(a => ({ t: a.t, label: a.label })),
         };
         process.stderr.write(`ok  (runtime errors: ${untreated.errors.length + treated.errors.length})\n`);
     }
@@ -284,4 +310,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { runScenario, TREATMENTS };
+module.exports = { runScenario, TREATMENTS, planFor };

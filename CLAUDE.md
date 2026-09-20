@@ -9,7 +9,7 @@ Deployed to **synapse.hypnos.one** via GitHub Pages from `main`. **Pushing to
 
 ## The one structural fact
 
-**Everything is in `index.html`.** ~13,400 lines: styles, markup and the entire
+**Everything is in `index.html`.** ~15,500 lines: styles, markup and the entire
 simulator in a single inline `<script>`. No build step, no bundler, no
 dependencies, no framework. Open the file in a browser and it runs — with one
 exception, the Resources tab, below.
@@ -52,6 +52,7 @@ anchors. Grep for `[CONFIG]`, `[PHYSIOLOGY TICK]`, `[SCENARIOS]` and so on.
 | `scenarioReset()` | 9512 | Clears state between scenarios |
 | `loadScenario()` | 9642 | `scenarioReset()` → `setup()` → sync stimulus → briefing |
 | `PHYS_GROUPS` | 10684 | The Physiology modal's gauges, and their ranges |
+| `physiologyTick()` | ~7990 | The tick body, named since v4.57 so `loadScenario()` can pre-roll it |
 | `[ENTITLEMENTS]` | 11440 | v4.33 voucher gating (live v4.42): `ENT_CONFIG`, `PREMIUM_SCENARIOS`, offline token verify |
 | `[RESOURCES]` | 11910 | v4.40/v4.41 Resources tab: fetches `resources/manifest.json` at runtime |
 
@@ -105,8 +106,12 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 158/158,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 166/166,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
+
+`sweep.js` shifts every treatment plan by `ONSET_LEAD_IN` (see `planFor()`), so
+the treated runs treat a pathology that has actually declared. `induction` is
+exempt — nothing is wrong with that patient.
 `tools/README.md` has the detail.
 
 Two things to know before extending the harness:
@@ -236,6 +241,61 @@ patient's gauge read amber. `physStatus()` now re-measures the ceiling rule
 against the headroom above `base` when that happens, but prefer explicit
 thresholds for anything where the resting value is not near an end.
 
+**9. A scenario that opens at its final presentation has no onset to teach.**
+Before v4.57 each scenario started its pathology whenever its own `setup()`
+happened to. `bronchospasm` assigned `p.bronchResistance = 80`, so SpO₂ read 86
+and Vt 127 *before the first tick ran*; `last` sat flat for 60 s and then
+stepped MAP 98 → 0 in one tick; `asthma` promised a bronchospasm and produced
+none in thirty minutes. The spread was 0–60 s with nothing deciding it.
+
+There is now one contract, in `[CONFIG]`: `ONSET_LEAD_IN` (20 s of the
+patient's own normal) then `ONSET_TAU` (25 s first-order build). Use
+`onsetGate()` for a pathology that already has a first-order build downstream —
+gate its *target* and the existing lag gives you the ramp — and `onsetRamp()`
+where the severity *is* the number everything reads. Both reach 1, so settled
+presentations are unaffected.
+
+`ONSET_TAU` is a default, not a rule. A pathology with a clinically dictated
+rate keeps it and takes only the lead-in — MH still ramps over three minutes.
+What is shared is the moment things start.
+
+**Use `onsetRampFor(evt)` / `onsetGateFor(evt)`, not the bare form, for anything
+driven by an event flag.** The window belongs to the scenario, never the user:
+`state.onsetArmed` records what `setup()` armed and `toggleEvent()` drops an
+event from it. Get this wrong and the window reaches into every probe and every
+Events-panel toggle — it did, and F15/F16/F17/F23 all measured a hand-toggled
+bronchospasm at resistance 12 instead of 80.
+
+**10. A lead-in is worthless if the first ten seconds are a loading artefact.**
+`scenarioReset()` leaves the tones at rest and the tick then relaxes them to
+target (~2 s), equilibrates preload (`TAU_FLUID_BUFFER` 30 s) and settles the
+stimulus lag. Measured, 8–12 s, during which MAP moved 16 mmHg in `maintenance`
+and 28 in `bronchospasm`. `loadScenario()` now pre-rolls `physiologyTick()` for
+`ONSET_SETTLE` (12 s) with `log()` silenced, then zeroes both clocks.
+
+**The pre-roll must run *after* the v4.29 nociception sync.** Placed next to
+`setup()` it drives the surgical stimulus to zero — the tick eases nociception
+toward a target `scenarioReset()` has just zeroed — and the sync then copies the
+zero back into the target. That is structural trap 3 reintroduced by the fix for
+a different problem, and it cost `maintenance` 32 mmHg. `ONSET_SETTLE` must also
+stay below `ONSET_LEAD_IN`, or the pathology starts during the pre-roll; F29
+checks it.
+
+**11. A seeded drug level that is not its infusion's steady state makes the
+scenario drift.** v4.56 found ten scenarios seeding remifentanil 2–3× what their
+own pump sustains, from a guessed reference line; `maintenance` ran MAP 62 → 89
+over ten untreated minutes as it washed out. v4.57 found the same thing in that
+scenario's induction fentanyl and rocuronium, seeded fresh in a case whose own
+text says "30 minutes since induction". Derive the value:
+
+```
+remiCe_ss = rate / (70 * vdScale)     rate in mcg/kg/min
+propCe_ss = rate / (3.6 * vdScale)    rate in mg/kg/hr
+```
+
+both independent of weight. For a bolus that is *supposed* to be decaying, seed
+it and say so.
+
 ## Conventions
 
 - **Changelog.** Each version gets an HTML comment block at the top of
@@ -257,6 +317,41 @@ thresholds for anything where the resting value is not near an end.
   disagree, fix one or the other — do not leave them inconsistent.
 
 ## Known open items
+
+- **Three scenarios cannot hold their etCO₂, independent of any pathology.**
+  Found during the v4.57 onset audit and deliberately not fixed, because it is
+  a ventilation-calibration question rather than an onset one. With the
+  pathology gated off entirely, `paedLap` runs etCO₂ 38 → 122, `aspiration`
+  38 → 113 and `pulmEmbolism` 38 → 22: the seeded 38 is nowhere near what each
+  scenario's own minute ventilation produces, so etCO₂ moves by tens of mmHg
+  from the first tick whatever else is happening. `ONSET_SETTLE`'s 12 s cannot
+  absorb it — etCO₂'s time constant is minutes — and it must stay under
+  `ONSET_LEAD_IN` anyway. paedLap and aspiration are both spontaneously
+  ventilating at a tidal volume the model reads as severe hypoventilation
+  (Vt 102 in a 20 kg child, 142 in a 70 kg adult), which is the real finding.
+  Probe F29 therefore excludes etCO₂ from its lead-in check and says why.
+  Same family as v4.56's remifentanil seeds: a seeded value that is not a
+  steady state.
+- **`paedLap` promises a desaturation it never produces.** Its briefing says
+  "Watch the SpO₂ — small reserve" and SpO₂ holds 99 for thirty untreated
+  minutes while etCO₂ climbs to 129. The claim is presumably about what happens
+  if the trainee stops the patient breathing, which is a different thing from
+  what the briefing appears to say. Not touched in v4.57; a content decision,
+  and tangled with the etCO₂ item above.
+- **`asthma` lands milder than its name.** v4.57 made it actually produce the
+  bronchospasm it always advertised, but with 1 MAC of sevoflurane on board
+  `bronchoRelaxFactor` caps it at resistance 22 of a possible 80 — PIP 12 → 20,
+  SpO₂ 99 → 96. That is pharmacologically correct and is now taught explicitly
+  (objective 2, hints 2 and 3, contrasting it with the TIVA-background
+  bronchospasm scenario), but "Acute severe asthma" still overpromises. The
+  lever would be reducing the scenario's background sevo, which changes what
+  the scenario is about. Left as a content decision.
+- **`p.airwayReactivity` does not scale spasm severity.** It drives
+  `reactivityRisk`, i.e. how likely a spasm is to be *triggered*, and nothing
+  reads it in the `bronchTarget` formula. So the asthma scenario's elevated 1.6
+  makes its patient more likely to spasm but not more severely — which is why
+  arming the event was the fix rather than raising reactivity. Defensible, but
+  the constant does not mean what its name suggests.
 
 - **The model has no perfusion-driven arrest pathway.** An exsanguinated
   patient asymptotes at MAP ~22 with a cardiac output of ~1.1 L/min and stays
@@ -323,16 +418,18 @@ thresholds for anything where the resting value is not near an end.
   a disconnected circuit still stops everything. `p.inspiredFiO2` is what the
   patient inhales (0.21 with no device) as against `p.fio2`, the dial setting.
   Probe F27 pins both halves.
-- The LAST scenario's `description` promises "seizure-like activity (brief BIS
-  spike)" during the CNS phase. There is no spike — BIS sits flat at 69–71 for
-  the whole run, peaking at 71.4. Noticed during the v4.54 pass and left alone:
-  fixing it means either adding a seizure BIS excursion to the LAST event block
-  or dropping the claim, and that is a content decision rather than a bug.
-  Same class as the text-vs-model findings the September 2026 audit chased.
-- **Seven of twenty scenarios have no `hints` array at all**: `anaphBrewing`,
-  `paedLap`, `asthma`, `aneurysm`, `autonomicDysreflexia`, `last` and `mh`.
-  (It was eight; emergence was the eighth until v4.52. `maintenance` has only
-  two, which is thin but not empty.) Not a bug, but the hints are where a
+- **Resolved in v4.57.** The LAST scenario's `description` promised
+  "seizure-like activity (brief BIS spike)" and there was no spike — BIS sat
+  flat at 69–71 all run. The CNS phase was a per-tick push on `betaTone`
+  (structural trap 1) that delivered nothing measurable, so the scenario was
+  sixty flat seconds followed by a single-tick step to arrest. It now drives
+  `alphaTarget`/`betaTarget` and a BIS excursion off `state.lastCnsSeverity`
+  (`LAST_CNS_BETA`/`ALPHA`/`BIS_SPIKE`): HR 81 → 96, MAP 90 → 120, BIS 69 → 92
+  over ~100 s before `LAST_ARREST_TIME` (60 → 120).
+- **Six of twenty scenarios have no `hints` array at all**: `anaphBrewing`,
+  `paedLap`, `aneurysm`, `autonomicDysreflexia`, `last` and `mh`. (It was
+  eight; emergence was the eighth until v4.52, asthma the seventh until v4.57.
+  `maintenance` has only two, which is thin but not empty.) Not a bug, but the hints are where a
   scenario's teaching actually lives — every text-vs-model finding in the
   September 2026 audit came from reading objectives and hints against measured
   behaviour, and a scenario without them cannot be checked that way.
