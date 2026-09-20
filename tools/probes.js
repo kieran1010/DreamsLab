@@ -1204,6 +1204,130 @@ probe('F19', 'Ischaemia moves the blood pressure, and titrated rate control heal
         'zero of each');
 });
 
+/* =============================================================================
+   F20  post-induction hypotension self-corrects in ten seconds
+   -----------------------------------------------------------------------------
+   The September 2026 six-scenario audit. The scenario's whole premise did not
+   exist. Briefing and setupBrief both promise "MAP sitting at 55 and not
+   improving"; measured, MAP was 56 at t=1, 70 by t=10 and 83 by t=600.
+
+   MAP 55 was a startup transient, not a state: scenarioReset() snaps BP to the
+   elderly profile's mapTarget, alphaTone starts at ALPHA_REST (0.2), and the
+   tick drives it to its nociception-4 target over ~2s. t=1 caught the trough on
+   the way up. Consequences: objective 5 ("aim for MAP > 65 within 1-2 minutes")
+   was already met untreated at t=10, hint 5's "5-10 minutes at MAP 55" was ten
+   seconds, and the scenario's own metaraminol + fluid landed on a recovered
+   patient and drove MAP to 108-118.
+
+   Fixed by nociception 4 -> 2, which is what objective 3 already claimed
+   ("no surgical stimulus yet to drive sympathetic tone") and what the setup
+   comment already claimed ("not yet enough to drive a clinically useful
+   sympathetic response"). Volume stays at 0.92 - nociception, not hypovolaemia,
+   was holding the pressure up.
+   ========================================================================== */
+probe('F20', 'Post-induction hypotension actually sits at MAP 55', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('hypotensionPostInd');
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 600); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr, bis: dl.state.bis });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const METAR = (t, d) => ({ t, do: dl => give(dl, 'metar', d) });
+    const EPHED = (t, d) => ({ t, do: dl => give(dl, 'ephed', d) });
+    const FLU   = (t, d) => ({ t, do: dl => give(dl, 'flu', d) });
+    const SEVO  = (t, v) => ({ t, do: dl => dl.setVentParam('sevo', v) });
+
+    const un = run();
+
+    /* 1. The briefed pressure is a STATE, not a one-second transient. */
+    const early = [5, 15, 30, 60].map(t => un.at(t).map);
+    note(`untreated MAP: t=5 ${un.at(5).map.toFixed(0)}, t=30 ${un.at(30).map.toFixed(0)}, ` +
+         `t=60 ${un.at(60).map.toFixed(0)}, t=120 ${un.at(120).map.toFixed(0)}, ` +
+         `t=300 ${un.at(300).map.toFixed(0)}, t=600 ${un.at(600).map.toFixed(0)}`);
+    expect(early.every(m => m >= 50 && m <= 60),
+        'the scenario genuinely sits at the briefed MAP 55',
+        `MAP at t=5/15/30/60 = ${early.map(m => m.toFixed(0)).join('/')}`,
+        'all within 50-60 (it used to be 56 then 70 by t=10)');
+
+    /* 2. It must not self-correct out of the teaching window. Objective 1's
+          target is >65; a trainee needs time to notice and act. */
+    const cross = un.rows.find(r => r.map > 65);
+    note(`untreated MAP first exceeds objective 1's 65 target at t=${cross ? cross.t : 'never'}`);
+    expect(cross && cross.t >= 180,
+        'it does not recover past the treatment target on its own for minutes',
+        `first MAP > 65 at t=${cross ? cross.t : 'never'}`,
+        '>= 180s, so there is something to recognise and treat (was t=10)');
+
+    /* 3. But hint 5 promises it DOES slowly creep up as propofol redistributes,
+          so it must not be frozen either. */
+    expect(un.at(600).map > un.at(30).map + 8,
+        'it still slowly creeps up over ten minutes, as hint 5 describes',
+        `MAP ${un.at(30).map.toFixed(0)} at t=30 -> ${un.at(600).map.toFixed(0)} at t=600`,
+        'a real upward drift - the hint describes propofol redistributing');
+
+    /* 4. Objective 4 lists four options and says they "all work". Each must
+          reach objective 5's target, and the two pressors must differ on HR in
+          the direction hints 6 and 7 explain. */
+    const metar = run([METAR(60, 0.5)]);
+    const ephed = run([EPHED(60, 6)]);
+    const fluid = run([FLU(60, 0.5)]);
+    const sevo  = run([SEVO(60, 1.5)]);
+    /* Checked at t=300, not t=180: hints 3 and 4 explicitly rank fluid and a
+       sevo reduction as the SLOW options ("1-2 minutes to peak effect",
+       "takes 3-5 minutes"), so requiring all four inside three minutes would
+       assert against the scenario's own teaching. The speed ranking is the
+       separate check below. */
+    note(`at t=300 - metaraminol 0.5mg ${metar.at(300).map.toFixed(0)} (HR ${metar.at(300).hr.toFixed(0)}), ` +
+         `ephedrine 6mg ${ephed.at(300).map.toFixed(0)} (HR ${ephed.at(300).hr.toFixed(0)}), ` +
+         `500mL ${fluid.at(300).map.toFixed(0)}, sevo 1.5% ${sevo.at(300).map.toFixed(0)}; ` +
+         `untreated ${un.at(300).map.toFixed(0)}`);
+    expect([metar, ephed, fluid, sevo].every(r => r.at(300).map > 65),
+        'all four of objective 4\'s options reach the target',
+        `MAP at t=300: metaraminol ${metar.at(300).map.toFixed(0)}, ephedrine ` +
+        `${ephed.at(300).map.toFixed(0)}, fluid ${fluid.at(300).map.toFixed(0)}, ` +
+        `sevo ${sevo.at(300).map.toFixed(0)}`,
+        'all > 65 - objective 4 says they all work');
+    expect(metar.at(300).hr < un.at(300).hr && ephed.at(300).hr > un.at(300).hr,
+        'metaraminol slows the heart and ephedrine speeds it (hints 6 and 7)',
+        `untreated HR ${un.at(300).hr.toFixed(0)}, metaraminol ${metar.at(300).hr.toFixed(0)}, ` +
+        `ephedrine ${ephed.at(300).hr.toFixed(0)}`,
+        'opposite directions - baroreflex vs direct beta');
+
+    /* 5. A pressor must act faster than fluid or a sevo reduction - hints 2, 3
+          and 4 rank them explicitly. */
+    const t65 = r => { const c = r.rows.find(x => x.t > 60 && x.map > 65); return c ? c.t : Infinity; };
+    note(`time to MAP > 65: metaraminol ${t65(metar)}s, ephedrine ${t65(ephed)}s, ` +
+         `fluid ${t65(fluid)}s, sevo ${t65(sevo)}s`);
+    expect(t65(metar) < t65(fluid) && t65(ephed) < t65(fluid),
+        'the pressors act faster than fluid, as hints 2 and 3 rank them',
+        `metaraminol ${t65(metar)}s and ephedrine ${t65(ephed)}s vs fluid ${t65(fluid)}s`,
+        'both pressors quicker - "effect within 10-30 seconds" vs "1-2 minutes"');
+
+    /* 6. And the recommended management must not overshoot into hypertension,
+          which is what treating an already-recovered patient used to do. */
+    const plan = run([METAR(60, 0.5), FLU(61, 0.25)]);
+    const peak = Math.max(...plan.rows.map(r => r.map));
+    note(`sweep plan (metaraminol 0.5mg + 250mL): peak MAP ${peak.toFixed(0)}, ` +
+         `t=600 ${plan.at(600).map.toFixed(0)}`);
+    expect(peak < 95 && plan.at(180).map > 65,
+        'the recommended management corrects without overshooting',
+        `peak MAP ${peak.toFixed(0)}, MAP ${plan.at(180).map.toFixed(0)} at t=180`,
+        'target reached, peak under 95 (full doses on a recovered patient hit 118)');
+
+    expect(un.errors.length === 0 && un.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length} tick errors, ${un.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
