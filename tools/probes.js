@@ -2812,6 +2812,155 @@ probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => 
         'above 60 - the deliberate toggle wins over the scenario default');
 });
 
+/* =============================================================================
+   F30  the sim alarmed at an awake patient, and a student could not retry a case
+   -----------------------------------------------------------------------------
+   Two v4.58 UI findings.
+
+   1. Loading the sim and leaving it alone fired a high-priority alarm within
+      about a minute. The default patient and the `induction` scenario both
+      open awake, undrugged and unstimulated - which is exactly the state the
+      awareness accumulator reads as ripe for eye opening - and
+      triggerAwareness('eyeOpening') called playAlarmBurst('high')
+      unconditionally. The alarm exists to warn about awareness UNDER
+      ANAESTHESIA; a patient who has had no anaesthetic and is having nothing
+      done to them is not aware, they are just awake.
+
+      The event still fires and still logs. Only the alarm is gated, and only
+      when BOTH halves hold: no hypnotic acting (consciousness still at
+      CONFIG.BIS_BASE, which only propofol, volatile, midazolam,
+      dexmedetomidine and ketamine move) AND no surgical stimulus. The second
+      half matters as much as the first - an undrugged patient being operated
+      on is the real awareness catastrophe and must still alarm.
+
+   2. A student who made a mess of a case had no way to restart it from the
+      brief view; they had to go back through the picker. The brief footer now
+      carries a Reset scenario button calling resetCurrentScenario().
+   ========================================================================== */
+probe('F30', 'Eye opening only alarms when the patient should be asleep', () => {
+
+    /* Count alarm bursts around one explicit eye-opening trigger. The counter
+       is zeroed immediately before the call: the setup phase legitimately
+       raises other alarms (apnoea, desaturation), and counting those would
+       make every case look like it alarmed. */
+    function alarmOnEyeOpening(setup) {
+        const sim = boot(); const dl = sim.dl;
+        let bursts = 0;
+        sim.context.playAlarmBurst = () => { bursts++; };
+        setup(dl, sim);
+        dl.state.events.eyeOpening = false;   // so the toggle arms rather than clears
+        bursts = 0;
+        dl.triggerAwareness('eyeOpening');
+        return { alarmed: bursts > 0, consc: dl.state.consciousness,
+                 noci: dl.state.nociception, fired: !!dl.state.events.eyeOpening };
+    }
+
+    /* 1. THE FINDING. Awake, undrugged, nothing being done - no alarm. */
+    const fresh = alarmOnEyeOpening((dl, sim) => sim.advance(1000));
+    note(`fresh load: consciousness ${fresh.consc.toFixed(1)}, nociception ` +
+         `${fresh.noci.toFixed(1)}, event fired ${fresh.fired}, alarmed ${fresh.alarmed}`);
+    expect(!fresh.alarmed && fresh.fired,
+        'an awake undrugged patient opening their eyes does not sound an alarm',
+        `event fired ${fresh.fired}, alarm ${fresh.alarmed}`,
+        'the event still fires and logs; the alarm does not');
+
+    /* 2. But the alarm must survive where it means something. An undrugged
+          patient being OPERATED ON is the case the gate must not swallow. */
+    const surgery = alarmOnEyeOpening((dl, sim) => {
+        dl.setNoci(6);
+        for (let t = 0; t < 40; t++) sim.advance(1000);
+    });
+    note(`undrugged with surgery underway: consciousness ${surgery.consc.toFixed(1)}, ` +
+         `nociception ${surgery.noci.toFixed(1)}, alarmed ${surgery.alarmed}`);
+    expect(surgery.alarmed,
+        'but an undrugged patient under surgical stimulus still alarms',
+        `nociception ${surgery.noci.toFixed(1)}, alarm ${surgery.alarmed}`,
+        'true - this is the awareness emergency the alarm is for');
+
+    /* 3. And the ordinary case: anaesthetic on board, patient going light. */
+    const light = alarmOnEyeOpening((dl, sim) => {
+        dl.loadScenario('maintenance');
+        for (let t = 0; t < 5; t++) sim.advance(1000);
+    });
+    const emerging = alarmOnEyeOpening((dl, sim) => {
+        dl.loadScenario('emergence');
+        for (let t = 0; t < 5; t++) sim.advance(1000);
+    });
+    note(`maintenance (consciousness ${light.consc.toFixed(1)}): alarmed ${light.alarmed}; ` +
+         `emergence with the vaporiser still on (${emerging.consc.toFixed(1)}): ` +
+         `alarmed ${emerging.alarmed}`);
+    expect(light.alarmed && emerging.alarmed,
+        'and any anaesthetic on board brings the alarm back',
+        `maintenance ${light.alarmed}, emergence ${emerging.alarmed}`,
+        'both true - consciousness below BIS_BASE means something is acting');
+
+    /* 4. A patient who has genuinely finished waking up, with nothing being
+          done to them, is the fresh-load case again and must stay quiet. */
+    const woken = alarmOnEyeOpening((dl, sim) => {
+        dl.loadScenario('emergence');
+        dl.setVentParam('sevo', 0); dl.setInf('remi', 0); dl.setNoci(0);
+        for (let t = 0; t < 600; t++) sim.advance(1000);
+    });
+    note(`fully woken, volatile washed out: consciousness ${woken.consc.toFixed(1)}, ` +
+         `nociception ${woken.noci.toFixed(1)}, alarmed ${woken.alarmed}`);
+    expect(!woken.alarmed,
+        'a fully woken patient with nothing being done to them stays quiet too',
+        `consciousness ${woken.consc.toFixed(1)}, alarm ${woken.alarmed}`,
+        'no alarm - an awake extubated patient opening their eyes is the goal');
+
+    /* 5. Reset restores the scenario exactly, including the onset clock, and
+          replays identically - which is the whole point of offering it. */
+    const sim = boot(); const dl = sim.dl;
+    dl.loadScenario('bronchospasm');
+    const snap = () => ({ vt: dl.state.tidalVolume, spo2: dl.state.spo2,
+                          res: dl.state.patient.bronchResistance });
+    for (let t = 0; t < 200; t++) sim.advance(1000);
+    const firstRun = snap();
+
+    // A student makes a mess of it: wrong gas, wrong infusion, a bolus.
+    dl.setVentParam('sevo', 8);
+    dl.setInf('prop', 20);
+    for (let t = 0; t < 60; t++) sim.advance(1000);
+    const meddled = snap();
+
+    dl.resetCurrentScenario();
+    const atReset = snap();
+    const onsetAtReset = dl.state.onsetTimer;
+    const sevoAtReset = dl.state.machine.vent.sevo;
+    const propAtReset = dl.state.machine.pumps.prop;
+    for (let t = 0; t < 200; t++) sim.advance(1000);
+    const replay = snap();
+
+    note(`bronchospasm at t=200 Vt ${firstRun.vt.toFixed(0)}/SpO2 ${firstRun.spo2.toFixed(0)}; ` +
+         `after meddling Vt ${meddled.vt.toFixed(0)}/SpO2 ${meddled.spo2.toFixed(0)}; ` +
+         `at reset Vt ${atReset.vt.toFixed(0)}/SpO2 ${atReset.spo2.toFixed(0)}; ` +
+         `replayed to t=200 Vt ${replay.vt.toFixed(0)}/SpO2 ${replay.spo2.toFixed(0)}`);
+    expect(onsetAtReset === 0 && sevoAtReset === 0 && propAtReset === 8 &&
+           atReset.res < 10,
+        'reset puts the scenario back to its own setup, onset clock included',
+        `onsetTimer ${onsetAtReset}, vent.sevo ${sevoAtReset} (student set 8), ` +
+        `pumps.prop ${propAtReset} (student set 20), resistance ${atReset.res.toFixed(1)}`,
+        'the student\'s changes gone and the onset window restarted');
+    expect(Math.abs(replay.vt - firstRun.vt) < 1 &&
+           Math.abs(replay.spo2 - firstRun.spo2) < 0.5 &&
+           Math.abs(replay.res - firstRun.res) < 1,
+        'and the reset case replays identically to the first attempt',
+        `Vt ${firstRun.vt.toFixed(0)} -> ${replay.vt.toFixed(0)}, ` +
+        `SpO2 ${firstRun.spo2.toFixed(1)} -> ${replay.spo2.toFixed(1)}, ` +
+        `resistance ${firstRun.res.toFixed(1)} -> ${replay.res.toFixed(1)}`,
+        'same numbers - a retry is a genuine retry, not a variant');
+
+    /* 6. And it is wired to something. A button that calls a function that
+          does not exist is the classic way this rots. */
+    const html = require('fs').readFileSync(HTML_PATH, 'utf8');
+    expect(/id="scenarios-reset"[^>]*onclick="resetCurrentScenario\(\)"/.test(html) &&
+           /function resetCurrentScenario\(\)/.test(html),
+        'the Reset scenario button exists and is wired to the function',
+        `button present: ${/id="scenarios-reset"/.test(html)}, ` +
+        `handler defined: ${/function resetCurrentScenario\(\)/.test(html)}`,
+        'both - the render path is not covered headlessly, so this is the check');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */

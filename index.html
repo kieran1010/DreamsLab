@@ -51,6 +51,77 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.58  ("Let the awake patient open their eyes")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Two small UI changes, both asked for by teaching use.
+
+  1. RESET SCENARIO. The brief view now carries a "Reset scenario" button, so a
+  student who has made a mess of a case can try it again without going back
+  through the picker to find it. It calls resetCurrentScenario(), which does
+  nothing of its own - it just calls loadScenario() on the scenario already
+  loaded, so a reset is byte-for-byte the same thing as picking the case fresh:
+  state cleared, setup reapplied, the v4.57 onset window restarted from zero and
+  the pre-roll settling the patient again. Measured on bronchospasm: 200 s in,
+  Vt 127 / SpO2 84 / resistance 80; after a student sets sevo 8 and propofol 20,
+  Vt 601 / SpO2 98 / resistance 8; at reset, Vt 700 / SpO2 99 / resistance 5
+  with onsetTimer 0 and the pumps back at the scenario's own values; 200 s later,
+  Vt 127 / SpO2 84 / resistance 80 again. A retry is a genuine retry rather than
+  a variant, which is the point of offering it.
+
+  Deliberately not behind a confirm(). The button only exists inside the brief
+  view, which a student has to open on purpose, and it says what it does.
+
+  2. THE AWAKE PATIENT NO LONGER SETS OFF AN ALARM. Loading the sim and leaving
+  it alone fired a high-priority alarm burst within about a minute. The default
+  patient and the `induction` scenario both open awake, undrugged and
+  unstimulated - which is exactly the state the awareness accumulator reads as
+  ripe for eye opening - and triggerAwareness('eyeOpening') called
+  playAlarmBurst('high') unconditionally.
+
+  The alarm exists to warn about awareness UNDER ANAESTHESIA. A patient who has
+  had no anaesthetic and is having nothing done to them is not aware; they are
+  just awake, and a monitor shrieking at them teaches the wrong lesson - it
+  trains students to ignore the one alarm that should never be ignored.
+
+  The event still fires and still logs. Only the alarm is gated, and only when
+  BOTH halves hold:
+
+    - No hypnotic acting. state.consciousness is saturate()'d down from
+      CONFIG.BIS_BASE by propofol, volatile, midazolam, dexmedetomidine and
+      ketamine and by nothing else, so consciousness still AT BIS_BASE means
+      none of them is doing anything. Any anaesthetic at all puts it below and
+      the alarm returns - including a patient going light under maintenance,
+      which is the case the alarm is really for.
+    - Nothing being done to them. An undrugged patient who is being OPERATED ON
+      is the real awareness catastrophe, so the stimulus half keeps the alarm
+      for exactly that.
+
+  Both halves were negative-tested, because a gate that is too generous is
+  worse than the noise it removes:
+
+    fresh load, undrugged, no stimulus          consciousness 98.0, noci 0  no alarm
+    undrugged, surgery underway                 consciousness 98.0, noci 6  ALARM
+    maintenance, anaesthetised                  consciousness 36.1, noci 5  ALARM
+    emergence, vaporiser still on               consciousness 80.2, noci 3  ALARM
+    fully woken, washed out, nothing being done consciousness 98.0, noci 0  no alarm
+
+  The last row is a bonus rather than a target: an extubated awake patient
+  opening their eyes is the goal of the case, not a hazard.
+
+  New constants AWARENESS_ALARM_CONSC_EPS (0.5, a hair below BIS_BASE - float
+  tolerance, not a dose) and AWARENESS_ALARM_NOCI_MAX (0.5).
+
+  New probe F30 pins all of it, including that the button is wired to a
+  function that exists - the render path is not covered headlessly, so a
+  string check on the markup is the available guard against exactly the rot
+  that leaves a dead onclick behind.
+
+  probes 173/173, voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime
+  errors.
+
+==================================================================================
   DREAMS LAB  v4.57  ("Twenty scenarios, one clock")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -4947,6 +5018,30 @@ input[type=range] {
     letter-spacing: 0.3px;
 }
 .brief-link:hover { color: #ccc; text-decoration: underline; }
+/* v4.58: the brief footer now carries two buttons on the right (Reset and
+   Close), so they get their own flex box rather than fighting the
+   space-between that separates them from the "choose different" link. */
+.brief-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+#scenarios-reset {
+    background: transparent;
+    color: #9bb4cc;
+    border: 1px solid #2f4a63;
+    border-radius: 3px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.72rem;
+    letter-spacing: 0.3px;
+}
+#scenarios-reset:hover {
+    background: #16283a;
+    color: #cfe0ef;
+    border-color: #3f6488;
+}
 
 
 /* Tab strip inside panel */
@@ -5886,7 +5981,13 @@ input[type=range] {
 
             <div class="brief-footer">
                 <button onclick="showScenarioPicker()" class="brief-link">&larr; Choose different scenario</button>
-                <button id="scenarios-modal-close2" onclick="toggleScenariosModal()">Close</button>
+                <div class="brief-footer-right">
+                    <!-- v4.58: restart the currently-loaded scenario from its
+                         own setup, so a student who has made a mess of a case
+                         can try it again without hunting for it in the picker. -->
+                    <button id="scenarios-reset" onclick="resetCurrentScenario()">Reset scenario</button>
+                    <button id="scenarios-modal-close2" onclick="toggleScenariosModal()">Close</button>
+                </div>
             </div>
         </div>
 
@@ -6409,7 +6510,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.57';
+const APP_VERSION = '4.58';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -7156,6 +7257,15 @@ const CONFIG = {
     AWARENESS_BREATHHOLD_CONSC: 65,
     AWARENESS_BREATHHOLD_NOCI: 3,
     AWARENESS_BREATHHOLD_PARALYSIS_MAX: 0.2,
+    /* v4.58: how the eye-opening ALARM (not the event) decides the patient was
+       meant to be asleep. See triggerAwareness(). CONSC_EPS is a hair below
+       BIS_BASE because consciousness sits exactly at BIS_BASE with no hypnotic
+       acting and strictly below it with any; 0.5 tolerates float noise without
+       admitting a real anaesthetic dose. NOCI_MAX is "nothing is being done to
+       them" - above it, an undrugged patient opening their eyes is an
+       awareness emergency and must still alarm. */
+    AWARENESS_ALARM_CONSC_EPS: 0.5,
+    AWARENESS_ALARM_NOCI_MAX: 0.5,
     AWARENESS_EYEOPEN_CONSC: 80,
     AWARENESS_EYEOPEN_PARALYSIS_MAX: 0.1,
     MOVEMENT_DURATION: 5,             // sec
@@ -11189,6 +11299,29 @@ function showScenarioPicker() {
     if (brief)  brief.style.display  = 'none';
 }
 
+/* v4.58: restart the scenario that is currently loaded.
+
+   Goes through loadScenario() rather than doing anything of its own, so a
+   reset is byte-for-byte the same thing as picking the scenario off the
+   picker: scenarioReset() clears state, setup() reapplies it, the onset
+   window starts again from zero and the pre-roll settles the patient. Any
+   drug the student gave, any vent change, any event they triggered is gone.
+
+   Deliberately NOT gated behind a confirm(). The button only exists inside
+   the brief view, which a student has to open on purpose, and it is labelled
+   plainly. A confirm on every reset would be friction on the action this
+   exists to make easy.
+
+   loadScenario() ends by calling showBriefing(), which re-opens the modal on
+   the brief view - so the student lands back on the case setup they are about
+   to re-attempt, which is where they want to be. */
+function resetCurrentScenario() {
+    const key = state.currentScenario;
+    if (!key || !SCENARIOS[key]) return;
+    log(`SCENARIO RESET: ${SCENARIOS[key].name}`);
+    loadScenario(key);
+}
+
 /* Show the brief view for a particular scenario, defaulting to the Setup tab. */
 function showScenarioBrief(key) {
     const picker = document.getElementById('scenarios-view-picker');
@@ -11346,11 +11479,38 @@ function triggerAwareness(kind) {
     if (btn) btn.classList.add('active');
     const labels = { movement:'PATIENT MOVEMENT', breathHolding:'BREATH HOLDING', eyeOpening:'EYE OPENING' };
     log(`AWARENESS: ${labels[kind]}`);
-    // Eye opening: fire a high-priority alarm burst. v4.35: this used to be
-    // commented "forces audio" and did - playAlarmBurst() now honours audioMode
-    // itself, so SILENT and ECG ONLY suppress this like any other alarm.
+    /* Eye opening: fire a high-priority alarm burst. v4.35: this used to be
+       commented "forces audio" and did - playAlarmBurst() now honours audioMode
+       itself, so SILENT and ECG ONLY suppress this like any other alarm.
+
+       v4.58: and only when the patient was supposed to be ASLEEP. The alarm
+       exists to warn about awareness under anaesthesia; a patient who has had
+       no anaesthetic and is having nothing done to them is not aware, they are
+       just awake. Before this, loading the sim and leaving it alone fired a
+       high-priority alarm within a minute or so - the default patient and the
+       induction scenario both open awake, undrugged and unstimulated, which is
+       exactly the state the awareness accumulator reads as ripe for eye
+       opening. The event still fires and still logs; it just does not shout.
+
+       Both halves of the test matter:
+
+       - No hypnotic acting. state.consciousness is saturate()'d down from
+         CONFIG.BIS_BASE by propofol, volatile, midazolam, dexmedetomidine and
+         ketamine only, so consciousness AT BIS_BASE means none of them is
+         doing anything. Any anaesthetic at all puts it below, and the alarm
+         returns - which is the case worth warning about, and includes a
+         patient going light under maintenance.
+       - Nothing being done to them. A patient with no anaesthetic on board
+         who is being OPERATED ON is the real awareness catastrophe, so the
+         stimulus check keeps the alarm for that. Emergence passes the
+         stimulus half but fails the hypnotic half until the volatile is
+         actually gone, by which point an open-eyed patient is the goal. */
     if (kind === 'eyeOpening') {
-        playAlarmBurst('high');
+        const noHypnotic = state.consciousness >= CONFIG.BIS_BASE - CONFIG.AWARENESS_ALARM_CONSC_EPS;
+        const noStimulus = state.nociception <= CONFIG.AWARENESS_ALARM_NOCI_MAX;
+        if (!(noHypnotic && noStimulus)) {
+            playAlarmBurst('high');
+        }
     }
 }
 
