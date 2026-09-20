@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 173/173,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 175/175,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 
 `sweep.js` shifts every treatment plan by `ONSET_LEAD_IN` (see `planFor()`), so
@@ -294,9 +294,11 @@ and 28 in `bronchospasm`. `loadScenario()` now pre-rolls `physiologyTick()` for
 `setup()` it drives the surgical stimulus to zero — the tick eases nociception
 toward a target `scenarioReset()` has just zeroed — and the sync then copies the
 zero back into the target. That is structural trap 3 reintroduced by the fix for
-a different problem, and it cost `maintenance` 32 mmHg. `ONSET_SETTLE` must also
-stay below `ONSET_LEAD_IN`, or the pathology starts during the pre-roll; F29
-checks it.
+a different problem, and it cost `maintenance` 32 mmHg. `ONSET_SETTLE` and `ONSET_LEAD_IN` are
+independent as of v4.59 — `onsetGate()`/`onsetRamp()` return 0 while
+`state.settling`, so the pre-roll cannot open the window however long it runs.
+Settle for as long as the physiology needs; set the lead-in from what a
+trainee needs.
 
 **12. A seeded drug level that is not its infusion's steady state makes the
 scenario drift.** v4.56 found ten scenarios seeding remifentanil 2–3× what their
@@ -334,6 +336,25 @@ it and say so.
   disagree, fix one or the other — do not leave them inconsistent.
 
 ## Known open items
+
+- **`CONFIG.ALARMS` thresholds are calibrated for a 70 kg adult**, so `paedLap`
+  trips five alarms (`sys` high, `map`, `rr`, `etco2`, `vt` high) on a
+  perfectly well 20 kg child, before anything has happened to them. v4.59's
+  lead-in suppression delays them but cannot fix them — they are still there at
+  t=8. This is structural trap 8 in the alarm layer rather than the gauge
+  layer: thresholds that do not resolve per profile. `bronchospasm`'s `pip`
+  alarm is the same family but benign (PCV at pinsp 20 over PEEP 5 is 25 cmH₂O
+  by construction); `emergence`'s `bis` high and `last`'s `bis` are the
+  scenarios being what they say they are, and are correct.
+- **Two ways to give a pathology the standard onset, and they are not
+  interchangeable** (v4.59). Where arming the event has no side effects of its
+  own, arm it in `setup()` and gate the severity (`onsetRampFor` /
+  `onsetGateFor`). Where arming has immediate side effects that gating cannot
+  hide — `aspiration` sets `p.resistance = 30` and lights the Events button —
+  defer the whole event via `state.onsetPendingEvents` and
+  `fireOnsetPendingEvents()`. A deferred event is deliberately *not* added to
+  `state.onsetArmed`: the window has been served by the wait, and gating it
+  again would delay it twice.
 
 - **The eye-opening alarm is gated on intent, not just depth** (v4.58). It
   fires only when a hypnotic is actually acting (`consciousness` below
