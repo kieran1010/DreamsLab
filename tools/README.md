@@ -213,6 +213,31 @@ transient, the slow creep hint 5 promises, all four of objective 4's options
 working, their speed ranking, the metaraminol-vs-ephedrine HR split, and that
 the recommended management does not overshoot.
 
+| F21 | haemorrhage bled at a constant rate, whatever the pressure | 0/9 |
+
+F21 is the second of that audit, and the structural one. The tick drained
+`p.bleedRate * dt` unconditionally, so a severe bleed was a fixed 25 mL/s tap
+whether MAP was 95 or 22. That emptied the patient to the 0.5 L `centralVolume`
+floor by t=130, but the real cost was the teaching: objective 2 ("the limits of
+pressors without volume") and hints 4-5 are all about permissive hypotension,
+and blood lost by t=300 was identical to two decimal places whether the trainee
+held a mean MAP of 43 or of 76. Fixed by scaling the rate with MAP about
+`BLEED_MAP_REF`, clamped to `BLEED_MAP_MIN_FRAC`..`BLEED_MAP_MAX_FRAC` - a named
+severity is a rate *at a given pressure*, not a constant - with
+`p.effectiveBleedRate` stored so the harness can integrate true loss. The same
+scenario also failed to open at its briefed MAP 65 (61 for one tick, then a
+climb to 74.7 by t=5), the same trap-1 startup transient F20 found; here the
+nociception is correct, so the setup seeds `alphaTone`/`betaTone` at their
+settled values instead of lowering the stimulus.
+
+The probe pins the opening pressure and its direction, that an uncontrolled
+bleed still produces profound shock, the monotonic blood-lost-vs-mean-MAP
+ranking across three resuscitation plans, that resuscitating hard into an
+uncontrolled bleed looks good at t=180 and fails by t=600, that early source
+control plus volume holds, and that late rescue discriminates - source control
+alone leaves MAP 22, fluid alone gives a transient that drains back out, only
+the pair recovers.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed
