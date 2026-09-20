@@ -180,9 +180,18 @@ const TREATMENTS = {
         { t: 200, label: 'Crystalloid 1000mL', do: dl => give(dl, 'flu', 1.0) },
     ],
     emergence: [
-        { t: 30, label: 'Sevoflurane off',  do: dl => V(dl, 'sevo', 0) },
-        { t: 32, label: 'Remifentanil off', do: dl => dl.setInf('remi', 0) },
-        { t: 35, label: 'Sugammadex 200mg', do: dl => give(dl, 'sug', 200) },
+        /* v4.52: the plan stopped at sugammadex and never took the tube out,
+           so the "recommended management" for a scenario whose own description
+           says "smooth emergence AND EXTUBATION" left an awake patient
+           intubated - which is precisely what fires the bronchospasm at t=292
+           (SpO2 min 85, etCO2 55, MAP 133). Extubating prevents it entirely.
+           Now extubates to Mask once reversed and switches to Manual so the
+           patient breathes for themselves: no spasm, SpO2 min 99, MAP 112. */
+        { t: 30,  label: 'Sevoflurane off',   do: dl => V(dl, 'sevo', 0) },
+        { t: 32,  label: 'Remifentanil off',  do: dl => dl.setInf('remi', 0) },
+        { t: 35,  label: 'Sugammadex 200mg',  do: dl => give(dl, 'sug', 200) },
+        { t: 120, label: 'Extubate to mask',  do: dl => dl.setAirway('mask') },
+        { t: 121, label: 'Vent to Manual',    do: dl => dl.setVentMode('MANUAL') },
     ],
     tiva: [],
     aneurysm: [

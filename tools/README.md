@@ -308,6 +308,35 @@ It also serves as the **calibration target for a future refactor**: the vagal
 block keeps a knowing instance of structural trap 2 (see CLAUDE.md), and this
 probe's first two checks are what any retune has to reproduce.
 
+| F25 | the emergence scenario never told anyone to take the tube out | 0/10 |
+
+F25 closes the loop F22 opened — the emergence half of the same finding, and
+the one v4.50 made urgent. The scenario fired an unannounced bronchospasm at
+t=145, and after v4.50's global severity increase its *own* recommended plan
+(sevo off, remi off, sugammadex) ended with an awake patient at SpO₂ 88.8,
+etCO₂ 54.5 and MAP 133.
+
+The physiology is right and rather good: the reactivity block fires on
+`isLight && hasReactiveAirway && blunting > 0`, and this scenario builds
+exactly that — consciousness 98 by t=100 with the tube still in. **Extubating
+prevents it outright** (never fires at t=120, 180 or 240), while opioid cover
+only delays it (t=292 → 407 → 448 as remifentanil goes up). The probe pins
+both, because the second is what stops a trainee reaching for more opioid
+instead of the laryngoscope.
+
+Fixed in text only: new objective 5, seven new hints (the scenario had none),
+a corrected briefing — the vaporiser sits at 0.4% and stays there, so "sevo
+washing out" was false and BIS read a flat 80.2 for fifteen minutes — and
+sweep's `TREATMENTS` now extubates to Mask and switches to Manual. The probe
+also pins the post-extubation etCO₂ rise (peaks 79, settles to 54 as fentanyl
+redistributes), which hint 6 warns about.
+
+**Found while writing this probe, not fixed:** a patient with `airway: 'none'`
+never breathes whatever their `respDrive`, because the ventilation block opens
+with `if (disconnected || !hasAirwayDevice) { tidalVolume = 0 }` and
+short-circuits the spontaneous branch. The LAST scenario is live on that path.
+See CLAUDE.md's known items.
+
 F13 is the v4.34 finding rather than an audit one. Its second check is the
 interesting half: a threshold that fires on a sick patient is easy, but it must
 also stay silent on a **well** patient of every profile, and a resting paed

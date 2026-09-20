@@ -1958,6 +1958,166 @@ probe('F24', 'Vagal hyperreflexia teaches atropine correctly', () => {
         'zero of each');
 });
 
+/* =============================================================================
+   F25  the emergence scenario never told anyone to take the tube out
+   -----------------------------------------------------------------------------
+   The emergence half of the item F22 answered for sepsis, and the last of the
+   September 2026 audit's loose ends.
+
+   The scenario fired a bronchospasm at t=145 untreated that no text anywhere
+   mentioned, and v4.50's global severity increase made it worse: the
+   scenario's OWN recommended plan (sevo off, remi off, sugammadex) ended with
+   an awake patient at SpO2 88.8, etCO2 54.5 and MAP 133.
+
+   The physiology was never the bug. The reactivity block fires on
+   `isLight && hasReactiveAirway && blunting > 0` - a patient above
+   REACTIVITY_LIGHT_CONSC with an ETT still in and the opioid gone. That is
+   exactly the emergence hazard, and this scenario constructs it perfectly:
+   consciousness reaches 98 by t=100 with the tube still in.
+
+   THE FINDING: extubating prevents it completely, at any timing tested, and
+   nothing in the scenario said so. Opioid cover only DELAYS it (t=292 with
+   remi off, t=407 keeping remi at 0.05, t=448 raising it to 0.08) because
+   consciousness keeps climbing as the sevo goes - there is no dose that holds
+   it off with the tube in. Which is the right answer clinically too.
+
+   Fixed in text only: new objective 5, seven new hints (the scenario had
+   none), a corrected briefing - the vaporiser sits at 0.4% and STAYS there,
+   so "sevo washing out" was wrong and BIS read a flat 80.2 for fifteen
+   minutes - and sweep's TREATMENTS now extubates.
+   ========================================================================== */
+probe('F25', 'The emergence scenario tells the trainee to extubate', () => {
+
+    function run(acts, dur) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('emergence');
+        const specs = gaugeSpecs(dl);
+        const raw = specs.find(g => g.key === 'resistance').spec;
+        const pending = (acts || []).map(a => ({ ...a, done: false }));
+        const rows = [];
+        for (let s = 1; s <= (dur || 900); s++) {
+            pending.forEach(a => { if (!a.done && a.t === s) { a.done = true; a.do(dl); } });
+            sim.advance(1000);
+            rows.push({ t: s, map: mapOf(dl), hr: dl.state.hr, bis: dl.state.bis,
+                        consc: dl.state.consciousness, spo2: dl.state.spo2,
+                        etco2: dl.state.etco2, vt: dl.state.tidalVolume, raw: raw.get(),
+                        broncho: !!dl.state.events.bronchospasm,
+                        airway: dl.state.patient.airway });
+        }
+        return { rows, at: t => rows[t - 1], errors: sim.errors, dl,
+                 undone: pending.filter(a => !a.done).length };
+    }
+    const SEVO  = (t, v) => ({ t, do: dl => dl.setVentParam('sevo', v) });
+    const REMI  = (t, r) => ({ t, do: dl => dl.setInf('remi', r) });
+    const SUG   = (t, d) => ({ t, do: dl => give(dl, 'sug', d) });
+    const AIR   = (t, a) => ({ t, do: dl => dl.setAirway(a) });
+    const MODE  = (t, m) => ({ t, do: dl => dl.setVentMode(m) });
+
+    const un = run(null, 900);
+    const sc = un.dl.SCENARIOS.emergence;
+
+    /* 1. There is genuinely something to teach: left alone, the patient wakes
+          with the tube in and reacts. */
+    const spasm = un.rows.find(r => r.broncho);
+    note(`untreated: consciousness ${un.at(1).consc.toFixed(0)} at t=1 -> ` +
+         `${un.at(120).consc.toFixed(0)} at t=120; bronchospasm at ` +
+         `t=${spasm ? spasm.t : 'never'}; SpO2 min ${Math.min(...un.rows.map(r => r.spo2)).toFixed(0)}`);
+    expect(spasm && spasm.t < 400,
+        'a waking patient left intubated does react',
+        `bronchospasm at t=${spasm ? spasm.t : 'never'}`,
+        'it fires - this is the hazard the scenario depicts');
+
+    /* 2. THE FINDING. Extubation prevents it outright, and the scenario must
+          now say so. Checked at three timings so this is not a coincidence of
+          one schedule. */
+    const plan = [SEVO(30, 0), REMI(32, 0), SUG(35, 200)];
+    const ex120 = run([...plan, AIR(120, 'mask'), MODE(121, 'MANUAL')], 900);
+    const ex180 = run([...plan, AIR(180, 'mask'), MODE(181, 'MANUAL')], 900);
+    const ex240 = run([...plan, AIR(240, 'mask'), MODE(241, 'MANUAL')], 900);
+    const noEx  = run(plan, 900);
+    const noExSpasm = noEx.rows.find(r => r.broncho);
+    note(`with the scenario's old plan (no extubation): bronchospasm ` +
+         `t=${noExSpasm ? noExSpasm.t : 'never'}, SpO2 min ` +
+         `${Math.min(...noEx.rows.map(r => r.spo2)).toFixed(0)}, ` +
+         `MAP ${noEx.at(600).map.toFixed(0)} at t=600`);
+    expect(noExSpasm && ![ex120, ex180, ex240].some(r => r.rows.some(x => x.broncho)),
+        'extubating prevents the bronchospasm entirely, at any timing',
+        `no extubation: t=${noExSpasm ? noExSpasm.t : 'never'}; ` +
+        `extubated at 120/180/240: never, never, never`,
+        'fires only when the tube is left in');
+
+    /* 3. And opioid cover is NOT an alternative - it only buys minutes. This
+          is what objective 5 and hint 5 claim, so it has to be true. */
+    const keepRemi = run([SEVO(30, 0), SUG(35, 200)], 900);
+    const moreRemi = run([SEVO(30, 0), REMI(32, 0.08), SUG(35, 200)], 900);
+    const kr = keepRemi.rows.find(r => r.broncho), mr = moreRemi.rows.find(r => r.broncho);
+    note(`opioid cover only delays it: remi off t=${noExSpasm ? noExSpasm.t : 'never'}, ` +
+         `remi kept at 0.05 t=${kr ? kr.t : 'never'}, remi raised to 0.08 t=${mr ? mr.t : 'never'}`);
+    expect(kr && mr && kr.t > noExSpasm.t && mr.t > kr.t,
+        'more opioid delays the spasm but never prevents it',
+        `t=${noExSpasm.t} -> ${kr.t} -> ${mr.t} as the opioid goes up`,
+        'each later than the last, all still firing');
+
+    /* 4. The text must carry it. Objective 5 and the hints are new; the
+          scenario previously had no hints array at all. */
+    const objText  = sc.objectives.join(' | ').toLowerCase();
+    const hintText = (sc.hints || []).join(' | ').toLowerCase();
+    expect((sc.hints || []).length >= 5,
+        'the scenario has hints at all',
+        `${(sc.hints || []).length} hints`,
+        'at least 5 - it used to have none');
+    expect(/tube|extubat/.test(objText) && /extubat|mask/.test(hintText),
+        'an objective and a hint tell the trainee to take the tube out',
+        `objectives mention it: ${/tube|extubat/.test(objText)}, ` +
+        `hints mention it: ${/extubat|mask/.test(hintText)}`,
+        'both true');
+    expect(/opioid|remifentanil/.test(objText + ' ' + hintText) &&
+           /delay|buys|never prevents|few more minutes/.test(objText + ' ' + hintText),
+        'and that opioid cover delays rather than prevents it',
+        'the texts say so',
+        'true - otherwise a trainee reasonably reaches for more opioid');
+
+    /* 5. The briefing must not claim a washout that is not happening. The
+          vaporiser sits at 0.4% until the trainee closes it, so BIS reads a
+          flat 80.2 for fifteen minutes otherwise. */
+    note(`untreated BIS: t=1 ${un.at(1).bis.toFixed(1)}, t=300 ${un.at(300).bis.toFixed(1)}, ` +
+         `t=900 ${un.at(900).bis.toFixed(1)} - the vaporiser never closes on its own`);
+    expect(Math.abs(un.at(900).bis - un.at(1).bis) < 2 &&
+           /still running|still on|still delivering|vaporiser/i.test(sc.briefing + ' ' + sc.description),
+        'the briefing says the vaporiser is still on, because nothing washes out until it is closed',
+        `BIS ${un.at(1).bis.toFixed(1)} -> ${un.at(900).bis.toFixed(1)} untreated, ` +
+        `text mentions the vaporiser still running: ` +
+        `${/still running|still on|still delivering|vaporiser/i.test(sc.briefing + ' ' + sc.description)}`,
+        'flat BIS and text that admits it');
+
+    /* 6. The recommended management, as sweep.js now runs it, must produce a
+          patient who is awake, extubated, breathing and safe. */
+    const maxEt = Math.max(...ex120.rows.map(r => r.etco2));
+    note(`recommended plan: SpO2 min ${Math.min(...ex120.rows.map(r => r.spo2)).toFixed(0)}, ` +
+         `etCO2 peaks ${maxEt.toFixed(0)} then settles to ${ex120.at(900).etco2.toFixed(0)}, ` +
+         `Vt ${ex120.at(300).vt.toFixed(0)} spontaneous, MAP ${ex120.at(600).map.toFixed(0)}`);
+    expect(ex120.at(900).consc > 90 && ex120.at(300).vt > 250 &&
+           Math.min(...ex120.rows.map(r => r.spo2)) > 95,
+        'the recommended plan wakes, reverses, extubates and leaves them breathing',
+        `consciousness ${ex120.at(900).consc.toFixed(0)}, spontaneous Vt ` +
+        `${ex120.at(300).vt.toFixed(0)}, SpO2 min ` +
+        `${Math.min(...ex120.rows.map(r => r.spo2)).toFixed(0)}`,
+        'awake, ventilating for themselves, never desaturating');
+
+    /* 7. Post-extubation hypoventilation is real and is what hint 6 warns
+          about - it must rise and then settle, not run away. */
+    expect(maxEt > 60 && ex120.at(900).etco2 < maxEt - 15 &&
+           /etco2|hypoventilation/i.test(hintText),
+        'residual opioid causes a real, self-limiting post-extubation etCO2 rise',
+        `etCO2 peaks ${maxEt.toFixed(0)} and falls to ${ex120.at(900).etco2.toFixed(0)} by t=900`,
+        'a rise over 60 that then settles, and a hint that mentions it');
+
+    expect(un.errors.length === 0 && ex120.errors.length === 0 && ex120.undone === 0,
+        'the scenario runs clean',
+        `${un.errors.length + ex120.errors.length} tick errors, ${ex120.undone} undelivered actions`,
+        'zero of each');
+});
+
 /* -----------------------------------------------------------------------------
    summary
    -------------------------------------------------------------------------- */
