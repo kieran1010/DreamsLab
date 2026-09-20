@@ -51,6 +51,29 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.45  ("Fresh NIBP reading on scenario load")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  loadScenario() now calls takeNIBP() right after the new scenario's setup()
+  runs. scenarioReset() has always reset sys/dia to the incoming profile's
+  baseline and cleared nibpCuffFail, but never touched the num-nibp BOX or the
+  nibpNextDue auto-cycle counter - so the display kept showing whatever the
+  OUTGOING scenario last measured (e.g. haemorrhage's "88/54" still on screen
+  under a scenario that opens at 150/95) until the auto-cycle happened to fire,
+  up to nibpInterval (2.5 min sim-time) later, or the trainee clicked the box.
+
+  takeNIBP() resets nibpNextDue itself, so this also restarts the auto-cycle
+  clean from the new scenario's start rather than carrying over the outgoing
+  scenario's timing. No change to the reading itself - same 4s cuff-inflation
+  delay, same oscillometric noise, same nibpCuffFail check.
+
+  No physiology changes.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.44  ("Ischaemia: a blood pressure that actually falls")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -11146,6 +11169,19 @@ function loadScenario(key) {
     if (!key || !SCENARIOS[key]) return;
     scenarioReset();
     SCENARIOS[key].setup();
+
+    /* v4.45: kick off a fresh NIBP reading now. scenarioReset() clears
+       nibpCuffFail and resets sys/dia to the new profile's baseline, but
+       leaves the num-nibp BOX untouched - it just keeps showing whatever the
+       outgoing scenario last measured (e.g. "88/54" from a hypotension
+       scenario lingering under one that opens at 150/95) until the auto-cycle
+       fires up to nibpInterval (2.5 min sim-time) later, or the user clicks
+       the box manually. Calling takeNIBP() here also resets nibpNextDue, so
+       the auto-cycle restarts cleanly from the new scenario's start rather
+       than carrying over the previous scenario's timing. setup() has already
+       run, so sys/dia reflect the new profile - a scenario's setup() never
+       assigns them directly, only via setProfile(). */
+    takeNIBP();
 
     /* v4.29: hold the surgical stimulus a scenario asked for.
        Setups assign state.nociception to establish the surgical context, but
