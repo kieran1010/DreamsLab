@@ -182,6 +182,9 @@ function boot(opts = {}) {
         querySelector() { return makeEl(''); },
         querySelectorAll() { return []; },
         addEventListener() {}, removeEventListener() {},
+        /* v4.59: tab visibility, so the alarm-audio suppression can be tested
+           headlessly. Real browsers set these; the sim reads document.hidden. */
+        hidden: false, visibilityState: 'visible',
         fullscreenElement: null, webkitFullscreenElement: null,
         exitFullscreen() {}, webkitExitFullscreen() {},
     };

@@ -51,6 +51,113 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.59  ("Seven seconds, and nothing before it")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  THE LEAD-IN IS NOW 7 SECONDS, not 20. Twenty was chosen in v4.57 to be
+  comfortably longer than the autonomic settle it had to clear; with that
+  settle now decoupled (below) the lead-in answers only to teaching, and
+  twenty seconds of a patient doing nothing is a long time in front of a
+  class. Every scenario's deterioration starts thirteen seconds sooner.
+
+  ONSET_SETTLE AND ONSET_LEAD_IN ARE NO LONGER COUPLED. The v4.57 pre-roll
+  advances state.onsetTimer like any other tick, so ONSET_SETTLE (12 s) had to
+  stay below ONSET_LEAD_IN or the pathology would start before the user ever
+  saw the patient - a constraint that broke the moment the lead-in went to 7.
+  onsetGate() and onsetRamp() now return 0 while state.settling is true, so
+  the pre-roll cannot open the window however long it runs. Settle for as long
+  as the physiology needs; set the lead-in from what a trainee needs.
+
+  ASPIRATION NOW HAPPENS ONE LEAD-IN IN, rather than at load. This closes the
+  gap v4.57 left. Most scenarios express a pathology through a severity that
+  something downstream reads, so arming the event at load and gating that
+  severity holds the patient still perfectly well. `aspiration` does not: its
+  setup also set p.resistance = 30 and lit the Events-panel button, neither of
+  which gating could hide. So the case opened with an obstructed airway and an
+  active ASPIRATION indicator while its own briefing said the saturation was
+  still normal - and the raised resistance in a spontaneously breathing patient
+  drove etCO2 up through the entire lead-in, which is what made it one of only
+  two scenarios that could not hold still.
+
+  New state.onsetPendingEvents and fireOnsetPendingEvents() defer the whole
+  event - flag, resistance, button and all. Measured:
+
+    t=0-7   SpO2 99, Vt 355, resistance 5, no event    a normal patient
+    t=8     event fires: Vt 355 -> 142, resistance 30
+    t=15    SpO2 94, injury 0.41
+    t=60    SpO2 80, etCO2 70, injury 0.97
+
+  The injury builds on its own tau from the moment the event fires rather than
+  being gated a second time, which is what an acute aspiration does.
+
+  NO ALARMS DURING THE LEAD-IN. Loading a scenario lit the alarm row instantly,
+  before anything had happened - the opposite of what a lead-in is for.
+  evaluateAlarms() now clears state.alarmStates and returns early while
+  onsetGate() is 0, and zeroes the burst timers so the first genuine alarm
+  afterwards sounds immediately rather than waiting out an interval that
+  elapsed while nothing was displayed.
+
+  Be clear about what this does and does not fix, because it is less than it
+  looks. Measured at t=1 before the change, seven scenarios lit the row - and
+  five of them were STILL lit after the lead-in, because what they show is the
+  scenario's own baseline sitting outside an alarm limit rather than anything
+  to do with onset:
+
+    paedLap       sys:high map:med rr:med etco2:med vt:high - CONFIG.ALARMS is
+                  calibrated for a 70 kg adult and this is a 20 kg child
+    bronchospasm  pip:med - PCV at pinsp 20 over PEEP 5 is 25 cmH2O by
+                  construction, before any spasm
+    emergence     bis:high - a waking patient is the premise of the case
+    last          bis:med
+    mh            sys:med - its opening pressure
+
+  What the change fixes is the instant-on effect and the alarms that are
+  genuinely onset-driven (pulmEmbolism's etCO2, aspiration's, vagal's). The
+  five above now appear at t=8 instead of t=1. The paediatric one is a real
+  bug and is now a known item; the others are the scenarios being what they
+  say they are.
+
+  Anaphylaxis's own clock follows the lead-in, keeping the v3.75 intervals:
+  SYMP_START 20 -> 7, VASOPLEGIA_START 43 -> 30, BRONCH_START 68 -> 55.
+
+  Measured onset, untreated, first monitor-visible change: 8-35 s for sixteen
+  of the seventeen pathology scenarios (anaphBrewing is 77 s by its own
+  deliberate 30 s trigger delay), against 21-63 s in v4.57.
+
+  Probe F29 gains an alarm-row check and, because the aspiration fix removed
+  the worst offender, etCO2 rejoins its lead-in flatness check after being
+  excluded in v4.57. Five probes (F15, F20, F21, F22, F24) that hardcoded t=20
+  as "the end of the lead-in" now derive it from CONFIG.ONSET_LEAD_IN, so the
+  next change to that constant does not silently invalidate them.
+
+  A HIDDEN TAB NO LONGER BEEPS. The ECG and the alarms stopped behaving the
+  same way when you switched tabs, and nothing in the code said so on purpose:
+  beepAtSpO2() is called from animate(), which rides requestAnimationFrame,
+  and browsers pause rAF on a hidden tab - so the ECG went quiet by accident.
+  The alarm bursts come from evaluateAlarms() inside the 100 ms setInterval,
+  which browsers throttle but do not stop, so they carried on beeping at a
+  patient nobody could see. A teacher with the sim open in a background tab
+  got alarms from an invisible monitor.
+
+  New pageHidden(), checked both in playAlarmBurst() (so no caller can bypass
+  it - triggerAwareness() calls it directly, which is exactly the mistake v4.35
+  fixed for the audioMode gate) and in evaluateAlarms() before the burst block.
+  Gated on VISIBILITY, not focus, to match what the ECG actually does: rAF
+  keeps running when the window merely loses focus with the tab still visible.
+
+  Only the audio stops. Evaluation continues, so state.alarmStates is correct
+  the instant the tab returns, and the burst timers are deliberately left
+  unconsumed while hidden - otherwise coming back would mean waiting out a full
+  interval in silence with the row already red. Measured over 60 s on paedLap
+  with five alarms live: visible tab, burst timer cycling at 7.6; hidden tab,
+  same five alarms in state.alarmStates and the timer sitting at -53, i.e.
+  nothing sounded and the next burst fires immediately on return.
+
+  probes 175/175, voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime
+  errors.
+
+==================================================================================
   DREAMS LAB  v4.58  ("Let the awake patient open their eyes")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6510,7 +6617,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.58';
+const APP_VERSION = '4.59';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -6648,7 +6755,13 @@ const CONFIG = {
        own timeframe at which they were normal. What they must NOT do is sit
        abnormal and static: see ONSET_EXEMPT in [SCENARIOS] for that list and
        what each one does instead. */
-    ONSET_LEAD_IN: 20,    // sec of the patient's own normal before anything moves
+    /* v4.59: 20 -> 7. Twenty seconds was chosen to be comfortably longer than
+       the autonomic settle it had to clear; with the settle now decoupled (see
+       ONSET_SETTLE) the lead-in answers only to teaching, and twenty seconds of
+       a patient doing nothing is a long time to sit in front of a class. Seven
+       is still long enough to read the monitor and take a baseline, and every
+       scenario's deterioration now starts thirteen seconds sooner. */
+    ONSET_LEAD_IN: 7,     // sec of the patient's own normal before anything moves
     ONSET_TAU:     25,    // sec; first-order build of the pathology thereafter
     /* Sim-seconds of tick that loadScenario() runs before handing the scenario
        to the user, so that what they first see is a steady state.
@@ -6667,9 +6780,15 @@ const CONFIG = {
        hypotensionPostInd from v4.57). Those seeds are kept - they cost nothing
        and they document the settled state - but they are no longer load-bearing.
 
-       Must stay below ONSET_LEAD_IN: the pre-roll advances state.onsetTimer
-       like any other tick, so a settle longer than the lead-in would start the
-       pathology before the user ever saw the patient. Probe F29 checks this. */
+       v4.59: this used to have to stay BELOW ONSET_LEAD_IN, because the pre-roll
+       advances state.onsetTimer like any other tick and a settle longer than
+       the lead-in would start the pathology before the user ever saw the
+       patient. That coupling broke the moment the lead-in was shortened to 7 s
+       while the settle still needed 12. The two are now independent:
+       onsetGate() and onsetRamp() both return 0 while state.settling is true,
+       so the pre-roll cannot open the window however long it runs. Settle for
+       as long as the physiology needs; the lead-in is set by what a trainee
+       needs. Probe F29 checks the independence directly. */
     ONSET_SETTLE: 12,
 
     // v3.50: Furosemide diuresis gain.
@@ -7012,19 +7131,20 @@ const CONFIG = {
     // v3.63: tightened to ~30s build to full CV collapse, matching real-world
     // intra-operative anaphylaxis (NMB/antibiotic-triggered, observed in seconds
     // not minutes). Old values: SYMP_START 5, VASOPLEGIA_START 30, BRONCH_START 60.
-    /* v4.57: 2 -> 20, matching ONSET_LEAD_IN. This scenario already had the
+    /* v4.57: 2 -> 20, matching ONSET_LEAD_IN; v4.59: 20 -> 7 with it. This
+       scenario already had the
        best-shaped onset in the set and needed only to start on the same clock
        as everything else; at 2 s the early tachycardia was moving before the
        trainee had read the monitor (+2.5 bpm and +2.1 mmHg by t=20). The
        intervals BETWEEN the three phases are deliberately preserved - see the
        v3.75 note below - so vasoplegia still follows the surge by 23 s and the
        bronchospasm by a further 25. */
-    ANAPHYLAXIS_SYMP_START: 20,       // initial sympathetic surge begins (early HR rise)
+    ANAPHYLAXIS_SYMP_START: 7,        // initial sympathetic surge begins (early HR rise)
     // v3.75: stretched timing - real anaphylaxis under anaesthesia takes
     // 1-2 minutes to nadir, not 30 seconds. Vasoplegia starts later,
     // bronchospasm appears later still.
-    ANAPHYLAXIS_VASOPLEGIA_START: 43, // SVR starts crashing (was 10; v4.57 25 -> 43, keeping the v3.75 interval)
-    ANAPHYLAXIS_BRONCH_START: 68,     // bronchospasm co-triggers (was 15; v4.57 50 -> 68, keeping the v3.75 interval)
+    ANAPHYLAXIS_VASOPLEGIA_START: 30, // SVR starts crashing (was 10; v4.57 25 -> 43, v4.59 -> 30, keeping the v3.75 interval)
+    ANAPHYLAXIS_BRONCH_START: 55,     // bronchospasm co-triggers (was 15; v4.57 50 -> 68, v4.59 -> 55, keeping the v3.75 interval)
     ANAPHYLAXIS_BRONCH_PROB: 999,     // v3.63: deterministic - always fires (was probabilistic)
     /* v4.43: the shape of the reaction, lifted out of the tick body where it
        had been sitting as inline literals since v3.63 - which is how it came
@@ -7596,6 +7716,9 @@ const state = {
        immediately (onsetGate() is already 1 by then). */
     onsetTimer: 0,
     onsetArmed: {},      // v4.57: events this scenario's setup() armed (see onsetRampFor)
+    /* v4.59: events a scenario wants fired WHEN THE LEAD-IN EXPIRES rather
+       than at load. See fireOnsetPendingEvents(). */
+    onsetPendingEvents: [],
     settling: false,     // v4.57: true during loadScenario's pre-roll; silences log()
     /* v4.57: set by a scenario whose pathology is a rising surgical stimulus.
        null means "no ramp, the target is whatever the slider says". */
@@ -8207,9 +8330,11 @@ function saturate(baseline, floor, ceiling, pushUp, pushDown, Kup, Kdown) {
    which is what a manual toggle should do. It is only loadScenario() that puts
    the clock back to zero. */
 function onsetGate() {
+    if (state.settling) return 0;
     return state.onsetTimer >= CONFIG.ONSET_LEAD_IN ? 1 : 0;
 }
 function onsetRamp() {
+    if (state.settling) return 0;
     const t = state.onsetTimer - CONFIG.ONSET_LEAD_IN;
     return t <= 0 ? 0 : 1 - Math.exp(-t / CONFIG.ONSET_TAU);
 }
@@ -8236,6 +8361,52 @@ function onsetRamp() {
    had just switched on was still being held down by somebody else's lead-in. */
 function onsetRampFor(evt) { return state.onsetArmed[evt] ? onsetRamp() : 1; }
 function onsetGateFor(evt) { return state.onsetArmed[evt] ? onsetGate() : 1; }
+
+/* v4.59: fire the events a scenario deferred to the end of the lead-in.
+
+   There are two ways to give a pathology the standard onset, and which one a
+   scenario needs depends on whether ARMING its event has immediate side
+   effects of its own.
+
+   Most do not. bronchospasm, vagal, pulmEmbolism, ischaemia, mh and bleed all
+   express themselves through a severity that something downstream reads, so
+   arming the event at load and gating that severity (onsetRampFor /
+   onsetGateFor) holds the patient still just as well, and the flag being set
+   early is invisible.
+
+   `aspiration` is the exception, and it is why this exists. Its setup does not
+   only set the flag: it sets p.resistance = 30 and lights the Events-panel
+   button. Gating the injury could never hide either, so the scenario opened
+   with an obstructed airway and an ASPIRATION button already active while the
+   briefing said the saturation was still normal - and the raised resistance
+   drove a spontaneously breathing patient's etCO2 up through the whole
+   lead-in, which is what made aspiration one of the two scenarios that failed
+   to hold still.
+
+   Deferring the whole event is the honest fix: nothing has happened yet, so
+   nothing shows. The event then fires for real, and everything downstream -
+   the injury build on its own TAU, the reflex tone push, the bronchospasm
+   co-trigger - runs from that moment on its own clock, exactly as it would
+   for a hand-toggled aspiration. It is deliberately NOT added to
+   state.onsetArmed: the window has already been served by the wait, and
+   gating it again would delay it twice. */
+function fireOnsetPendingEvents() {
+    if (!state.onsetPendingEvents.length || !onsetGate()) return;
+    const pending = state.onsetPendingEvents;
+    state.onsetPendingEvents = [];
+    pending.forEach(evt => {
+        if (state.events[evt]) return;          // already on somehow - leave it
+        state.events[evt] = true;
+        if (evt === 'aspiration') {
+            state.aspirationSource = true;
+            state.aspirationReactivateTimer = 0;
+            state.patient.resistance = 30;
+        }
+        const btn = document.getElementById('evt-' + eventIdSuffix(evt));
+        if (btn) btn.classList.add('active');
+        log(`EVENT: ${evt}`);
+    });
+}
 
 /* Dynamic lung compliance as a function of current absolute lung volume.
    Piecewise linear:
@@ -8277,6 +8448,7 @@ function physiologyTick() {
     const dtMin = dtPharm / 60;                        // sim-minutes of drug time
     state.simTime += dt;                               // log timestamps (wall-clock)
     state.onsetTimer += dt;                            // v4.57: standard onset window
+    fireOnsetPendingEvents();                          // v4.59: deferred scenario events
     const p = state.patient;
     const wt = state.profile.weight;
 
@@ -8905,12 +9077,9 @@ function physiologyTick() {
 
     // Bleed & events push both sympathetic tones up (transient, per tick)
     if (state.events.bleed) { state.alphaTone += 0.02 * dt; state.betaTone += 0.02 * dt; }
-    // v4.57: gated, so the reflex sympathetic response arrives with the injury
-    // rather than at the instant the scenario loads.
-    if (state.events.aspiration) {
-        state.alphaTone += 0.015 * dt * onsetGateFor('aspiration');
-        state.betaTone  += 0.015 * dt * onsetGateFor('aspiration');
-    }
+    // v4.59: ungated again - the event itself is deferred now (v4.57 gated this
+    // because the flag was set at load), so the reflex arrives with the event.
+    if (state.events.aspiration) { state.alphaTone += 0.015 * dt; state.betaTone += 0.015 * dt; }
     if (state.events.laryngospasm) { state.alphaTone += 0.03 * dt; state.betaTone += 0.03 * dt; }
 
     // v3.68: aspiration injury tracker.
@@ -8921,14 +9090,13 @@ function physiologyTick() {
     if (state.events.aspiration) {
         const prevInjury = state.aspirationInjury;
         const blend = 1 - Math.exp(-dt / 15);
-        /* v4.57: standard onset window. The scenario armed the event in setup
-           and seeded a spontaneous Vt of 142, so SpO2 read 96 at load and was
-           through 93 by t=8 - the trainee met a patient who had already
-           aspirated rather than one aspirating in front of them. The target is
-           now gated, so the injury holds at 0 through the lead-in and then
-           builds on its own tau exactly as before. Unaffected once the window
-           has passed, which is every manual toggle of the event. */
-        state.aspirationInjury += (onsetRampFor('aspiration') - state.aspirationInjury) * blend;
+        /* v4.59: back to the plain build. v4.57 gated this target with
+           onsetRampFor('aspiration') because the scenario armed the event at
+           load; the scenario now DEFERS the event instead (see
+           fireOnsetPendingEvents), so by the time this runs the aspiration has
+           genuinely just happened and the injury should build on its own tau
+           from that moment. Gating it as well would delay it twice. */
+        state.aspirationInjury += (1.0 - state.aspirationInjury) * blend;
         // Reliably trigger bronchospasm once injury crosses 0.3 (~5s after
         // aspiration starts). Real aspiration causes prompt smooth-muscle
         // contraction from acid contact with the airway. This bypasses the
@@ -12262,14 +12430,25 @@ const SCENARIOS = {
             p.rocCp = 0;
             p.rocCe = 0;
             p.paralysis = 0;
-            // Trigger aspiration immediately
-            state.events.aspiration = true;
+            /* v4.59: the aspiration now happens ONE LEAD-IN IN, not at load.
+
+               This used to arm the event here and set p.resistance = 30 and
+               light the Events button with it, so the scenario opened with an
+               obstructed airway and an active ASPIRATION indicator while its
+               own briefing said the saturation was still normal. Worse, the
+               raised resistance in a spontaneously breathing patient drove
+               etCO2 up throughout the lead-in, which is what made this one of
+               only two scenarios that could not hold still before their
+               pathology started.
+
+               Registering it as pending defers the whole event - flag,
+               resistance, button and all - to fireOnsetPendingEvents(). The
+               trainee gets a genuinely normal patient, then watches the
+               aspiration happen. aspirationInjury still starts at 0 and now
+               builds on its own tau from the moment the event fires, which is
+               the acute injury this scenario is about. */
             state.aspirationInjury = 0;
-            state.aspirationSource = true;     // v3.70: ongoing source
-            state.aspirationReactivateTimer = 0;
-            state.patient.resistance = 30;
-            const aBtn = document.getElementById('evt-aspir');
-            if (aBtn) aBtn.classList.add('active');
+            state.onsetPendingEvents = ['aspiration'];
             // Active airway irritation
             state.nociception = 4;
             syncScenarioUI();
@@ -13204,6 +13383,7 @@ function scenarioReset() {
     // gate -- a setup that arms an event needs the clock already at zero.
     state.onsetTimer = 0;
     state.onsetArmed = {};
+    state.onsetPendingEvents = [];
     state.nociceptionRampFrom = 0;
     state.nociceptionRampTo = null;
     state.sahEffect = 0;
@@ -13899,6 +14079,36 @@ function evaluateAlarms(dt) {
     // Decrement still happens for safety in case any callers re-set it.
     if (state.alarmSilenced > 0) state.alarmSilenced = Math.max(0, state.alarmSilenced - dt);
 
+    /* v4.59: no alarms during the onset lead-in.
+
+       Loading a scenario used to light the alarm row instantly, before
+       anything had happened - which is the opposite of what the lead-in is
+       for. The whole point of CONFIG.ONSET_LEAD_IN is that the trainee gets a
+       few seconds to read a patient who is not yet deteriorating, and a screen
+       full of red the moment the case opens throws that away.
+
+       Cleared rather than frozen, so the row is empty rather than stale, and
+       the burst timers are zeroed so the first genuine alarm after the lead-in
+       sounds immediately instead of waiting out an interval that elapsed while
+       nothing was being shown.
+
+       NOTE this does NOT make every scenario open quiet, and it was never
+       going to. Most of what alarms at t=1 is still alarming at t=8, because
+       it is the scenario's own baseline sitting outside an alarm limit rather
+       than anything to do with onset: paedLap trips five alarms because the
+       thresholds in CONFIG.ALARMS are calibrated for a 70 kg adult and it is a
+       20 kg child, bronchospasm trips PIP because PCV at pinsp 20 over PEEP 5
+       is 25 cmH2O by construction, and emergence trips BIS high because a
+       waking patient is the premise of the case. Those are baseline and
+       threshold questions - see the known item in CLAUDE.md. What this fixes
+       is the alarms that ARE onset-driven, and the instant-on effect. */
+    if (!onsetGate()) {
+        state.alarmStates = {};
+        state.alarmNextHighBurst = 0;
+        state.alarmNextMedBurst  = 0;
+        return;
+    }
+
     // Evaluate each parameter -- but only if its monitor is "connected"
     const A = CONFIG.ALARMS;
     const newStates = {};
@@ -13962,6 +14172,12 @@ function evaluateAlarms(dt) {
     // SILENT and ECG ONLY suppress alarm bursts.
     state.alarmNextHighBurst -= dt;
     state.alarmNextMedBurst  -= dt;
+    /* v4.59: on a hidden tab, leave the burst timers alone rather than letting
+       the block below reset them for a burst that never sounded - otherwise
+       coming back to the tab means waiting out a full interval in silence with
+       the row already red. Returning here keeps them at or below zero, so the
+       first burst after the tab is visible again fires on the next tick. */
+    if (pageHidden()) return;
     if (state.audioMode === 'on' || state.audioMode === 'alarmsOnly') {
         if (anyHigh && state.alarmNextHighBurst <= 0) {
             playAlarmBurst('high');
@@ -13980,9 +14196,33 @@ function evaluateAlarms(dt) {
     }
 }
 
+/* v4.59: is the tab hidden?
+
+   The ECG beep and the alarm bursts stopped behaving the same way when you
+   switched tabs, and nothing in the code said so on purpose. beepAtSpO2() is
+   called from animate(), which runs on requestAnimationFrame, and browsers
+   pause rAF on a hidden tab - so the ECG went quiet by accident. The alarm
+   bursts are driven from evaluateAlarms() inside the 100 ms setInterval,
+   which browsers throttle but do not stop, so they carried on beeping at a
+   tab nobody was looking at. A teacher with the sim open in a background tab
+   got alarms from an invisible patient.
+
+   Gated on visibility rather than focus, to match what the ECG actually does:
+   rAF keeps running when the window merely loses focus with the tab still
+   visible, and stops when the tab is hidden. Only the AUDIO is suppressed -
+   evaluateAlarms() keeps evaluating, so state.alarmStates is correct the
+   instant the tab comes back. */
+function pageHidden() {
+    return typeof document !== 'undefined' && document.hidden === true;
+}
+
 /* Play a burst of N beeps at given pitch, scheduled into the AudioContext */
 function playAlarmBurst(level) {
     if (!audioCtx) return;
+    // v4.59: never beep at a hidden tab. Here as well as in evaluateAlarms()
+    // so no caller can bypass it - triggerAwareness() calls this directly, and
+    // that is exactly the mistake v4.35 fixed for the audioMode gate.
+    if (pageHidden()) return;
     // v4.35: the audioMode gate lives HERE, not only at the call site. It used to
     // sit solely in checkAlarms() (still there, since it also drives the burst
     // interval timers), which left it as something each new caller had to

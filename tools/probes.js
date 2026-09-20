@@ -676,7 +676,15 @@ probe('F15', 'Rate control heals myocardial ischaemia; tachycardia does not', ()
     /* 2. Rate control to the low 70s with an adequate DBP heals within a few
        minutes and holds - the clinical target the scenario teaches. Delivered
        here with the tools the hints name: analgesia (remi) plus a beta-blocker. */
-    const managed = run(dl => { dl.state.machine.pumps.remi = 0.5; give(dl, 'esmo', 50); give(dl, 'esmo', 50); }, 600, 45);
+    /* v4.59: the delay is derived from the lead-in rather than the literal 45
+       it used to be. 45 was "a bit after the ECG declares" when the lead-in was
+       20; with the lead-in at 7 it left the accumulator 38 seconds to build
+       before any treatment landed, which it cannot then heal below 0.2. What
+       the check wants is a trainee treating a declared ischaemia, not a fixed
+       wall-clock second. */
+    const LEAD_IN_15 = boot().dl.CONFIG.ONSET_LEAD_IN;
+    const managed = run(dl => { dl.state.machine.pumps.remi = 0.5; give(dl, 'esmo', 50); give(dl, 'esmo', 50); },
+                        600, LEAD_IN_15 + 25);
     const healedBy = managed.series.find(x => x.t >= 60 && x.isch < 0.2);
     const heldLow = managed.series.slice(-6).every(x => x.isch < 0.25);
     note(`managed (HR ${managed.hr.toFixed(0)}, ${managed.sys.toFixed(0)}/${managed.dia.toFixed(0)}): peak ${managed.peak.toFixed(2)} -> ` +
@@ -1278,13 +1286,14 @@ probe('F20', 'Post-induction hypotension actually sits at MAP 55', () => {
        and the slow creep afterwards are all as v4.47 left them. */
 
     /* 1. The lead-in is flat: the patient the trainee first sees is stable. */
-    const leadIn = [1, 5, 10, 20].map(t => un.at(t).map);
+    const LEAD = boot().dl.CONFIG.ONSET_LEAD_IN;   // v4.59: was a literal 20
+    const leadIn = [1, Math.round(LEAD / 2), LEAD].map(t => un.at(t).map);
     note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=20 ${un.at(20).map.toFixed(0)}, ` +
          `t=60 ${un.at(60).map.toFixed(0)}, t=120 ${un.at(120).map.toFixed(0)}, ` +
          `t=300 ${un.at(300).map.toFixed(0)}, t=600 ${un.at(600).map.toFixed(0)}`);
     expect(Math.max(...leadIn) - Math.min(...leadIn) < 3 && leadIn[0] > 65,
         'the scenario opens stable and above the treatment target',
-        `MAP at t=1/5/10/20 = ${leadIn.map(m => m.toFixed(0)).join('/')}`,
+        `MAP through the ${LEAD}s lead-in = ${leadIn.map(m => m.toFixed(0)).join('/')}`,
         'flat within 3 mmHg and starting above 65 - there is a fall to watch');
 
     /* 2. The briefed pressure is a STATE, not a transient. This is the v4.47
@@ -1440,13 +1449,14 @@ probe('F21', 'Haemorrhage scales with perfusion pressure, and opens at MAP 65', 
        and it means the trainee sees the pressure fall rather than inheriting a
        number. The old form started the patient at 58% of blood volume, i.e.
        with the haemorrhage already done. */
-    const open = [1, 5, 10, 20].map(t => un.at(t).map);
+    const LEADH = boot().dl.CONFIG.ONSET_LEAD_IN;  // v4.59: was a literal 20
+    const open = [1, Math.round(LEADH / 2), LEADH].map(t => un.at(t).map);
     note(`untreated MAP: t=1 ${un.at(1).map.toFixed(0)}, t=20 ${un.at(20).map.toFixed(0)}, ` +
          `t=60 ${un.at(60).map.toFixed(0)}, t=120 ${un.at(120).map.toFixed(0)}, ` +
          `t=300 ${un.at(300).map.toFixed(0)}`);
     expect(Math.max(...open) - Math.min(...open) < 3,
         'the opening pressure is a state the patient sits at, not a transient',
-        `MAP at t=1/5/10/20 = ${open.map(m => m.toFixed(1)).join('/')}`,
+        `MAP through the ${LEADH}s lead-in = ${open.map(m => m.toFixed(1)).join('/')}`,
         'flat within 3 mmHg (it used to read 61 then climb to 74.7)');
 
     /* 2. And it must fall from there, not rise. The old startup transient
@@ -1454,12 +1464,12 @@ probe('F21', 'Haemorrhage scales with perfusion pressure, and opens at MAP 65', 
           for the first half-minute. Checked across the bleed itself now, and
           it must pass through the briefed 65 rather than start there. */
     const falls = [60, 120, 180].every((t, i, a) =>
-        i === 0 ? un.at(t).map < open[3] : un.at(t).map < un.at(a[i - 1]).map);
+        i === 0 ? un.at(t).map < open[open.length - 1] : un.at(t).map < un.at(a[i - 1]).map);
     const through65 = un.rows.find(r => r.map < 65);
     note(`falls through the briefed MAP 65 at t=${through65 ? through65.t : 'never'}`);
-    expect(falls && through65 && through65.t > 20,
+    expect(falls && through65 && through65.t > LEADH,
         'pressure falls from the opening value rather than climbing',
-        `MAP ${open[3].toFixed(0)} at t=20 -> ${un.at(60).map.toFixed(0)} -> ` +
+        `MAP ${open[open.length - 1].toFixed(0)} at t=${LEADH} -> ${un.at(60).map.toFixed(0)} -> ` +
         `${un.at(120).map.toFixed(0)} -> ${un.at(180).map.toFixed(0)}, ` +
         `through 65 at t=${through65 ? through65.t : 'never'}`,
         'monotonically down, crossing 65 after the onset window rather than at t=0');
@@ -1599,7 +1609,8 @@ probe('F22', 'The septic laparotomy tells the trainee to keep the patient asleep
           also be a STATE, not a transient, which is what the lead-in check
           below is for. */
     const o = un.at(1);
-    const lead = [1, 5, 10, 20].map(t => un.at(t).sys);
+    const LEADS = boot().dl.CONFIG.ONSET_LEAD_IN;  // v4.59: was a literal 20
+    const lead = [1, Math.round(LEADS / 2), LEADS].map(t => un.at(t).sys);
     note(`opening BP ${o.sys.toFixed(0)}/${o.dia.toFixed(0)} (MAP ${o.map.toFixed(0)}), ` +
          `settling to ${un.at(120).sys.toFixed(0)}/${un.at(120).dia.toFixed(0)} at t=120`);
     expect(/91\/56/.test(sc.briefing) && /91\/56/.test(sc.setupBrief) &&
@@ -1613,7 +1624,7 @@ probe('F22', 'The septic laparotomy tells the trainee to keep the patient asleep
         'agreement within 3 mmHg on both (the texts used to say 75/45, then 70/43)');
     expect(Math.max(...lead) - Math.min(...lead) < 3,
         'and the opening pressure is a state, not a startup transient',
-        `systolic at t=1/5/10/20 = ${lead.map(v => v.toFixed(0)).join('/')}`,
+        `systolic through the ${LEADS}s lead-in = ${lead.map(v => v.toFixed(0)).join('/')}`,
         'flat within 3 mmHg through the onset lead-in');
 
     /* 2. THE FINDING. Untreated, the patient wakes - so there must be an
@@ -1964,16 +1975,17 @@ probe('F24', 'Vagal hyperreflexia teaches atropine correctly', () => {
        settled presentation is unchanged and is still pinned to the briefed
        numbers - which is the point of this probe, since VAGAL_SYMP_WITHDRAW was
        tuned through structural trap 2 to produce exactly them. */
-    note(`untreated HR/MAP: t=20 ${un.at(20).hr.toFixed(1)}/${un.at(20).map.toFixed(1)} ` +
+    const LEADV = boot().dl.CONFIG.ONSET_LEAD_IN;  // v4.59: was a literal 20
+    note(`untreated HR/MAP: t=${LEADV} ${un.at(LEADV).hr.toFixed(1)}/${un.at(LEADV).map.toFixed(1)} ` +
          `(lead-in), t=150 ${un.at(150).hr.toFixed(1)}/${un.at(150).map.toFixed(1)}, ` +
          `t=1800 ${un.at(1800).hr.toFixed(1)}/${un.at(1800).map.toFixed(1)}`);
     expect(Math.abs(un.at(150).hr - 48) <= 3 && Math.abs(un.at(150).map - 50) <= 3,
         'the scenario presents at the briefed HR 48 / MAP 50',
         `HR ${un.at(150).hr.toFixed(1)}, MAP ${un.at(150).map.toFixed(1)} at t=150`,
         'both within 3 of the briefed values');
-    expect(un.at(20).hr > 70 && un.at(20).map > 55,
+    expect(un.at(LEADV).hr > 70 && un.at(LEADV).map > 55,
         'and gets there from a normal rate, so the drop is something to watch',
-        `HR ${un.at(20).hr.toFixed(1)}, MAP ${un.at(20).map.toFixed(1)} at t=20 ` +
+        `HR ${un.at(LEADV).hr.toFixed(1)}, MAP ${un.at(LEADV).map.toFixed(1)} at t=${LEADV} ` +
         `(end of the onset lead-in)`,
         'a normal heart rate during the lead-in - it used to open at HR 49');
     expect(Math.abs(un.at(1800).hr - un.at(150).hr) < 2 &&
@@ -2698,10 +2710,16 @@ probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => 
           monitor shows may move meaningfully before ONSET_LEAD_IN. A trainee
           cannot recognise a change they never saw the start of.
 
-          etCO2 is excluded here and checked separately below: several
-          scenarios ventilate their patient away from the seeded 38 from the
-          first tick, which is a baseline-seeding problem rather than an onset
-          one (see the known item in CLAUDE.md). */
+          v4.59: etCO2 is no longer excluded. It was, because several scenarios
+          ventilated their patient away from the seeded 38 from the first tick
+          - and the worst of them, `aspiration`, did it because its setup armed
+          the event AND set p.resistance = 30 at load, so a spontaneously
+          breathing patient hypoventilated through the whole lead-in. Deferring
+          that event (see fireOnsetPendingEvents) removed the cause, and the
+          shorter 7 s lead-in leaves less room for the rest to drift. The worst
+          residual is paedLap at about +4 against the 5 threshold, which is the
+          tightest margin in this probe: if this check fails on paedLap, the
+          ventilation known item in CLAUDE.md has got worse, not the onset. */
     /* Baselined at t=3, not t=1. scenarioReset() leaves the autonomic tones at
        their rest values and the tick relaxes them toward the scenario's targets
        over about two seconds (TONE_DECAY_TAU), so every scenario has a brief
@@ -2710,7 +2728,7 @@ probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => 
        (v4.48), sepsis and hypotensionPostInd (v4.57) - because they needed a
        genuinely still opening for their own checks. Doing it for all twenty is
        a separate piece of work; see the known item in CLAUDE.md. */
-    const leadVars = Object.keys(VARS).filter(v => v !== 'etco2');
+    const leadVars = Object.keys(VARS);
     const restless = [];
     keys.forEach(k => {
         const rows = traces[k], b = rows[2];
@@ -2767,6 +2785,31 @@ probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => 
         'and the control scenarios stay still for a full fifteen minutes',
         drifted.length ? drifted.join('; ') : 'all three flat',
         'nothing to treat, so nothing moves - they are the comparators');
+
+    /* 3b. THE ALARM ROW. Loading a scenario used to light it instantly, before
+           anything had happened - the opposite of what a lead-in is for.
+           Nothing may be alarming while the patient is still being held still.
+
+           Checked on every scenario, because the ones that alarm are exactly
+           the ones whose baseline sits outside an alarm limit and they are the
+           ones a regression would show up in first. */
+    const noisy = [];
+    keys.forEach(k => {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(k);
+        for (let t = 0; t < LEAD; t++) {
+            sim.advance(1000);
+            const on = Object.entries(dl.state.alarmStates || {})
+                             .filter(([, v]) => v === 'high' || v === 'med');
+            if (on.length) { noisy.push(`${k}@${t + 1}s ${on.map(([q, v]) => q + ':' + v).join(',')}`); break; }
+        }
+    });
+    note(`alarm row through the ${LEAD}s lead-in: ` +
+         (noisy.length ? noisy.join('; ') : `silent on all ${keys.length} scenarios`));
+    expect(noisy.length === 0,
+        'no scenario raises an alarm before its lead-in is over',
+        noisy.length ? noisy.join('; ') : `silent on all ${keys.length}`,
+        'an empty alarm row - nothing has happened yet');
 
     /* 4. THE OWNERSHIP RULE. The window belongs to the scenario, never to the
           user. An event toggled by hand must act on its own time constant
@@ -2949,6 +2992,39 @@ probe('F30', 'Eye opening only alarms when the patient should be asleep', () => 
         `SpO2 ${firstRun.spo2.toFixed(1)} -> ${replay.spo2.toFixed(1)}, ` +
         `resistance ${firstRun.res.toFixed(1)} -> ${replay.res.toFixed(1)}`,
         'same numbers - a retry is a genuine retry, not a variant');
+
+    /* 5b. v4.59: a hidden tab must not beep. The ECG stopped on its own when
+           you switched tabs, because beepAtSpO2() rides requestAnimationFrame
+           and browsers pause it; the alarm bursts are driven from the
+           setInterval tick, which they do not, so a sim left in a background
+           tab carried on alarming at a patient nobody could see.
+
+           Two halves. The audio stops - checked through the burst timer,
+           which evaluateAlarms() resets only when it actually fires a burst,
+           so a timer left far below zero means nothing sounded. And the
+           EVALUATION does not stop: state.alarmStates has to be correct the
+           instant the tab comes back, so the row is right rather than blank. */
+    function hiddenTab(hidden) {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario('paedLap');          // opens with several alarms live
+        sim.context.document.hidden = hidden;
+        dl.state.audioMode = 'on';
+        for (let t = 0; t < 60; t++) sim.advance(1000);
+        return { live: Object.entries(dl.state.alarmStates || {})
+                             .filter(([, v]) => v !== 'ok').length,
+                 timer: dl.state.alarmNextHighBurst };
+    }
+    const visible = hiddenTab(false);
+    const hidden  = hiddenTab(true);
+    note(`over 60s with alarms live - visible tab: ${visible.live} alarms, ` +
+         `burst timer ${visible.timer.toFixed(1)}; hidden tab: ${hidden.live} alarms, ` +
+         `burst timer ${hidden.timer.toFixed(1)}`);
+    expect(hidden.live === visible.live && hidden.timer < -10 && visible.timer > -10,
+        'a hidden tab stops the alarm audio but keeps evaluating the alarms',
+        `hidden: ${hidden.live} alarms live, burst timer ${hidden.timer.toFixed(1)} ` +
+        `(never consumed); visible: ${visible.live} alarms, timer ${visible.timer.toFixed(1)}`,
+        'same alarm state either way, but no bursts while hidden - and the ' +
+        'timer left ready so the first burst on return is immediate');
 
     /* 6. And it is wired to something. A button that calls a function that
           does not exist is the classic way this rots. */
