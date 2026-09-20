@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 148/148,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 158/158,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 `tools/README.md` has the detail.
 
@@ -264,18 +264,44 @@ thresholds for anything where the resting value is not near an end.
   the patient ever arresting. Only two pathways move `state.rhythm` on their
   own - the LAST progression (sinus -> VT pulseless -> VF) and the hypoxic
   arrest at `HYPOXIA_ARREST_SPO2` - and neither reads perfusion. The second
-  cannot rescue the first here, because of the SpO2 item below: at MAP 22 and
-  a cardiac output of 1.1 L/min, SpO2 is still 99, so the hypoxia branch never
-  arms. Surfaced by the v4.48 haemorrhage audit; left as-is deliberately, since
-  an arrest pathway is a sizeable piece of physiology and every other teaching
-  point in that scenario lands well before the patient would arrest.
-- **SpO2 is blind to circulatory collapse.** It reads 99 for the whole
-  haemorrhage scenario, including 30 minutes at a cardiac output of 1.0-1.3
-  L/min. `spo2Ceiling` is built from the shunt terms and the alveolar oxygen
-  path only - nothing in the SpO2 block reads cardiac output, circulating
-  volume or perfusion. Clinically a pulse oximeter on a patient at MAP 22 would
-  lose its trace or read low; here it stays reassuring. Same family as the FiO2
-  item below: a lever a trainee watches that the model does not connect.
+  cannot rescue the first here: `state.spo2` is still 99 at MAP 22 and a
+  cardiac output of 1.1 L/min, so the hypoxia branch never arms. **v4.55 did
+  not change this.** That version made the oximeter lose its *trace* in low
+  output, which is a display and alarm change; the underlying `state.spo2` the
+  hypoxia branch reads is deliberately untouched, because arterial saturation
+  really is preserved in low output. Surfaced by the v4.48 haemorrhage audit;
+  left as-is deliberately, since an arrest pathway is a sizeable piece of
+  physiology and every other teaching point in that scenario lands well before
+  the patient would arrest.
+- **Resolved in v4.55, with etCO2.** `state.perfusionFactor` (this patient's
+  cardiac output against their own baseline, flat above `PERFUSION_CO_REF_FRAC`
+  0.40 and ramping to 0 at no output) now drives both the oximeter's trace
+  validity and the etCO2 target. The oximeter **loses its trace** rather than
+  reading a false low, because arterial saturation really is preserved in low
+  output and it is the measurement that fails — so the display and alarm gate
+  on `spo2TraceValid` while `state.spo2` keeps being computed. etCO2 collapses
+  in arrest instead of climbing, which makes the ROSC rise teachable. The 0.40
+  threshold was measured across all forty sweep runs: only LAST (0%) and
+  haemorrhage (18%) fall below it, while vagal (49%) and rate-controlled
+  ischaemia (53%) stay untouched. Probe F28 pins both halves *and* that
+  boundary — it fails first if anyone raises the threshold.
+- **etCO2's low-output coupling is a steady-state simplification.** The real
+  etCO2–cardiac-output relationship is *acute*: etCO2 dips sharply when output
+  falls and then largely recovers, because all the CO₂ produced must still be
+  excreted — what changes is the arterial-venous gradient, not steady-state
+  excretion. v4.55 deliberately uses a flat-above-40% curve rather than a linear
+  proportionality for that reason (a linear term would also have cost sepsis its
+  v4.49 etCO2 38 → 60 teaching, since it sits at 58% of baseline CO). Modelling
+  the transient properly needs a second state variable for venous CO₂ content.
+- **The pleth waveform and the SpO2 number gate on different things.** The
+  waveform uses `hasPulse() && state.sys > 50` (perfusion *pressure* at the
+  probe); the number uses the v4.55 CO-based factor (global *flow*). They agree
+  everywhere except `anaphBrewing` untreated, where 104 of 121 samples show a
+  flat trace from low pressure while cardiac output is preserved at 70% of
+  baseline — so the trace is flat while the number reads normally. Pre-existing
+  on the waveform side, and left alone because it is a render-path edit and
+  `requestAnimationFrame` is a no-op in the harness, so a change there cannot be
+  verified headlessly.
 
 - **Resolved in v4.49 for sepsis.** The sepsis patient still wakes if left
   alone (consciousness → 86 by t=600) and the wake still triggers a

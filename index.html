@@ -51,6 +51,121 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.55  ("The monitor finally notices there is no circulation")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Two long-standing known items, closed together because they were the same
+  omission: nothing in the gas-exchange block read cardiac output.
+
+    - SpO2 read a reassuring 99 for the whole haemorrhage scenario, including
+      thirty minutes at a cardiac output of 1.0-1.3 L/min. The pleth WAVEFORM
+      already went flat - it gates on systolic > 50 - so the monitor was
+      simultaneously showing no trace and a perfect number.
+    - etCO2 was purely ventilation-driven, `co2Production / minuteVent`. An
+      arrested patient's etCO2 therefore CLIMBED, reaching 128 in LAST, because
+      no ventilation meant the minuteVent floor of 2 and therefore a high
+      target. The one thing everybody knows about etCO2 in arrest is that it
+      collapses.
+
+  ONE FACTOR DRIVES BOTH.
+
+  `state.perfusionFactor` is this patient's cardiac output against their own
+  baseline, via the same physCardiacOutput() / physCOBaseline() helpers the CO
+  gauge uses - so it is measured per profile rather than against a 70 kg
+  adult's numbers. Flat at 1.0 above PERFUSION_CO_REF_FRAC (0.40), ramping
+  linearly to 0 at no output.
+
+  THE THRESHOLD WAS MEASURED, NOT GUESSED. Across all forty sweep runs, CO as a
+  fraction of each patient's own baseline:
+
+      LAST (arrest)              0%
+      haemorrhage untreated     18%
+      haemorrhage treated       40%   (a transient dip during resuscitation)
+      sepsis treated, vagal  47-49%
+      ischaemia treated         53%
+      ordinary scenarios     58-79%
+      everything else       88-100%
+
+  0.40 catches the two that should be caught and nothing else. Vagal sits at
+  49% and rate-controlled ischaemia at 53%, and neither of those patients is
+  hypoxic or hypocapnic - a threshold above about 45% would have started
+  desaturating a vagal bradycardia, which is simply wrong.
+
+  SpO2 LOSES ITS TRACE, IT DOES NOT READ A FALSE LOW.
+
+  That is what a pulse oximeter actually does. Arterial saturation is largely
+  preserved in low output until very late; what fails is the measurement, for
+  want of a pulsatile signal. So `spo2TraceValid` gates the DISPLAY and the
+  alarm - the number blanks to '--' and the box stops flashing - while
+  `state.spo2` goes on being computed underneath. That is CLAUDE.md's trap 1c
+  applied deliberately rather than stumbled into: lose the monitoring, keep the
+  physiology. The number returns the instant perfusion does.
+
+  Note this means the hypoxic-arrest branch is NOT newly armed by this change.
+  It reads `state.spo2`, which is still 99 in the haemorrhage scenario. The
+  no-perfusion-driven-arrest known item stands untouched.
+
+  etCO2 USES THE SAME LOW-OUTPUT CURVE, NOT A LINEAR PROPORTIONALITY.
+
+  The reason is physiological. In SUSTAINED low output with stable metabolism
+  etCO2 largely recovers, because all the CO2 produced still has to be
+  excreted - what changes is the arterial-venous gradient, not steady-state
+  excretion. The textbook etCO2-cardiac-output relationship is an ACUTE one.
+  Arrest is the exception and the one that matters for teaching: at no output
+  there is no excretion, so etCO2 really does go to the floor and stay there.
+
+  A linear term across the whole range would also have cost sepsis its v4.49
+  teaching, since that scenario sits at 58% of baseline CO and its etCO2
+  38 -> 60 climb is the point of objective 4. Modelling the acute transient
+  properly would need a second state variable for venous CO2 content; that is
+  noted as a known item rather than attempted here.
+
+  WHAT THIS BUYS.
+
+  Haemorrhage untreated: perfusion factor falls to 0.46-0.55, the oximeter
+  loses its trace from t~180 and never regains it, and etCO2 falls 38 -> 20.
+  Resuscitate properly - fluid plus early source control - and the factor stays
+  at 1.0, the trace never goes and etCO2 stays 36. The good outcome is not
+  penalised, which is what the 0.40 threshold was chosen to guarantee.
+
+  LAST, intubated and ventilated: etCO2 40 at the arrest -> 25 at +60s -> 15 at
+  +120s, instead of climbing. And then the payoff, which this coupling makes
+  possible for the first time - etCO2 as the ROSC signal:
+
+      t=179   VF, etCO2 15, no oximeter trace
+      t=180   ROSC
+      t=200   etCO2 33
+      t=220   etCO2 47
+      t=260   etCO2 70
+
+  A sudden etCO2 rise is what tells a resuscitation team the circulation is
+  back, and the sim can now teach it.
+
+  ONE PROBE THRESHOLD RECALIBRATED, for a real reason rather than to get green.
+  F27 asserted SpO2 under 70 sixty seconds after the LAST arrest; it now reads
+  83. etCO2 feeds alveolar oxygen through `co2Displacement = (etco2-40)/713/0.8`,
+  so the old climbing etCO2 was displacing alveolar O2 and accelerating that
+  desaturation spuriously. With etCO2 now correctly falling the term clamps to
+  zero. The endpoint is unchanged at 40 by +120s; only the intermediate number
+  moved, and it moved because the physiology got more correct. The bound is now
+  90 and the reason is recorded at the line.
+
+  NOT TOUCHED: the pleth WAVEFORM still gates on systolic > 50 rather than on
+  the new factor. The two rules measure different things - systolic is
+  perfusion pressure at the probe, cardiac output is global flow - and they
+  disagree in anaphBrewing untreated, where 104 of 121 samples have a flat
+  trace from low pressure while output is preserved at 70% of baseline. Changing
+  it is a render-path edit, which the harness cannot cover; see the known item.
+
+  Tests: probes 158/158 across 27 findings (new F28, 10 checks), voucher-probe
+  15/15, scan 248 -> 247 findings with BUG:0 and CLIN 30 -> 29 - the resolved
+  one is `last/untreated etCO2 settles at 128 mmHg`, which was the bug.
+==================================================================================
+-->
+
+<!--
+==================================================================================
   DREAMS LAB  v4.54  ("No airway device is not the same as not breathing")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6062,7 +6177,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.54';
+const APP_VERSION = '4.55';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -6278,6 +6393,27 @@ const CONFIG = {
     /* v4.29: haemodynamic consequences of hypoxaemia. Without these SpO2 was
        a number on a screen with no downstream effect - a patient could sit at
        the SpO2 floor indefinitely with normal haemodynamics. */
+    /* v4.55: perfusion coupling. One factor, derived from this patient's own
+       cardiac output against their own baseline, drives two things: whether
+       the pulse oximeter has a usable trace, and how much CO2 reaches the
+       lungs to be exhaled.
+
+       PERFUSION_CO_REF_FRAC is the CO fraction at or above which perfusion is
+       adequate - the factor is 1.0 there and above, and ramps linearly to 0 at
+       no output at all. 0.40 was chosen from the measured distribution across
+       all forty sweep runs: the only scenarios that go below it are LAST (0%,
+       arrest) and haemorrhage (18% untreated, a transient 40% during
+       resuscitation). Vagal sits at 49% and rate-controlled ischaemia at 53%,
+       and neither of those patients is hypoxic or hypocapnic - a threshold
+       above ~45% would have started desaturating a vagal bradycardia, which is
+       wrong.
+
+       PERFUSION_TRACE_MIN is where the oximeter gives up: factor 0.75, i.e. CO
+       below 30% of baseline. That catches arrest and profound haemorrhagic
+       shock and nothing else. */
+    PERFUSION_CO_REF_FRAC: 0.40,
+    PERFUSION_TRACE_MIN:   0.75,
+
     HYPOXIA_THRESHOLD: 85,        // SpO2 below which myocardial effects begin
     HYPOXIA_VAGAL_GAIN: 0.06,     // parasympathetic tone added per sec at full depth
     HYPOXIA_CONTR_DROP: 0.05,     // contractility lost per sec at full depth
@@ -6985,6 +7121,16 @@ const state = {
     metabolicRate: 1.0,  // multiplier; drives BOTH O2 consumption and CO2 production
     // ===== Alarm system state =====
     alarmStates: {},           // { hr: 'high'|'med'|'ok', spo2: ..., ... }
+    /* v4.55: 0..1, this patient's cardiac output against their own baseline,
+       clamped through PERFUSION_CO_REF_FRAC. 1.0 = adequate perfusion. Read by
+       the etCO2 target and by spo2TraceValid. Recomputed every tick. */
+    perfusionFactor: 1,
+    /* v4.55: does the pulse oximeter have a usable signal? False in arrest and
+       in profound low output. NOTE this gates the DISPLAY and the alarm only -
+       state.spo2 goes on being computed throughout, per the "lose the
+       monitoring, keep the physiology" rule in CLAUDE.md's trap 1c. The number
+       comes straight back when perfusion does. */
+    spo2TraceValid: true,
     alarmSilenced: 0,          // (v3.30: legacy - audio behaviour now driven by audioMode)
     audioMode: 'on',           // v4.17: defaults to on. 'silent' | 'on' | 'ecgOnly'
     nibpNextDue: 0,            // v3.34: sim-seconds until next auto NIBP. 0 = take now.
@@ -9327,6 +9473,19 @@ setInterval(() => {
     const co2Displacement = Math.max(0, state.etco2 - 40) / 713 / 0.8;
     const effectiveAlveolarFiO2 = Math.max(0, p.alveolarFiO2 - co2Displacement);
 
+    /* v4.55: perfusion factor. Haemodynamics have already run this tick, so
+       hr / preload / contractility / rhythm are current. physCardiacOutput()
+       and physCOBaseline() are the same helpers the CO gauge uses, so the
+       factor is measured against exactly what the trainee sees on the gauge,
+       per patient rather than against a 70 kg adult's numbers. */
+    {
+        const coBase = physCOBaseline();
+        const coFrac = coBase > 0 ? physCardiacOutput() / coBase : 1;
+        state.perfusionFactor = clamp(coFrac / CONFIG.PERFUSION_CO_REF_FRAC, 0, 1);
+        state.spo2TraceValid = hasPulse()
+            && state.perfusionFactor >= CONFIG.PERFUSION_TRACE_MIN;
+    }
+
     // v3.3: pulmonary oedema from volume overload reduces SpO2 ceiling.
     // V/Q mismatch reduces oxygenation even when alveolar FiO2 is adequate.
     const volRatioForOedema = p.centralVolume / state.profile.centralVol;
@@ -9432,7 +9591,29 @@ setInterval(() => {
         state.etco2 += (3 / 60) * state.metabolicRate * dt;
     } else {
         const co2Production = CONFIG.CO2_PRODUCTION_BASELINE * state.metabolicRate;
-        let targetCO2 = co2Production / Math.max(2, state.minuteVent);
+        /* v4.55: etCO2 measures CO2 that REACHED the lungs, so the target is
+           production scaled by pulmonary blood flow. Previously this was purely
+           ventilation-driven, which is why an arrested patient's etCO2 climbed
+           (no ventilation -> the minuteVent floor of 2 -> a high target) when it
+           should collapse. Now perfusionFactor 0 drives the target to 0.
+
+           Deliberately the SAME low-output curve as the oximeter rather than a
+           linear proportionality across the whole range, and the reason is
+           physiological: in SUSTAINED low output with stable metabolism etCO2
+           largely recovers, because all the CO2 produced still has to be
+           excreted - what changes is the arterial-venous gradient, not
+           steady-state excretion. The textbook etCO2-cardiac-output
+           relationship is an ACUTE one. Arrest is the exception, and the one
+           that matters most for teaching: at no output there is no excretion,
+           so etCO2 really does go to the floor and stay there, which is what
+           makes it the ROSC signal.
+
+           Modelling the acute transient properly would need a second state
+           variable for venous CO2 content. Flat above PERFUSION_CO_REF_FRAC
+           gets the cases that matter without asserting a sustained fall the
+           physiology does not support - and without disturbing sepsis, whose
+           etCO2 38 -> 60 teaching (v4.49) sits at 58% of baseline CO. */
+        let targetCO2 = co2Production * state.perfusionFactor / Math.max(2, state.minuteVent);
         // Tourniquet release: add transient CO2 bump following its envelope
         if (state.events.tourniquetRelease) {
             const t = state.tourniquetTimer;
@@ -12831,7 +13012,10 @@ function evaluateAlarms(dt) {
     const A = CONFIG.ALARMS;
     const newStates = {};
     if (state.monitors.ecg && !state.events.ecgLeadsOff)  newStates.hr    = evalThreshold(state.hr,    A.hr);
-    if (state.monitors.spo2 && !state.events.spo2ProbeOff) newStates.spo2  = evalThreshold(state.spo2,  A.spo2);
+    // v4.55: no trace, no alarm - the monitor cannot alarm on a number it is
+    // not showing. The SpO2 box blanks rather than flashing red at '--'.
+    if (state.monitors.spo2 && !state.events.spo2ProbeOff && state.spo2TraceValid)
+        newStates.spo2  = evalThreshold(state.spo2,  A.spo2);
     if (state.monitors.art)  {
         newStates.sys = evalThreshold(state.sys, A.sys);
         // v4.0: MAP low alarm (replaces diastolic). Same MAP as the ABP display.
@@ -14128,7 +14312,12 @@ function updateNum() {
     if (state.events.spo2ProbeOff) {
         document.getElementById('num-spo2').innerText = Math.round(70 + Math.random() * 30);
     } else {
-        document.getElementById('num-spo2').innerText = state.monitors.spo2 ? Math.round(state.spo2) : '--';
+        /* v4.55: no usable trace in arrest or profound low output, so no
+           number - the oximeter needs a pulsatile signal it is not getting.
+           state.spo2 is still being computed underneath; this is the display
+           losing the measurement, not the patient losing the saturation. */
+        const readable = state.monitors.spo2 && state.spo2TraceValid;
+        document.getElementById('num-spo2').innerText = readable ? Math.round(state.spo2) : '--';
     }
     const co2Shown = state.patient.airway !== 'none'
         && !state.events.disconnect
