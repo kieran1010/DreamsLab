@@ -51,6 +51,65 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.60  ("The audio was switched on by a bug")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  Regression fix. v4.59 left the sim with no audio at all - not the alarms it
+  deliberately quieted during the lead-in, and not the ECG beep either.
+
+  The cause is worth writing down, because the v4.59 change was correct and
+  still broke this. A browser creates an AudioContext SUSPENDED and will not
+  start it until the page has had a user gesture, so anything that makes a
+  sound has to be prepared to start it. Nothing in the sim reliably was:
+
+    - beepAtSpO2() never called resume() at all.
+    - toggleMon() does, but all four monitors default to on, so the
+      `if (!state.monitors[m]) toggleMon(m)` that every scenario setup runs
+      never actually fires. Measured across all twenty scenarios: toggleMon is
+      called zero times at load.
+    - cycleAudioMode() and the bag button do, but only when pressed.
+
+  Which left playAlarmBurst() as the only thing that started the audio in
+  ordinary use - and it only ran because scenarios used to alarm the instant
+  they loaded. The sim's audio was being switched on by a side effect of a bug.
+  v4.59 fixed that bug and the audio went with it: no alarm at load meant no
+  resume(), and no resume() meant not even the ECG beeped, because it had
+  never started the context for itself.
+
+  Fixed by removing the dependency rather than restoring the accident:
+
+    - ensureAudioRunning(), one place that starts the context, called by both
+      beepAtSpO2() and playAlarmBurst() so either can start it.
+    - A first-gesture listener on pointerdown, keydown and touchstart, which is
+      the standard way to do this and does not care what the sim is doing. A
+      keyboard-only user gets audio too.
+    - A visibilitychange listener, pairing with v4.59's hidden-tab gate:
+      browsers may suspend the context on a hidden tab, so it is picked back up
+      when the tab returns rather than waiting for the next click.
+
+  The listeners are deliberately not {once:true}. A context can be suspended
+  again later; a permanent listener costs one state check per gesture, a
+  one-shot would not recover.
+
+  beepAtSpO2() also now returns without beeping if the context is still
+  suspended after asking, since resume() in a browser is asynchronous and
+  fails silently without a gesture - better a skipped beep than an exception
+  every QRS.
+
+  WHY THE HARNESS DID NOT CATCH THIS. Its AudioContext stub reported state
+  'running' from the moment it was created, so the whole suspended-until-
+  gesture problem was invisible headlessly - the sim looked fine in tests
+  while being silent in a browser. The stub now starts 'suspended' and only
+  runs on resume(), like the real thing, and counts resume() calls so a probe
+  can assert who started it. New probe F31 covers all of it, including that
+  v4.59's silent lead-in is still intact and this did not quietly restore
+  alarms-at-load.
+
+  probes 180/180, voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime
+  errors.
+
+==================================================================================
   DREAMS LAB  v4.59  ("Seven seconds, and nothing before it")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6617,7 +6676,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.59';
+const APP_VERSION = '4.60';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -14031,6 +14090,11 @@ function beepAtSpO2() {
     if (!audioCtx) return;
     // v3.30/v3.32: ECG beep gated by audioMode - sounds in 'on' or 'ecgOnly' only.
     if (state.audioMode !== 'on' && state.audioMode !== 'ecgOnly') return;
+    // v4.60: start the context if it is still suspended. This function never
+    // did, which is why the ECG went silent when v4.59 stopped alarms from
+    // firing at load - it had been relying on playAlarmBurst() to do it.
+    ensureAudioRunning();
+    if (audioCtx.state === 'suspended') return;   // gesture not given yet
     const s = state.spo2;
     const t = Math.max(0, Math.min(1, (s - 70) / 30));
     const freq = CONFIG.BEEP_HZ_AT_70 + (CONFIG.BEEP_HZ_AT_100 - CONFIG.BEEP_HZ_AT_70) * t;
@@ -14196,6 +14260,50 @@ function evaluateAlarms(dt) {
     }
 }
 
+/* v4.60: make sure the AudioContext is actually running.
+
+   A browser creates an AudioContext SUSPENDED and will not start it until the
+   page has had a user gesture, so everything that makes a sound has to be
+   prepared to start it. Nothing did, reliably:
+
+     - beepAtSpO2() never called resume() at all.
+     - toggleMon() does, but every monitor defaults to on, so the
+       `if (!state.monitors[m]) toggleMon(m)` in every scenario setup never
+       actually fires and its resume() never runs.
+     - cycleAudioMode() and the bag button do, but only if the user happens
+       to press them.
+
+   Which left playAlarmBurst() as the only thing that started the audio in
+   ordinary use - and it only ran because scenarios used to alarm the instant
+   they loaded. So the sim's audio was being switched on by a side effect of a
+   bug. v4.59 fixed the bug (no alarms during the onset lead-in) and the audio
+   went with it: no alarm at load meant no resume(), and no resume() meant not
+   even the ECG beeped, because it had never started the context for itself.
+
+   Two belts and braces, because audio startup should not depend on which
+   sound happens to want to play first:
+     - a first-gesture listener, which is the standard way to do this and does
+       not care what the sim is doing;
+     - ensureAudioRunning() called by both sound paths, so either can start it.
+
+   The listeners are deliberately NOT {once:true}: a context can be suspended
+   again later (browsers do it on hidden tabs), and a permanent listener costs
+   one state check per gesture while a one-shot would not recover. */
+function ensureAudioRunning() {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+(function armAudioOnFirstGesture() {
+    if (typeof document === 'undefined' || !document.addEventListener) return;
+    ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+        document.addEventListener(ev, ensureAudioRunning, { passive: true }));
+    /* Pairs with v4.59's hidden-tab gate: browsers may suspend the context
+       while the tab is hidden, so pick it back up when it returns rather than
+       waiting for the next click. */
+    document.addEventListener('visibilitychange', () => {
+        if (!pageHidden()) ensureAudioRunning();
+    });
+})();
+
 /* v4.59: is the tab hidden?
 
    The ECG beep and the alarm bursts stopped behaving the same way when you
@@ -14230,7 +14338,7 @@ function playAlarmBurst(level) {
     // and in ECG ONLY. beepAtSpO2() has always gated itself internally; this
     // matches it, so no future caller can bypass the setting.
     if (state.audioMode !== 'on' && state.audioMode !== 'alarmsOnly') return;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    ensureAudioRunning();                         // v4.60: was an inline resume
     const isHigh = level === 'high';
     const freq    = isHigh ? CONFIG.ALARM_HIGH_BEEP_FREQ : CONFIG.ALARM_MED_BEEP_FREQ;
     const nBeeps  = isHigh ? CONFIG.ALARM_HIGH_BURST_BEEPS : CONFIG.ALARM_MED_BURST_BEEPS;

@@ -181,7 +181,11 @@ function boot(opts = {}) {
         createTextNode(t) { return { textContent: t }; },
         querySelector() { return makeEl(''); },
         querySelectorAll() { return []; },
-        addEventListener() {}, removeEventListener() {},
+        /* v4.60: record listeners so a probe can dispatch a user gesture and
+           check that it starts the AudioContext. */
+        _listeners: {},
+        addEventListener(ev, fn) { (this._listeners[ev] = this._listeners[ev] || []).push(fn); },
+        removeEventListener() {},
         /* v4.59: tab visibility, so the alarm-audio suppression can be tested
            headlessly. Real browsers set these; the sim reads document.hidden. */
         hidden: false, visibilityState: 'visible',
@@ -266,11 +270,18 @@ function boot(opts = {}) {
             frequency: ramp, gain: ramp, type: 'sine',
         };
     }
+    /* v4.60: starts SUSPENDED, like a real browser, and only runs once
+       something calls resume(). It used to report 'running' from the start,
+       which is why the harness could not see that the sim's audio was only
+       ever being started as a side effect of an alarm firing at scenario
+       load - the bug v4.59 exposed and v4.60 fixed. `resumes` counts calls so
+       a probe can assert who started it. */
     sandbox.AudioContext = function AudioContext() {
         return {
-            state: 'running', currentTime: 0, destination: audioNode(),
-            resume() { return Promise.resolve(); },
-            suspend() { return Promise.resolve(); },
+            state: 'suspended', currentTime: 0, destination: audioNode(),
+            resumes: 0,
+            resume() { this.state = 'running'; this.resumes++; return Promise.resolve(); },
+            suspend() { this.state = 'suspended'; return Promise.resolve(); },
             createOscillator: audioNode,
             createGain: audioNode,
             createBiquadFilter: audioNode,
@@ -299,6 +310,7 @@ function boot(opts = {}) {
         'suctionAirway', 'setProfile', 'resolveAllEvents', 'setTimeScale',
         'saturate', 'clamp', 'hasPulse', 'onsetGate', 'onsetRamp',
         'triggerAwareness', 'resetCurrentScenario', 'showBriefing',
+        'audioCtx', 'ensureAudioRunning', 'beepAtSpO2',
         'ENT_CONFIG', 'PREMIUM_SCENARIOS', 'entConfigured', 'hasPro', 'isScenarioLocked',
         'entVerifyToken', 'entInit', 'entRenderUI', 'pickScenario',
     ];
