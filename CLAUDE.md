@@ -105,7 +105,7 @@ node tools/trace.js bronchospasm    # full parameter table for one scenario
 ```
 
 Run sweep/scan/probes after any model change; run voucher-probe too if you
-touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 180/180,
+touched `[ENTITLEMENTS]` or `pickScenario()`. Current baseline: **probes 182/182,
 voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime errors.**
 
 `sweep.js` shifts every treatment plan by `ONSET_LEAD_IN` (see `planFor()`), so
@@ -352,6 +352,14 @@ it and say so.
   alarm is the same family but benign (PCV at pinsp 20 over PEEP 5 is 25 cmH₂O
   by construction); `emergence`'s `bis` high and `last`'s `bis` are the
   scenarios being what they say they are, and are correct.
+- **Gating an event does not hide it from the UI** (v4.61). The v4.21 brand-bar
+  chips read `state.events` directly, so seven scenarios that armed an event in
+  `setup()` and gated the severity downstream still put a red diagnosis chip on
+  screen at t=0.5s — announcing the answer before the patient had an abnormal
+  number. `getActiveEventKeys()` now hides an event while
+  `state.onsetArmed[k] && !onsetGate()`. **If you add another UI surface that
+  reads `state.events`, it needs the same rule** — or use the deferral route
+  below, which has the property by construction.
 - **Two ways to give a pathology the standard onset, and they are not
   interchangeable** (v4.59). Where arming the event has no side effects of its
   own, arm it in `setup()` and gate the severity (`onsetRampFor` /

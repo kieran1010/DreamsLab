@@ -310,7 +310,7 @@ function boot(opts = {}) {
         'suctionAirway', 'setProfile', 'resolveAllEvents', 'setTimeScale',
         'saturate', 'clamp', 'hasPulse', 'onsetGate', 'onsetRamp',
         'triggerAwareness', 'resetCurrentScenario', 'showBriefing',
-        'audioCtx', 'ensureAudioRunning', 'beepAtSpO2',
+        'audioCtx', 'ensureAudioRunning', 'beepAtSpO2', 'getActiveEventKeys',
         'ENT_CONFIG', 'PREMIUM_SCENARIOS', 'entConfigured', 'hasPro', 'isScenarioLocked',
         'entVerifyToken', 'entInit', 'entRenderUI', 'pickScenario',
     ];
