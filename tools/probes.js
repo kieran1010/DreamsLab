@@ -2811,6 +2811,59 @@ probe('F29', 'Every scenario holds a flat lead-in, then declares itself', () => 
         noisy.length ? noisy.join('; ') : `silent on all ${keys.length}`,
         'an empty alarm row - nothing has happened yet');
 
+    /* 3c. THE EVENT CHIPS. v4.57 gave each pathology the standard onset by
+           arming its event in setup() and gating the severity downstream, on
+           the reasoning that the flag being set early was invisible. It was
+           not: the v4.21 brand-bar chips read state.events directly, so seven
+           scenarios put a red BRONCHOSPASM / VAGAL EPISODE / MALIGNANT
+           HYPERTHERMIA chip on screen at t=0.5s - announcing the diagnosis
+           before the patient had a single abnormal number.
+
+           Verified in a real browser (Chromium, file://) before and after the
+           v4.61 fix, since the chips are render-path and this harness cannot
+           see the DOM. What it CAN check is the function the render reads. */
+    const chippedEarly = [];
+    keys.forEach(k => {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(k);
+        for (let t = 0; t < LEAD; t++) {
+            sim.advance(1000);
+            const shown = dl.getActiveEventKeys();
+            if (shown.length) { chippedEarly.push(`${k}@${t + 1}s ${shown.join(',')}`); break; }
+        }
+    });
+    note(`event chips through the ${LEAD}s lead-in: ` +
+         (chippedEarly.length ? chippedEarly.join('; ') : `none on any of ${keys.length}`));
+    expect(chippedEarly.length === 0,
+        'no scenario shows an event chip before its lead-in is over',
+        chippedEarly.length ? chippedEarly.join('; ') : `silent on all ${keys.length}`,
+        'an empty chip tray - the diagnosis is not announced before it happens');
+
+    /* And they must actually appear once it IS happening, or this has just
+       hidden the pathology rather than delayed the announcement.
+
+       Asked only of the scenarios that ARM an event, which is what
+       state.onsetArmed records. Six drive their pathology with no event flag
+       at all - hypotensionPostInd and sepsis through onsetAlphaFade, aneurysm
+       through sahSurge, autonomicDysreflexia through a nociception ramp,
+       paedLap through CO2 absorption, emergence through the wake - and a chip
+       would be wrong for them, not missing. */
+    const armedScenarios = [], silentAfter = [];
+    keys.forEach(k => {
+        const sim = boot(); const dl = sim.dl;
+        dl.loadScenario(k);
+        if (!Object.keys(dl.state.onsetArmed).length) return;   // no event to chip
+        armedScenarios.push(k);
+        for (let t = 0; t < LEAD + 10; t++) sim.advance(1000);
+        if (!dl.getActiveEventKeys().length) silentAfter.push(k);
+    });
+    note(`scenarios that arm an event: ${armedScenarios.join(', ')}`);
+    expect(armedScenarios.length > 0 && silentAfter.length === 0,
+        'and the chip does appear once the lead-in is over',
+        silentAfter.length ? 'still no chip 10s past the lead-in: ' + silentAfter.join(', ')
+                           : `all ${armedScenarios.length} armed scenarios chip once the window opens`,
+        'delayed, not suppressed');
+
     /* 4. THE OWNERSHIP RULE. The window belongs to the scenario, never to the
           user. An event toggled by hand must act on its own time constant
           immediately, whenever it is switched on - otherwise a teacher

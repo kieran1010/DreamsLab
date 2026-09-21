@@ -51,6 +51,59 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' fill='%230f3557'/%3E%3C/svg%3E">
 <!--
 ==================================================================================
+  DREAMS LAB  v4.61  ("The chip announced the diagnosis first")
+  ---------------------------------------------------------------------------------
+  An anaesthesia teaching simulator by Dr Kieran Gillick.
+
+  THE EVENT CHIPS GAVE THE GAME AWAY. Seven scenarios put a red BRONCHOSPASM,
+  VAGAL EPISODE, MALIGNANT HYPERTHERMIA, HAEMORRHAGE, MYOCARDIAL ISCHAEMIA,
+  PULMONARY EMBOLISM or LA TOXICITY chip in the brand bar at t=0.5s - before
+  the patient had a single abnormal number. The onset lead-in was holding the
+  physiology still and the UI was announcing the diagnosis anyway.
+
+  The v4.57 reasoning was that arming an event in setup() and gating the
+  severity downstream was invisible. It is not. The v4.21 chips read
+  state.events directly, so the flag being set early was on screen the whole
+  time. `aspiration` was the one scenario that did not leak, because v4.59
+  defers that event outright instead of gating it.
+
+  getActiveEventKeys() now hides an event that the scenario armed and whose
+  onset window has not opened - `state.onsetArmed[k] && !onsetGate()`. That
+  fixes all seven without touching their onset shapes, which are tuned and
+  which converting them to the deferral route would change (vagal's drop would
+  go from a ~30 s ramp to VAGAL_PEAK_TIME's 5 s, for instance).
+
+  Only scenario-armed events are hidden. toggleEvent() drops an event from
+  state.onsetArmed the moment a user touches it, so a hand-toggled event still
+  chips instantly - verified in a browser at t=0.8s inside the lead-in.
+
+  MEASURED IN A REAL BROWSER, not just headlessly. The chips are render-path,
+  which the harness cannot see, so this was checked by driving Chromium over
+  file:// - all seven chipping at t=0.5s before, none after, and every armed
+  scenario chipping once the window opens. Probe F29 gains the two checks it
+  can make headlessly, against getActiveEventKeys() itself.
+
+  AND THE v4.60 BEEP GUARD IS GONE. v4.60 added
+  `if (audioCtx.state === 'suspended') return;` to beepAtSpO2() after asking
+  the context to resume. resume() is ASYNCHRONOUS - the state does not flip
+  within that call - so the guard skipped every beep until some later tick
+  happened to find the context running, and on a browser slow to honour the
+  resume it could stay silent indefinitely. Building an oscillator on a
+  suspended context is legal and does not throw; it simply makes no sound
+  until the context runs. Removing the guard restores the pre-v4.60 behaviour
+  while keeping v4.60's resume attempt, which is strictly more likely to
+  produce audio than skipping.
+
+  Note on the audio generally: driving the real browser confirmed the v4.60
+  path works - context suspended at load, running after one click, and both
+  beepAtSpO2() and playAlarmBurst() producing oscillators. A browser will not
+  start an AudioContext before a user gesture under any circumstances, so
+  there is no version of this sim that makes a sound before the first click.
+
+  probes 182/182, voucher-probe 15/15, scan 0 BUG-level findings, 0 runtime
+  errors.
+
+==================================================================================
   DREAMS LAB  v4.60  ("The audio was switched on by a bug")
   ---------------------------------------------------------------------------------
   An anaesthesia teaching simulator by Dr Kieran Gillick.
@@ -6676,7 +6729,7 @@ window.addEventListener('unhandledrejection', (e) => {
    When you bump a version: edit the changelog banner and this constant. F26
    fails if you forget the second one.
    ============================================================================= */
-const APP_VERSION = '4.60';
+const APP_VERSION = '4.61';
 
 /* =============================================================================
    [CONFIG]  -- Tunable constants
@@ -13858,7 +13911,29 @@ function chipSeverity(key) {
 /* Keys of everything to surface as a chip: active events + a non-sinus rhythm.
    Rhythm is prepended so it sits at the front of the tray. */
 function getActiveEventKeys() {
-    const keys = Object.keys(state.events).filter(k => state.events[k]);
+    /* v4.61: an event the scenario armed but whose onset window has not opened
+       yet is NOT showing a chip.
+
+       v4.57 gave each pathology the standard onset by arming its event in
+       setup() and gating the severity downstream, on the reasoning that the
+       flag being set early was invisible. It is not: the v4.21 brand-bar chips
+       read state.events directly, so loading bronchospasm, vagal, mh,
+       haemorrhage, ischaemia, pulmEmbolism or last put a red BRONCHOSPASM (or
+       whichever) chip on screen at t=0.5s - announcing the diagnosis before the
+       patient had a single abnormal number, which is precisely what the lead-in
+       exists to prevent. Measured in a browser on all seven.
+
+       `aspiration` was already right, because v4.59 defers that event outright
+       rather than gating it (fireOnsetPendingEvents). This does the same job
+       for the gated ones without disturbing their onset shapes, which are
+       tuned and which the deferral route would change.
+
+       Only scenario-armed events are hidden: state.onsetArmed is exactly the
+       set setup() armed, and toggleEvent() removes an event from it the moment
+       a user touches it, so a hand-toggled event chips immediately as it
+       always has. */
+    const keys = Object.keys(state.events).filter(k =>
+        state.events[k] && !(state.onsetArmed[k] && !onsetGate()));
     if (state.rhythm && state.rhythm !== 'sinus') keys.unshift('rhythm');
     return keys;
 }
@@ -14093,8 +14168,15 @@ function beepAtSpO2() {
     // v4.60: start the context if it is still suspended. This function never
     // did, which is why the ECG went silent when v4.59 stopped alarms from
     // firing at load - it had been relying on playAlarmBurst() to do it.
+    /* v4.61: ask for the context and carry on regardless. v4.60 returned here
+       while it was still suspended, but resume() is ASYNCHRONOUS - the state
+       does not flip within this call - so that guard skipped every beep until
+       some later tick happened to find it running, and on a browser that is
+       slow to honour the resume it could stay silent indefinitely. Building an
+       oscillator on a suspended context is legal and does not throw; it simply
+       makes no sound until the context runs, which is the behaviour this had
+       before v4.60 and is strictly more likely to produce audio than skipping. */
     ensureAudioRunning();
-    if (audioCtx.state === 'suspended') return;   // gesture not given yet
     const s = state.spo2;
     const t = Math.max(0, Math.min(1, (s - 70) / 30));
     const freq = CONFIG.BEEP_HZ_AT_70 + (CONFIG.BEEP_HZ_AT_100 - CONFIG.BEEP_HZ_AT_70) * t;
